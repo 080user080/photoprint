@@ -130,10 +130,8 @@ class ImageLabel(QLabel):
             return
         img_pt = self._widget_to_img(event.pos())
         if img_pt:
-            # Оновлюємо тільки потягнуту точку, порядок не змінюємо
             self._points[self._drag_idx] = img_pt
             self.update()
-            # Емітуємо у фіксованому порядку [TL, TR, BR, BL]
             self.points_changed.emit(list(self._points))
 
     def mouseReleaseEvent(self, event):

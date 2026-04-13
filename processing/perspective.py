@@ -30,13 +30,21 @@ def auto_detect_corners(image: np.ndarray) -> np.ndarray | None:
 
 def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """
-    Виконує перспективну трансформацію за 4 кутами.
-    corners: float32 array shape (4,2), порядок [TL, TR, BR, BL].
-    Повертає випрямлений BGR uint8.
+    Ручна корекція — точки вже у порядку [TL, TR, BR, BL] від GUI.
+    НЕ викликаємо _order_points — вона переставляє точки і ламає результат.
     """
-    # Точки вже у правильному порядку [TL, TR, BR, BL] від GUI —
-    # НЕ переупорядковуємо, бо це ламає ручну корекцію
     pts = corners.astype(np.float32)
+    dst, width, height = _compute_destination(pts)
+    M = cv2.getPerspectiveTransform(pts, dst)
+    warped = cv2.warpPerspective(image, M, (width, height))
+    return warped
+
+
+def apply_correction_auto(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """
+    Авто корекція — сортуємо точки з контуру бо порядок невідомий.
+    """
+    pts = _order_points(corners.astype(np.float32))
     dst, width, height = _compute_destination(pts)
     M = cv2.getPerspectiveTransform(pts, dst)
     warped = cv2.warpPerspective(image, M, (width, height))
@@ -52,7 +60,7 @@ def auto_correct(image: np.ndarray) -> tuple[np.ndarray, bool]:
     corners = auto_detect_corners(image)
     if corners is None:
         return image.copy(), False
-    return apply_correction(image, corners), True
+    return apply_correction_auto(image, corners), True
 
 
 # ---------------------------------------------------------------------------
