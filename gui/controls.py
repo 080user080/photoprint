@@ -30,6 +30,26 @@ class _SliderRow(QWidget):
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setRange(int(min_val * self._scale), int(max_val * self._scale))
         self._slider.setValue(int(default * self._scale))
+        self._slider.setMinimumWidth(120)
+        self._slider.setFixedHeight(28)
+        self._slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #C8CDD6;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #2E5FA3;
+                width: 18px;
+                height: 18px;
+                margin: -6px 0;
+                border-radius: 9px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #2E5FA3;
+                border-radius: 3px;
+            }
+        """)
         self._slider.valueChanged.connect(self._on_change)
 
         self._val_lbl = QLabel(f"{default:.2f}")

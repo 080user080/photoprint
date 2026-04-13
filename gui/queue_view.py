@@ -1,13 +1,13 @@
 """
 Список файлів у черзі.
-Drag & Drop сумісний з Windows 10/11.
+Drag & Drop реалізовано через WM_DROPFILES у win_drop.py
 """
 
 from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QAbstractItemView, QFrame
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
-from PyQt6.QtGui  import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui  import QColor
 import os
 
 
@@ -26,23 +26,11 @@ class QueueView(QListWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
-        # --- Критично для Windows ---
-        self.setAcceptDrops(True)
-        self.viewport().setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
-        self.setDropIndicatorShown(True)
-        # ----------------------------
-
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setMinimumWidth(200)
         self.setMaximumWidth(300)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.itemClicked.connect(self._on_clicked)
-
-    # ------------------------------------------------------------------
-    # Публічний API
-    # ------------------------------------------------------------------
 
     def set_files(self, paths):
         self.clear()
@@ -70,50 +58,6 @@ class QueueView(QListWidget):
 
     def clear_queue(self):
         self.clear()
-
-    # ------------------------------------------------------------------
-    # Drag & Drop — перевизначаємо на viewport теж (Windows)
-    # ------------------------------------------------------------------
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            event.setDropAction(Qt.DropAction.CopyAction)
-            event.accept()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event: QDragMoveEvent):
-        if event.mimeData().hasUrls():
-            event.setDropAction(Qt.DropAction.CopyAction)
-            event.accept()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event: QDropEvent):
-        if not event.mimeData().hasUrls():
-            event.ignore()
-            return
-        paths = self._urls_to_paths(event.mimeData().urls())
-        if paths:
-            self.add_files(paths)
-            self.files_dropped.emit(paths)
-        event.setDropAction(Qt.DropAction.CopyAction)
-        event.accept()
-
-    # ------------------------------------------------------------------
-    # Внутрішнє
-    # ------------------------------------------------------------------
-
-    def _urls_to_paths(self, urls):
-        result = []
-        for url in urls:
-            path = url.toLocalFile()
-            if os.path.isfile(path):
-                result.append(path)
-            elif os.path.isdir(path):
-                from utils.file_utils import collect_images_from_folder
-                result.extend(collect_images_from_folder(path))
-        return result
 
     def _add_item(self, path, status="pending"):
         name = os.path.basename(path)

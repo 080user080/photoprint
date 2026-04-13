@@ -127,7 +127,7 @@ class MainWindow(QMainWindow):
         # === Права колонка: керування ===
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
-        right_scroll.setFixedWidth(230)
+        right_scroll.setFixedWidth(320)
         right_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
 
         right_widget = QWidget()
@@ -492,21 +492,21 @@ class MainWindow(QMainWindow):
     # Drag & Drop на головне вікно (резервний, основний — у QueueView)
     # ------------------------------------------------------------------
 
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            event.setDropAction(Qt.DropAction.CopyAction)
-            event.accept()
-        else:
-            event.ignore()
+#    def dragEnterEvent(self, event: QDragEnterEvent):
+#        if event.mimeData().hasUrls():
+#            event.setDropAction(Qt.DropAction.CopyAction)
+#            event.accept()
+#        else:
+#            event.ignore()
 
-    def dropEvent(self, event: QDropEvent):
-        paths = [u.toLocalFile() for u in event.mimeData().urls()
-                 if u.toLocalFile()]
-        supported = file_utils.filter_supported(paths)
-        if supported:
-            self._queue.add_files(supported)
-            self._on_files_dropped(supported)
-        event.accept()
+#    def dropEvent(self, event: QDropEvent):
+#        paths = [u.toLocalFile() for u in event.mimeData().urls()
+#                 if u.toLocalFile()]
+#        supported = file_utils.filter_supported(paths)
+#        if supported:
+#            self._queue.add_files(supported)
+#            self._on_files_dropped(supported)
+#        event.accept()
 
     # ------------------------------------------------------------------
     # Допоміжне

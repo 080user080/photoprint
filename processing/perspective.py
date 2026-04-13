@@ -34,7 +34,9 @@ def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     corners: float32 array shape (4,2), порядок [TL, TR, BR, BL].
     Повертає випрямлений BGR uint8.
     """
-    pts = _order_points(corners.astype(np.float32))
+    # Точки вже у правильному порядку [TL, TR, BR, BL] від GUI —
+    # НЕ переупорядковуємо, бо це ламає ручну корекцію
+    pts = corners.astype(np.float32)
     dst, width, height = _compute_destination(pts)
     M = cv2.getPerspectiveTransform(pts, dst)
     warped = cv2.warpPerspective(image, M, (width, height))
