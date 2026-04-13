@@ -1,0 +1,14 @@
+# Ігноруємо папку test
+test/
+
+# Ігноруємо системне сміття Windows та Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
