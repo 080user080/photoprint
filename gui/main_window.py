@@ -1,6 +1,9 @@
 """
 Головне вікно програми PhotoPrint.
 Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено на Windows 10/11.
+
+ВИПРАВЛЕННЯ: Зберігаємо базове зображення після перспективної корекції,
+щоб слайдери працювали з виправленою перспективою.
 """
 
 import os
@@ -63,6 +66,7 @@ class MainWindow(QMainWindow):
         self._settings   = app_settings.load()
         self._processor  = BatchProcessor(self._settings)
         self._orig:      np.ndarray | None = None
+        self._base:      np.ndarray | None = None  # базове зображення після перспективи
         self._processed: np.ndarray | None = None
         self._auto_thread = None
         self._drop_filter = None
@@ -305,6 +309,7 @@ class MainWindow(QMainWindow):
         self._processor.clear()
         self._preview.clear()
         self._orig = None
+        self._base = None
         self._processed = None
         self._update_buttons()
         self._set_status("Черга очищена")
@@ -315,6 +320,7 @@ class MainWindow(QMainWindow):
             from core import loader
             img = loader.load(path)
             self._orig = img
+            self._base = img.copy()  # початково base = orig
             self._processed = None
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
@@ -342,10 +348,12 @@ class MainWindow(QMainWindow):
                     use_hdr=s.get("hdr_in_autofix", True),
                     use_perspective=s.get("auto_perspective", True),
                 )
+                # Оновлюємо базове зображення після автофіксу
+                self._base = result.copy()
             else:
                 # autofix_enabled=False: тільки ручні налаштування
                 result = pipeline.run_manual_adjustments(
-                    self._orig,
+                    self._base,  # використовуємо базове зображення
                     brightness=vals["brightness"],
                     contrast=vals["contrast"],
                     sharpen_strength=vals["sharpen_strength"],
@@ -362,11 +370,12 @@ class MainWindow(QMainWindow):
 
     def _on_controls_changed(self, vals: dict):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
-        if self._orig is None:
+        if self._base is None:
             return
         try:
+            # Використовуємо базове зображення (з перспективою якщо була)
             result = pipeline.run_manual_adjustments(
-                self._orig,
+                self._base,
                 brightness=vals["brightness"],
                 contrast=vals["contrast"],
                 sharpen_strength=vals["sharpen_strength"],
@@ -379,17 +388,21 @@ class MainWindow(QMainWindow):
             self._set_status(f"Помилка обробки: {e}")
 
     def _do_auto_brightness(self):
-        if self._orig is None:
+        if self._base is None:
             return
-        result = pipeline.run_auto_brightness(self._orig)
+        result = pipeline.run_auto_brightness(self._base)
+        # Оновлюємо базове зображення після авто-яскравості
+        self._base = result.copy()
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-яскравість застосована")
 
     def _do_auto_contrast(self):
-        if self._orig is None:
+        if self._base is None:
             return
-        result = pipeline.run_auto_contrast(self._orig)
+        result = pipeline.run_auto_contrast(self._base)
+        # Оновлюємо базове зображення після авто-контрасту
+        self._base = result.copy()
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-контраст застосований")
@@ -398,7 +411,10 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         result, found = pipeline.run_perspective_auto(self._orig)
+        # Оновлюємо базове зображення після перспективи
+        self._base = result.copy()
         self._processed = result
+        self._preview.set_before(image_utils.make_preview(result))
         self._preview.set_after(image_utils.make_preview(result))
         if found:
             self._set_status("Перспективу виправлено автоматично")
@@ -413,9 +429,10 @@ class MainWindow(QMainWindow):
         from PyQt6.QtCore import QPoint
 
         orig_h, orig_w = self._orig.shape[:2]
+        # Використовуємо оригінальне зображення для відображення точок
         prev = image_utils.make_preview(self._orig)
         prev_h, prev_w = prev.shape[:2]
-        # Масштаб: оригінал → прев'ю (ImageLabel показує прев'ю)
+        # Масштаб: оригінал → прев'ю
         sx = prev_w / max(orig_w, 1)
         sy = prev_h / max(orig_h, 1)
 
@@ -450,6 +467,8 @@ class MainWindow(QMainWindow):
                 dtype=np.float32
             )
             result = pipeline.run_perspective_manual(self._orig, corners)
+            # Оновлюємо базове зображення після ручної перспективи
+            self._base = result.copy()
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
         except Exception as e:
@@ -461,7 +480,7 @@ class MainWindow(QMainWindow):
 
     def _do_print_current(self):
         # Правильна перевірка numpy array через "is not None"
-        image = self._processed if self._processed is not None else self._orig
+        image = self._processed if self._processed is not None else self._base
         if image is None:
             self._set_status("Немає зображення для друку")
             return
@@ -489,7 +508,7 @@ class MainWindow(QMainWindow):
 
     def _do_save_image(self):
         """Зберігає поточне зображення — для відладки."""
-        image = self._processed if self._processed is not None else self._orig
+        image = self._processed if self._processed is not None else self._base
         if image is None:
             self._set_status("Немає зображення для збереження")
             return
@@ -563,6 +582,7 @@ class MainWindow(QMainWindow):
             self._set_status("Всі файли оброблено ✓")
             self._preview.clear()
             self._orig = None
+            self._base = None
             self._processed = None
             self._update_buttons()
             return
@@ -571,6 +591,7 @@ class MainWindow(QMainWindow):
             self._queue.mark_current(idx)
             img = self._processor.load_current()
             self._orig = img
+            self._base = img.copy()  # скидаємо базове зображення
             self._processed = None
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
