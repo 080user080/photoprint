@@ -1,17 +1,22 @@
 """
 Головне вікно програми PhotoPrint.
+Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено на Windows 10/11.
 """
 
 import os
+import sys
 import numpy as np
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QButtonGroup, QRadioButton,
-    QFileDialog, QMessageBox, QProgressBar, QScrollArea
+    QFileDialog, QProgressBar, QScrollArea, QApplication
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject
-from PyQt6.QtGui  import QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+
+# WM_DROPFILES — єдиний надійний механізм Drag&Drop на Windows 10/11 з PyQt6
+if sys.platform == "win32":
+    from utils.win_drop import register_drop_window, DropEventFilter
 
 from gui.preview         import PreviewPanel
 from gui.queue_view      import QueueView
@@ -24,22 +29,22 @@ from config import app_settings
 
 
 # ---------------------------------------------------------------------------
-# Worker для авто-режиму
+# Worker для авто-режиму (окремий потік — GUI не зависає)
 # ---------------------------------------------------------------------------
 
 class AutoWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    error    = pyqtSignal(str, str)
-    finished = pyqtSignal(int)
+    progress = pyqtSignal(int, int, str)   # (1-based index, total, filename)
+    error    = pyqtSignal(int, str, str)   # (index, filename, message)
+    finished = pyqtSignal(int)             # кількість надрукованих
 
-    def __init__(self, processor):
+    def __init__(self, processor: BatchProcessor):
         super().__init__()
         self._p = processor
 
     def run(self):
         count = self._p.run_auto(
             on_progress=lambda c, t, f: self.progress.emit(c, t, f),
-            on_error=lambda f, m: self.error.emit(f, m),
+            on_error=lambda i, f, m: self.error.emit(i, f, m),
         )
         self.finished.emit(count)
 
@@ -54,13 +59,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("PhotoPrint")
         self.setMinimumSize(1100, 680)
-        self.setAcceptDrops(True)
 
-        self._settings  = app_settings.load()
-        self._processor = BatchProcessor(self._settings)
-        self._orig:      np.ndarray | None = None   # оригінал поточного файлу
-        self._processed: np.ndarray | None = None   # результат після обробки
+        self._settings   = app_settings.load()
+        self._processor  = BatchProcessor(self._settings)
+        self._orig:      np.ndarray | None = None
+        self._processed: np.ndarray | None = None
         self._auto_thread = None
+        self._drop_filter = None
+
         self._settings_win = SettingsWindow()
         self._settings_win.settings_saved.connect(self._on_settings_saved)
 
@@ -68,8 +74,31 @@ class MainWindow(QMainWindow):
         self._apply_default_mode()
         self._update_buttons()
 
+        # Drag & Drop реєструємо після показу вікна
+        if sys.platform == "win32":
+            QTimer.singleShot(300, self._setup_win_drop)
+
+    def _setup_win_drop(self):
+        hwnd = int(self.winId())
+        register_drop_window(hwnd)
+        self._drop_filter = DropEventFilter(self._on_win_drop)
+        QApplication.instance().installNativeEventFilter(self._drop_filter)
+
+    def _on_win_drop(self, paths: list[str]):
+        """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
+        expanded = []
+        for p in paths:
+            if os.path.isfile(p):
+                expanded.append(p)
+            elif os.path.isdir(p):
+                expanded.extend(file_utils.collect_images_from_folder(p))
+        supported = file_utils.filter_supported(expanded)
+        if supported:
+            self._queue.add_files(supported)
+            self._on_files_added(supported)
+
     # ------------------------------------------------------------------
-    # UI
+    # Побудова UI
     # ------------------------------------------------------------------
 
     def _build_ui(self):
@@ -87,10 +116,11 @@ class MainWindow(QMainWindow):
         lbl_q.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
 
         self._queue = QueueView()
-        self._queue.files_dropped.connect(self._on_files_dropped)
+        # QueueView.files_dropped — резервний (якщо Qt DnD раптом спрацює)
+        self._queue.files_dropped.connect(self._on_win_drop)
         self._queue.selection_changed.connect(self._on_queue_selection)
 
-        btn_add   = QPushButton("Додати файли…")
+        btn_add    = QPushButton("Додати файли…")
         btn_folder = QPushButton("Додати папку…")
         btn_clear  = QPushButton("Очистити чергу")
         for b in (btn_add, btn_folder, btn_clear):
@@ -127,8 +157,8 @@ class MainWindow(QMainWindow):
         # === Права колонка: керування ===
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
-        right_scroll.setFixedWidth(230)
-        right_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        right_scroll.setFixedWidth(320)
+        right_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
 
         right_widget = QWidget()
         right = QVBoxLayout(right_widget)
@@ -160,7 +190,7 @@ class MainWindow(QMainWindow):
 
         self._btn_save_img.setFixedHeight(30)
         self._btn_save_img.setStyleSheet(
-            "background:#5A8A5A; color:white; border:none; "
+            "background:#5A8A5A; color:white; border:none;"
             "border-radius:4px; padding:4px 8px; font-size:12px;"
         )
 
@@ -203,17 +233,13 @@ class MainWindow(QMainWindow):
         root.addLayout(center, 1)
         root.addWidget(right_scroll, 0)
 
-    # ------------------------------------------------------------------
-    # Стиль кнопок
-    # ------------------------------------------------------------------
-
     def _btn_style(self, color="#2E5FA3"):
         return (
-            f"QPushButton {{ background:{color}; color:white; border:none; "
-            f"border-radius:4px; padding:5px 10px; font-size:13px; }}"
-            f"QPushButton:hover {{ background:{color}DD; }}"
-            f"QPushButton:pressed {{ background:{color}99; }}"
-            f"QPushButton:disabled {{ background:#AAAAAA; color:#EEEEEE; }}"
+            f"QPushButton{{background:{color};color:white;border:none;"
+            f"border-radius:4px;padding:5px 10px;font-size:13px;}}"
+            f"QPushButton:hover{{background:{color}DD;}}"
+            f"QPushButton:pressed{{background:{color}99;}}"
+            f"QPushButton:disabled{{background:#AAAAAA;color:#EEEEEE;}}"
         )
 
     # ------------------------------------------------------------------
@@ -228,7 +254,7 @@ class MainWindow(QMainWindow):
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
 
-    def _on_settings_saved(self, s):
+    def _on_settings_saved(self, s: dict):
         self._settings = s
         self._processor = BatchProcessor(self._settings)
         self._processor.set_files(self._queue.get_all_paths())
@@ -243,13 +269,16 @@ class MainWindow(QMainWindow):
     # Черга
     # ------------------------------------------------------------------
 
-    def _on_files_dropped(self, paths):
+    def _on_files_added(self, paths: list[str]):
+        """Спільний обробник після додавання файлів будь-яким способом."""
         supported = file_utils.filter_supported(paths)
         if not supported:
             self._set_status("Жоден з файлів не підтримується")
             return
         self._processor.add_files(supported)
-        self._set_status(f"Додано {len(supported)} файл(ів). Всього: {self._processor.total}")
+        self._set_status(
+            f"Додано {len(supported)} файл(ів). Всього у черзі: {self._processor.total}"
+        )
         self._update_buttons()
 
     def _browse_files(self):
@@ -259,7 +288,7 @@ class MainWindow(QMainWindow):
         )
         if paths:
             self._queue.add_files(paths)
-            self._on_files_dropped(paths)
+            self._on_files_added(paths)
 
     def _browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Оберіть папку")
@@ -267,7 +296,7 @@ class MainWindow(QMainWindow):
             imgs = file_utils.collect_images_from_folder(folder)
             if imgs:
                 self._queue.add_files(imgs)
-                self._on_files_dropped(imgs)
+                self._on_files_added(imgs)
             else:
                 self._set_status("У папці немає підтримуваних зображень")
 
@@ -280,7 +309,8 @@ class MainWindow(QMainWindow):
         self._update_buttons()
         self._set_status("Черга очищена")
 
-    def _on_queue_selection(self, path):
+    def _on_queue_selection(self, path: str):
+        """Клік на файл у списку — завантажуємо для перегляду."""
         try:
             from core import loader
             img = loader.load(path)
@@ -294,7 +324,7 @@ class MainWindow(QMainWindow):
             self._set_status(f"Помилка завантаження: {e}")
 
     # ------------------------------------------------------------------
-    # Обробка
+    # Обробка зображень
     # ------------------------------------------------------------------
 
     def _do_autofix(self):
@@ -303,14 +333,26 @@ class MainWindow(QMainWindow):
             return
         try:
             s = self._settings
-            result = pipeline.run_autofix(
-                self._orig,
-                sharpen_strength=self._controls.values()["sharpen_strength"],
-                hdr_strength=self._controls.values()["hdr_strength"],
-                use_hdr=s.get("hdr_in_autofix", True),
-                use_perspective=s.get("auto_perspective", True),
-            )
-            if self._controls.values()["grayscale"]:
+            vals = self._controls.values()
+            if s.get("autofix_enabled", True):
+                result = pipeline.run_autofix(
+                    self._orig,
+                    sharpen_strength=vals["sharpen_strength"],
+                    hdr_strength=vals["hdr_strength"],
+                    use_hdr=s.get("hdr_in_autofix", True),
+                    use_perspective=s.get("auto_perspective", True),
+                )
+            else:
+                # autofix_enabled=False: тільки ручні налаштування
+                result = pipeline.run_manual_adjustments(
+                    self._orig,
+                    brightness=vals["brightness"],
+                    contrast=vals["contrast"],
+                    sharpen_strength=vals["sharpen_strength"],
+                    hdr_strength=vals["hdr_strength"],
+                    grayscale=vals["grayscale"],
+                )
+            if s.get("autofix_enabled", True) and vals["grayscale"]:
                 result = pipeline.run_grayscale(result)
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -323,9 +365,8 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         try:
-            base = self._orig
             result = pipeline.run_manual_adjustments(
-                base,
+                self._orig,
                 brightness=vals["brightness"],
                 contrast=vals["contrast"],
                 sharpen_strength=vals["sharpen_strength"],
@@ -343,6 +384,7 @@ class MainWindow(QMainWindow):
         result = pipeline.run_auto_brightness(self._orig)
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
+        self._set_status("Авто-яскравість застосована")
 
     def _do_auto_contrast(self):
         if self._orig is None:
@@ -350,6 +392,7 @@ class MainWindow(QMainWindow):
         result = pipeline.run_auto_contrast(self._orig)
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
+        self._set_status("Авто-контраст застосований")
 
     def _do_persp_auto(self):
         if self._orig is None:
@@ -357,69 +400,101 @@ class MainWindow(QMainWindow):
         result, found = pipeline.run_perspective_auto(self._orig)
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
-        self._set_status("Перспективу виправлено" if found else "Документ не знайдено — спробуйте ручну")
+        if found:
+            self._set_status("Перспективу виправлено автоматично")
+        else:
+            self._set_status(
+                "Документ не знайдено на фоні — спробуйте ручну корекцію (4 точки)"
+            )
 
     def _do_persp_manual(self):
         if self._orig is None:
             return
-        corners = pipeline.detect_corners(self._orig)
-        h, w = self._orig.shape[:2]
         from PyQt6.QtCore import QPoint
+
+        orig_h, orig_w = self._orig.shape[:2]
+        prev = image_utils.make_preview(self._orig)
+        prev_h, prev_w = prev.shape[:2]
+        # Масштаб: оригінал → прев'ю (ImageLabel показує прев'ю)
+        sx = prev_w / max(orig_w, 1)
+        sy = prev_h / max(orig_h, 1)
+
+        corners = pipeline.detect_corners(self._orig)
         if corners is not None:
-            pts = [QPoint(int(p[0]), int(p[1])) for p in corners]
+            # Кути в оригінальних координатах → переводимо в прев'ю
+            pts = [QPoint(int(p[0] * sx), int(p[1] * sy)) for p in corners]
         else:
-            # Точки по самих краях зображення (відступ 2px)
             m = 2
-            pts = [QPoint(m, m), QPoint(w - m, m), QPoint(w - m, h - m), QPoint(m, h - m)]
+            pts = [
+                QPoint(m,          m),
+                QPoint(prev_w - m, m),
+                QPoint(prev_w - m, prev_h - m),
+                QPoint(m,          prev_h - m),
+            ]
         self._preview.enable_perspective_edit(pts)
         self._set_status("Тягніть кольорові точки для корекції перспективи")
 
-    def _on_persp_pts(self, points):
+    def _on_persp_pts(self, points: list):
         if self._orig is None or len(points) != 4:
             return
         try:
-            from PyQt6.QtCore import QPoint
-            corners = np.array([[p.x(), p.y()] for p in points], dtype=np.float32)
+            orig_h, orig_w = self._orig.shape[:2]
+            prev = image_utils.make_preview(self._orig)
+            prev_h, prev_w = prev.shape[:2]
+            # Координати точок — у системі прев'ю (≤900px).
+            # Масштабуємо назад в оригінальний розмір.
+            scale_x = orig_w / max(prev_w, 1)
+            scale_y = orig_h / max(prev_h, 1)
+            corners = np.array(
+                [[p.x() * scale_x, p.y() * scale_y] for p in points],
+                dtype=np.float32
+            )
             result = pipeline.run_perspective_manual(self._orig, corners)
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
-        except Exception:
-            pass
+        except Exception as e:
+            self._set_status(f"Помилка перспективи: {e}")
 
     # ------------------------------------------------------------------
     # Друк та збереження
     # ------------------------------------------------------------------
 
     def _do_print_current(self):
-        # ВИПРАВЛЕНО: правильна перевірка numpy array
+        # Правильна перевірка numpy array через "is not None"
         image = self._processed if self._processed is not None else self._orig
         if image is None:
             self._set_status("Немає зображення для друку")
             return
         try:
-            self._processor.set_files(self._queue.get_all_paths())
-            self._processor.print_current(image)
-            self._set_status("Надруковано")
+            # Синхронізуємо черги якщо ще не зроблено
+            if self._processor.total == 0:
+                self._processor.set_files(self._queue.get_all_paths())
+            printed_path = self._processor.print_current(image)
+            idx = self._processor.current_index - 1
+            self._queue.mark_done(idx)
+            self._set_status(f"Надруковано: {os.path.basename(printed_path)}")
             self._load_next_manual()
         except Exception as e:
             self._set_status(f"Помилка друку: {e}")
 
     def _do_skip(self):
-        self._processor.skip_current()
-        idx = self._processor._index - 1
+        skipped = self._processor.skip_current()
+        idx = self._processor.current_index - 1
         if idx >= 0:
             self._queue.mark_skipped(idx)
+        self._set_status(
+            f"Пропущено: {os.path.basename(skipped)}" if skipped else "Пропущено"
+        )
         self._load_next_manual()
 
     def _do_save_image(self):
-        """Зберігає поточне оброблене зображення — для відладки."""
+        """Зберігає поточне зображення — для відладки."""
         image = self._processed if self._processed is not None else self._orig
         if image is None:
             self._set_status("Немає зображення для збереження")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Зберегти зображення", "result.jpg",
-            "JPEG (*.jpg)"
+            self, "Зберегти зображення", "result.jpg", "JPEG (*.jpg)"
         )
         if not path:
             return
@@ -431,14 +506,19 @@ class MainWindow(QMainWindow):
             self._set_status(f"Помилка збереження: {e}")
 
     def _do_print_all(self):
-        if self._processor.total == 0 and not self._queue.get_all_paths():
+        all_paths = self._queue.get_all_paths()
+        if not all_paths:
             self._set_status("Черга порожня")
             return
-        self._processor.set_files(self._queue.get_all_paths())
+        self._processor.set_files(all_paths)
         if self._radio_auto.isChecked():
             self._start_auto()
         else:
             self._load_next_manual()
+
+    # ------------------------------------------------------------------
+    # Авто-режим у потоці
+    # ------------------------------------------------------------------
 
     def _start_auto(self):
         self._progress.setVisible(True)
@@ -455,26 +535,39 @@ class MainWindow(QMainWindow):
         self._worker.finished.connect(self._auto_thread.quit)
         self._auto_thread.start()
 
-    def _on_auto_progress(self, cur, total, fname):
+    def _on_auto_progress(self, cur: int, total: int, fname: str):
         self._progress.setValue(cur)
         self._queue.mark_current(cur - 1)
         self._set_status(f"Обробка {cur}/{total}: {fname}")
 
-    def _on_auto_error(self, fname, msg):
-        self._queue.mark_error(self._processor._index)
-        self._set_status(f"Помилка: {fname} — {msg}")
+    def _on_auto_error(self, idx: int, fname: str, msg: str):
+        self._queue.mark_error(idx)
+        self._set_status(f"Помилка [{idx+1}]: {fname} — {msg}")
 
-    def _on_auto_done(self, count):
+    def _on_auto_done(self, count: int):
         self._progress.setVisible(False)
         self._set_buttons_enabled(True)
         self._set_status(f"Готово. Надруковано {count} з {self._processor.total}")
+        # Позначаємо всі що не мають статусу
+        for i in range(self._queue.count()):
+            item = self._queue.item(i)
+            if item and not any(item.text().startswith(p) for p in ("✓", "✗")):
+                self._queue.mark_done(i)
+
+    # ------------------------------------------------------------------
+    # Ручний режим — крокування по черзі
+    # ------------------------------------------------------------------
 
     def _load_next_manual(self):
         if not self._processor.has_next():
-            self._set_status("Всі файли оброблено")
+            self._set_status("Всі файли оброблено ✓")
+            self._preview.clear()
+            self._orig = None
+            self._processed = None
+            self._update_buttons()
             return
         try:
-            idx = self._processor._index
+            idx = self._processor.current_index
             self._queue.mark_current(idx)
             img = self._processor.load_current()
             self._orig = img
@@ -484,48 +577,30 @@ class MainWindow(QMainWindow):
             self._preview.set_after(prev)
             path = self._processor.current_file()
             total = self._processor.total
-            self._set_status(f"[{idx + 1}/{total}]  {os.path.basename(path or '')}")
+            self._set_status(
+                f"[{idx + 1}/{total}]  {os.path.basename(path or '')}"
+            )
             self._update_buttons()
         except Exception as e:
             self._set_status(f"Помилка завантаження: {e}")
-
-    # ------------------------------------------------------------------
-    # Drag & Drop на головне вікно (резервний, основний — у QueueView)
-    # ------------------------------------------------------------------
-
-#    def dragEnterEvent(self, event: QDragEnterEvent):
-#        if event.mimeData().hasUrls():
-#            event.setDropAction(Qt.DropAction.CopyAction)
-#            event.accept()
-#        else:
-#            event.ignore()
-
-#    def dropEvent(self, event: QDropEvent):
-#        paths = [u.toLocalFile() for u in event.mimeData().urls()
-#                 if u.toLocalFile()]
-#        supported = file_utils.filter_supported(paths)
-#        if supported:
-#            self._queue.add_files(supported)
-#            self._on_files_dropped(supported)
-#        event.accept()
 
     # ------------------------------------------------------------------
     # Допоміжне
     # ------------------------------------------------------------------
 
     def _update_buttons(self):
-        has = self._processor.total > 0 or bool(self._queue.get_all_paths())
-        has_img = self._orig is not None
-        self._btn_print_all.setEnabled(has)
+        has_queue = bool(self._queue.get_all_paths())
+        has_img   = self._orig is not None
+        self._btn_print_all.setEnabled(has_queue)
         self._btn_print.setEnabled(has_img)
         self._btn_skip.setEnabled(self._processor.has_next())
         self._btn_autofix.setEnabled(has_img)
         self._btn_save_img.setEnabled(has_img)
 
-    def _set_buttons_enabled(self, enabled):
+    def _set_buttons_enabled(self, enabled: bool):
         for b in (self._btn_autofix, self._btn_print,
                   self._btn_skip, self._btn_print_all):
             b.setEnabled(enabled)
 
-    def _set_status(self, text):
+    def _set_status(self, text: str):
         self._status.setText(text)

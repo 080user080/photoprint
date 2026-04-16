@@ -3,11 +3,10 @@ Windows Drag & Drop через WM_DROPFILES.
 Обходить обмеження PyQt6 6.7+ на Windows 10/11.
 Підключається до MainWindow через installNativeEventFilter.
 """
-import sys
 import struct
 import ctypes
 import ctypes.wintypes
-from PyQt6.QtCore import QAbstractNativeEventFilter, QObject, pyqtSignal
+from PyQt6.QtCore import QAbstractNativeEventFilter
 
 WM_DROPFILES = 0x0233
 

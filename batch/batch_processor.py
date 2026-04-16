@@ -1,7 +1,7 @@
 """
 Пакетна обробка зображень.
 Не залежить від GUI модулів.
-GUI викликає методи класу BatchProcessor через сигнали/колбеки.
+GUI не звертається до _index напряму — тільки через публічний API.
 """
 
 import os
@@ -14,11 +14,6 @@ from utils import file_utils
 
 
 class BatchProcessor:
-    """
-    Обробляє список файлів у двох режимах:
-    - auto:   Auto Fix → друк без втручання
-    - manual: повертає зображення одне за одним для перегляду у GUI
-    """
 
     def __init__(self, settings: dict):
         self.settings = settings
@@ -26,23 +21,24 @@ class BatchProcessor:
         self._index: int = 0
 
     # ------------------------------------------------------------------
-    # Черга файлів
+    # Черга
     # ------------------------------------------------------------------
 
     def set_files(self, paths: list[str]) -> None:
-        """Встановлює список файлів для обробки."""
         self._files = file_utils.filter_supported(paths)
         self._index = 0
 
     def add_files(self, paths: list[str]) -> None:
-        """Додає файли до існуючої черги."""
         new = file_utils.filter_supported(paths)
-        self._files.extend(new)
+        # Уникаємо дублікатів
+        existing = set(self._files)
+        for p in new:
+            if p not in existing:
+                self._files.append(p)
+                existing.add(p)
 
     def add_folder(self, folder: str) -> None:
-        """Додає всі підтримувані зображення з папки."""
-        images = file_utils.collect_images_from_folder(folder)
-        self._files.extend(images)
+        self.add_files(file_utils.collect_images_from_folder(folder))
 
     def clear(self) -> None:
         self._files = []
@@ -57,8 +53,9 @@ class BatchProcessor:
         return len(self._files)
 
     @property
-    def remaining(self) -> int:
-        return max(0, self.total - self._index)
+    def current_index(self) -> int:
+        """Поточна позиція у черзі (публічний, read-only)."""
+        return self._index
 
     # ------------------------------------------------------------------
     # Авто-режим
@@ -67,13 +64,13 @@ class BatchProcessor:
     def run_auto(
         self,
         on_progress: Callable[[int, int, str], None] | None = None,
-        on_error: Callable[[str, str], None] | None = None,
+        on_error:    Callable[[int, str, str], None] | None = None,
     ) -> int:
         """
-        Обробляє всі файли автоматично: Auto Fix → друк.
-        on_progress(current, total, filename) — колбек прогресу.
-        on_error(filename, message) — колбек помилки.
-        Повертає кількість успішно надрукованих файлів.
+        Обробляє всі файли: Auto Fix → друк.
+        on_progress(current_1based, total, filename)
+        on_error(index, filename, message)
+        Повертає кількість успішно надрукованих.
         """
         s = self.settings
         printed = 0
@@ -82,16 +79,18 @@ class BatchProcessor:
             filename = os.path.basename(path)
             if on_progress:
                 on_progress(i + 1, self.total, filename)
-
             try:
                 image = loader.load(path)
-                processed = pipeline.run_autofix(
-                    image,
-                    sharpen_strength=s.get("sharpen_strength", 0.4),
-                    hdr_strength=s.get("hdr_strength", 0.5),
-                    use_hdr=s.get("hdr_in_autofix", True),
-                    use_perspective=s.get("auto_perspective", True),
-                )
+                if s.get("autofix_enabled", True):
+                    processed = pipeline.run_autofix(
+                        image,
+                        sharpen_strength=s.get("sharpen_strength", 0.4),
+                        hdr_strength=s.get("hdr_strength", 0.5),
+                        use_hdr=s.get("hdr_in_autofix", True),
+                        use_perspective=s.get("auto_perspective", True),
+                    )
+                else:
+                    processed = image
                 self._maybe_save(processed, path)
                 printer_module.print_image(
                     processed,
@@ -99,16 +98,15 @@ class BatchProcessor:
                     jpg_quality=s.get("jpg_quality", 95),
                 )
                 printed += 1
-
             except Exception as exc:
                 if on_error:
-                    on_error(filename, str(exc))
+                    on_error(i, filename, str(exc))
 
         self._index = self.total
         return printed
 
     # ------------------------------------------------------------------
-    # Ручний режим — ітератор
+    # Ручний режим
     # ------------------------------------------------------------------
 
     def has_next(self) -> bool:
@@ -120,38 +118,42 @@ class BatchProcessor:
         return None
 
     def load_current(self) -> np.ndarray:
-        """Завантажує поточний файл. Кидає RuntimeError якщо черга закінчилась."""
         path = self.current_file()
         if path is None:
             raise RuntimeError("Черга порожня")
         return loader.load(path)
 
-    def print_current(self, processed_image: np.ndarray) -> None:
-        """Друкує передане зображення і переходить до наступного."""
-        s = self.settings
+    def print_current(self, processed_image: np.ndarray) -> str:
+        """
+        Друкує зображення, зберігає якщо потрібно, переходить до наступного.
+        Повертає шлях надрукованого файлу.
+        """
         path = self.current_file()
-        if path:
-            self._maybe_save(processed_image, path)
+        if path is None:
+            raise RuntimeError("Немає поточного файлу")
+        s = self.settings
+        self._maybe_save(processed_image, path)
         printer_module.print_image(
             processed_image,
             printer_name=s.get("printer_name", ""),
             jpg_quality=s.get("jpg_quality", 95),
         )
         self._index += 1
+        return path
 
-    def skip_current(self) -> None:
-        """Пропускає поточний файл без друку."""
+    def skip_current(self) -> str | None:
+        """Пропускає поточний файл. Повертає пропущений шлях."""
+        path = self.current_file()
         self._index += 1
+        return path
 
     # ------------------------------------------------------------------
     # Внутрішнє
     # ------------------------------------------------------------------
 
     def _maybe_save(self, image: np.ndarray, source_path: str) -> None:
-        """Зберігає JPG якщо save_folder задано у налаштуваннях."""
         folder = self.settings.get("save_folder", "")
         if not folder:
             return
         out_path = file_utils.build_output_path(source_path, folder)
-        quality = self.settings.get("jpg_quality", 95)
-        saver.save(image, out_path, quality=quality)
+        saver.save(image, out_path, quality=self.settings.get("jpg_quality", 95))

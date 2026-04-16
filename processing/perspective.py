@@ -30,19 +30,9 @@ def auto_detect_corners(image: np.ndarray) -> np.ndarray | None:
 
 def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """
-    Ручна корекція — точки вже у порядку [TL, TR, BR, BL] від GUI.
-    НЕ викликаємо _order_points — вона переставляє точки і ламає результат.
-    """
-    pts = corners.astype(np.float32)
-    dst, width, height = _compute_destination(pts)
-    M = cv2.getPerspectiveTransform(pts, dst)
-    warped = cv2.warpPerspective(image, M, (width, height))
-    return warped
-
-
-def apply_correction_auto(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """
-    Авто корекція — сортуємо точки з контуру бо порядок невідомий.
+    Виконує перспективну трансформацію за 4 кутами.
+    corners: float32 array shape (4,2), порядок [TL, TR, BR, BL].
+    Повертає випрямлений BGR uint8.
     """
     pts = _order_points(corners.astype(np.float32))
     dst, width, height = _compute_destination(pts)
@@ -60,7 +50,7 @@ def auto_correct(image: np.ndarray) -> tuple[np.ndarray, bool]:
     corners = auto_detect_corners(image)
     if corners is None:
         return image.copy(), False
-    return apply_correction_auto(image, corners), True
+    return apply_correction(image, corners), True
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +90,7 @@ def _find_document_contour(binary: np.ndarray) -> np.ndarray | None:
     for cnt in contours[:5]:
         area = cv2.contourArea(cnt)
         # Документ займає щонайменше 10% площі зображення
-        if area < image_area * 0.10:
+        if area < image_area * 0.05:
             break
 
         # Апроксимуємо контур до полігону
