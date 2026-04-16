@@ -3,6 +3,7 @@ test/
 
 # Ігноруємо системне сміття Windows та Python
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 .venv/
