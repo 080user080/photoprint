@@ -70,6 +70,8 @@ class MainWindow(QMainWindow):
         self._processed: np.ndarray | None = None
         self._auto_thread = None
         self._drop_filter = None
+        self._current_path: str | None = None          # поточний файл у ручному/перегляді
+        self._per_file: dict[str, dict] = {}            # збережені налаштування слайдерів по файлу
 
         self._settings_win = SettingsWindow()
         self._settings_win.settings_saved.connect(self._on_settings_saved)
@@ -312,20 +314,45 @@ class MainWindow(QMainWindow):
         self._orig = None
         self._base = None
         self._processed = None
+        self._current_path = None
+        self._per_file.clear()
         self._update_buttons()
         self._set_status("Черга очищена")
+
+    def _store_current_settings(self):
+        """Зберігає поточні значення слайдерів для _current_path."""
+        path = self._current_path
+        if path is None:
+            return
+        self._per_file[path] = self._controls.values()
+
+    def _restore_file_settings(self, path: str):
+        """Відновлює слайдери для файлу path, або скидає до дефолту."""
+        vals = self._per_file.get(path)
+        if vals is None:
+            self._controls.reset_all()
+            return
+        self._controls.set_brightness(vals.get("brightness", 0.0), silent=True)
+        self._controls.set_contrast(vals.get("contrast", 0.0), silent=True)
+        self._controls.set_sharpen(vals.get("sharpen_strength", 0.0), silent=True)
+        self._controls.set_hdr(vals.get("hdr_strength", 0.0), silent=True)
+        self._controls.set_grayscale(vals.get("grayscale", False), silent=True)
+        # Оновлюємо прев'ю з відновленими значеннями
+        self._on_controls_changed(self._controls.values())
 
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
         try:
+            self._store_current_settings()
             from core import loader
             img = loader.load(path)
             self._orig = img
             self._base = img.copy()  # початково base = orig
             self._processed = None
+            self._current_path = path
+            self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
-            self._preview.set_after(prev)
             self._update_buttons()
         except Exception as e:
             self._set_status(f"Помилка завантаження: {e}")
@@ -374,6 +401,8 @@ class MainWindow(QMainWindow):
         if self._base is None:
             return
         try:
+            # Зберігаємо поточні значення для активного файлу
+            self._store_current_settings()
             # Використовуємо базове зображення (з перспективою якщо була)
             result = pipeline.run_manual_adjustments(
                 self._base,
@@ -500,6 +529,8 @@ class MainWindow(QMainWindow):
             self._set_status("Немає зображення для друку")
             return
         try:
+            # Зберігаємо налаштування перед друком
+            self._store_current_settings()
             # Синхронізуємо черги якщо ще не зроблено
             if self._processor.total == 0:
                 self._processor.set_files(self._queue.get_all_paths())
@@ -593,12 +624,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _load_next_manual(self):
+        # Зберігаємо налаштування поточного файлу перед переходом
+        self._store_current_settings()
         if not self._processor.has_next():
             self._set_status("Всі файли оброблено ✓")
             self._preview.clear()
             self._orig = None
             self._base = None
             self._processed = None
+            self._current_path = None
             self._update_buttons()
             return
         try:
@@ -608,10 +642,12 @@ class MainWindow(QMainWindow):
             self._orig = img
             self._base = img.copy()  # скидаємо базове зображення
             self._processed = None
+            path = self._processor.current_file()
+            self._current_path = path
+            self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
             self._preview.set_after(prev)
-            path = self._processor.current_file()
             total = self._processor.total
             self._set_status(
                 f"[{idx + 1}/{total}]  {os.path.basename(path or '')}"

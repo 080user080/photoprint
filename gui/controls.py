@@ -185,11 +185,21 @@ class ControlsPanel(QWidget):
         self._cb_bw.setChecked(False)
         self._emit()
 
-    def set_sharpen(self, v): self._sharpen.set_value(v, silent=True)
-    def set_hdr(self, v):     self._hdr.set_value(v, silent=True)
+    def set_sharpen(self, v, silent=True):
+        self._sharpen.set_value(v, silent=silent)
+
+    def set_hdr(self, v, silent=True):
+        self._hdr.set_value(v, silent=silent)
 
     def set_brightness(self, v, silent=True):
         self._brightness.set_value(v, silent=silent)
 
     def set_contrast(self, v, silent=True):
         self._contrast.set_value(v, silent=silent)
+
+    def set_grayscale(self, v: bool, silent=True):
+        self._cb_bw.blockSignals(silent)
+        self._cb_bw.setChecked(v)
+        self._cb_bw.blockSignals(False)
+        if not silent:
+            self._emit()
