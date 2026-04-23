@@ -209,6 +209,7 @@ class MainWindow(QMainWindow):
         self._controls.changed.connect(self._on_controls_changed)
         self._controls.auto_brightness_clicked.connect(self._do_auto_brightness)
         self._controls.auto_contrast_clicked.connect(self._do_auto_contrast)
+        self._controls.auto_sharpen_clicked.connect(self._do_auto_sharpen)
         self._controls.perspective_auto_clicked.connect(self._do_persp_auto)
         self._controls.perspective_manual_clicked.connect(self._do_persp_manual)
 
@@ -406,6 +407,20 @@ class MainWindow(QMainWindow):
         self._processed = result
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-контраст застосований")
+
+    def _do_auto_sharpen(self):
+        if self._base is None:
+            return
+        result, strength = pipeline.run_auto_sharpen(self._base)
+        # Оновлюємо базове зображення після авто-різкості
+        self._base = result.copy()
+        self._processed = result
+        self._controls.set_sharpen(strength)
+        self._preview.set_after(image_utils.make_preview(result))
+        if strength > 0:
+            self._set_status(f"Авто-різкість застосована ({strength:.2f})")
+        else:
+            self._set_status("Зображення достатньо різке — різкість не потрібна")
 
     def _do_persp_auto(self):
         if self._orig is None:

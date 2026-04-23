@@ -75,6 +75,7 @@ class ControlsPanel(QWidget):
     changed = pyqtSignal(dict)
     auto_brightness_clicked   = pyqtSignal()
     auto_contrast_clicked     = pyqtSignal()
+    auto_sharpen_clicked      = pyqtSignal()
     perspective_auto_clicked  = pyqtSignal()
     perspective_manual_clicked = pyqtSignal()
 
@@ -117,8 +118,9 @@ class ControlsPanel(QWidget):
         sh_box = QGroupBox("Різкість")
         sh_box.setStyleSheet(self._group_style())
         sh_lay = QVBoxLayout(sh_box)
-        self._sharpen = _SliderRow("Різкість", 0.0, 1.0, 0.4)
+        self._sharpen = _SliderRow("Різкість", 0.0, 1.0, 0.4, show_auto=True)
         self._sharpen.changed.connect(self._emit)
+        self._sharpen.auto_clicked.connect(self.auto_sharpen_clicked)
         sh_lay.addWidget(self._sharpen)
 
         # HDR

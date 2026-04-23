@@ -39,6 +39,14 @@ def run_sharpen(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
     return sharpen.apply(image, strength=strength)
 
 
+def run_auto_sharpen(image: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    Автоматична різкість: вимірює blur і застосовує, якщо потрібно.
+    Повертає (результат, застосована_сила).
+    """
+    return sharpen.auto_apply(image)
+
+
 def run_hdr(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
     """Тільки HDR tone mapping."""
     return hdr.apply(image, strength=strength)
