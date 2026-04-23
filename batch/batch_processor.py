@@ -88,6 +88,10 @@ class BatchProcessor:
                         hdr_strength=s.get("hdr_strength", 0.5),
                         use_hdr=s.get("hdr_in_autofix", True),
                         use_perspective=s.get("auto_perspective", True),
+                        bw_binary=s.get("bw_binary", False),
+                        classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
+                        classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
+                        classify_line_count_min=s.get("classify_line_count_min", 3),
                     )
                 else:
                     processed = image

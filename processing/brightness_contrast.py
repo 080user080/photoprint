@@ -24,22 +24,22 @@ def apply_brightness(image: np.ndarray, value: float) -> np.ndarray:
     return cv2.LUT(image, lut)
 
 
-def auto_brightness(image: np.ndarray) -> np.ndarray:
+def auto_brightness(image: np.ndarray, percentile_low: float = 5.0, percentile_high: float = 95.0) -> np.ndarray:
     """
-    Автояскравість: розтягує 5–95 перцентилі каналу L на повний діапазон 0–255.
-    Працює у LAB. Ігнорує крайні викиди (наприклад, блики або глибокі тіні).
+    Автояскравість: розтягує percentile_low–percentile_high перцентилі каналу L на повний діапазон 0–255.
+    Працює у LAB. Ігнорує крайні викиди.
     """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
 
-    p_low  = float(np.percentile(l, 5))
-    p_high = float(np.percentile(l, 95))
+    p_low  = float(np.percentile(l, percentile_low))
+    p_high = float(np.percentile(l, percentile_high))
 
     # Якщо діапазон вже достатній — нічого не робимо
     if p_high - p_low < 10:
         return image.copy()
 
-    # Розтягуємо 5–95 перцентилі на 0–255
+    # Розтягуємо на 0–255
     l_stretch = np.clip((l.astype(np.float32) - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)
 
     merged = cv2.merge([l_stretch, a, b])
@@ -66,15 +66,15 @@ def apply_contrast(image: np.ndarray, value: float) -> np.ndarray:
     return cv2.LUT(image, lut)
 
 
-def auto_contrast(image: np.ndarray) -> np.ndarray:
+def auto_contrast(image: np.ndarray, percentile_low: float = 5.0, percentile_high: float = 95.0) -> np.ndarray:
     """
-    Авто-контраст: розтягує гістограму каналу L на 5–95 перцентилі.
-    Ігнорує крайні 5% з кожного боку (блики, тіні, шуми) — не пересвітлює.
+    Авто-контраст: розтягує гістограму каналу L на percentile_low–percentile_high перцентилі.
+    Ігнорує крайні викиди — не пересвітлює.
     """
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l, a, b = cv2.split(lab)
-    p_low  = float(np.percentile(l, 5))
-    p_high = float(np.percentile(l, 95))
+    p_low  = float(np.percentile(l, percentile_low))
+    p_high = float(np.percentile(l, percentile_high))
     if p_high - p_low < 10:
         return image.copy()
     l_norm = np.clip((l.astype(np.float32) - p_low) / (p_high - p_low) * 255, 0, 255).astype(np.uint8)

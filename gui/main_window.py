@@ -375,6 +375,10 @@ class MainWindow(QMainWindow):
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
                     use_perspective=s.get("auto_perspective", True),
+                    bw_binary=s.get("bw_binary", False),
+                    classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
+                    classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
+                    classify_line_count_min=s.get("classify_line_count_min", 3),
                 )
                 # Оновлюємо базове зображення після автофіксу
                 self._base = result.copy()
@@ -420,7 +424,12 @@ class MainWindow(QMainWindow):
     def _do_auto_brightness(self):
         if self._base is None:
             return
-        result = pipeline.run_auto_brightness(self._base)
+        s = self._settings
+        result = pipeline.run_auto_brightness(
+            self._base,
+            percentile_low=s.get("auto_percentile_low", 5.0),
+            percentile_high=s.get("auto_percentile_high", 95.0),
+        )
         # Оновлюємо базове зображення після авто-яскравості
         self._base = result.copy()
         self._processed = result
@@ -430,7 +439,12 @@ class MainWindow(QMainWindow):
     def _do_auto_contrast(self):
         if self._base is None:
             return
-        result = pipeline.run_auto_contrast(self._base)
+        s = self._settings
+        result = pipeline.run_auto_contrast(
+            self._base,
+            percentile_low=s.get("auto_percentile_low", 5.0),
+            percentile_high=s.get("auto_percentile_high", 95.0),
+        )
         # Оновлюємо базове зображення після авто-контрасту
         self._base = result.copy()
         self._processed = result
@@ -440,7 +454,12 @@ class MainWindow(QMainWindow):
     def _do_auto_sharpen(self):
         if self._base is None:
             return
-        result, strength = pipeline.run_auto_sharpen(self._base)
+        s = self._settings
+        result, strength = pipeline.run_auto_sharpen(
+            self._base,
+            threshold=s.get("autosharp_threshold", 80.0),
+            max_strength=s.get("autosharp_max_strength", 0.7),
+        )
         # Оновлюємо базове зображення після авто-різкості
         self._base = result.copy()
         self._processed = result

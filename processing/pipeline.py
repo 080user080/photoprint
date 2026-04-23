@@ -15,6 +15,9 @@ def run_autofix(
     use_perspective: bool = True,
     doc_type: str | None = None,
     bw_binary: bool = False,
+    classify_bw_std_thresh: float = 20.0,
+    classify_edge_ratio_min: float = 0.03,
+    classify_line_count_min: int = 3,
 ) -> np.ndarray:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
@@ -36,7 +39,12 @@ def run_autofix(
             result = corrected
 
     if doc_type is None:
-        doc_type = doc_classifier.classify(result)
+        doc_type = doc_classifier.classify(
+            result,
+            bw_std_thresh=classify_bw_std_thresh,
+            edge_ratio_min=classify_edge_ratio_min,
+            line_count_min=classify_line_count_min,
+        )
 
     if doc_type == "bw_document":
         result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
@@ -58,17 +66,31 @@ def run_sharpen(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
     return sharpen.apply(image, strength=strength)
 
 
-def run_auto_sharpen(image: np.ndarray) -> tuple[np.ndarray, float]:
+def run_auto_sharpen(
+    image: np.ndarray,
+    threshold: float = 80.0,
+    max_strength: float = 0.7,
+) -> tuple[np.ndarray, float]:
     """
     Автоматична різкість: вимірює blur і застосовує, якщо потрібно.
     Повертає (результат, застосована_сила).
     """
-    return sharpen.auto_apply(image)
+    return sharpen.auto_apply(image, threshold=threshold, max_strength=max_strength)
 
 
-def run_classify(image: np.ndarray) -> str:
+def run_classify(
+    image: np.ndarray,
+    bw_std_thresh: float = 20.0,
+    edge_ratio_min: float = 0.03,
+    line_count_min: int = 3,
+) -> str:
     """Повертає тип документа: 'bw_document' | 'color_document' | 'photo'."""
-    return doc_classifier.classify(image)
+    return doc_classifier.classify(
+        image,
+        bw_std_thresh=bw_std_thresh,
+        edge_ratio_min=edge_ratio_min,
+        line_count_min=line_count_min,
+    )
 
 
 def run_hdr(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
@@ -105,8 +127,12 @@ def run_brightness(image: np.ndarray, value: float) -> np.ndarray:
     return bc.apply_brightness(image, value)
 
 
-def run_auto_brightness(image: np.ndarray) -> np.ndarray:
-    return bc.auto_brightness(image)
+def run_auto_brightness(
+    image: np.ndarray,
+    percentile_low: float = 5.0,
+    percentile_high: float = 95.0,
+) -> np.ndarray:
+    return bc.auto_brightness(image, percentile_low=percentile_low, percentile_high=percentile_high)
 
 
 def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
@@ -114,8 +140,12 @@ def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
     return bc.apply_contrast(image, value)
 
 
-def run_auto_contrast(image: np.ndarray) -> np.ndarray:
-    return bc.auto_contrast(image)
+def run_auto_contrast(
+    image: np.ndarray,
+    percentile_low: float = 5.0,
+    percentile_high: float = 95.0,
+) -> np.ndarray:
+    return bc.auto_contrast(image, percentile_low=percentile_low, percentile_high=percentile_high)
 
 
 def run_grayscale(image: np.ndarray) -> np.ndarray:

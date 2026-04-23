@@ -3,12 +3,13 @@
 import cv2
 import numpy as np
 
-STD_AB_BW_THRESH = 20.0
-EDGE_RATIO_DOC_MIN = 0.03
-LINE_COUNT_DOC_MIN = 3
 
-
-def classify(image: np.ndarray) -> str:
+def classify(
+    image: np.ndarray,
+    bw_std_thresh: float = 20.0,
+    edge_ratio_min: float = 0.03,
+    line_count_min: int = 3,
+) -> str:
     small = cv2.resize(image, (0, 0), fx=0.3, fy=0.3, interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
@@ -24,12 +25,12 @@ def classify(image: np.ndarray) -> str:
     line_count = len(lines) if lines is not None else 0
 
     # Чорно-білий
-    if std_a < STD_AB_BW_THRESH and std_b < STD_AB_BW_THRESH:
-        if edge_ratio >= EDGE_RATIO_DOC_MIN and line_count >= LINE_COUNT_DOC_MIN:
+    if std_a < bw_std_thresh and std_b < bw_std_thresh:
+        if edge_ratio >= edge_ratio_min and line_count >= line_count_min:
             return "bw_document"
         return "photo"
 
     # Кольоровий — документ чи фото
-    if edge_ratio >= EDGE_RATIO_DOC_MIN and line_count >= LINE_COUNT_DOC_MIN:
+    if edge_ratio >= edge_ratio_min and line_count >= line_count_min:
         return "color_document"
     return "photo"
