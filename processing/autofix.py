@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from processing import hdr as hdr_module
 from processing import sharpen as sharpen_module
+from processing import brightness_contrast as bc
 
 
 def apply(
@@ -17,12 +18,46 @@ def apply(
     use_hdr: bool = True,
 ) -> np.ndarray:
     """
-    Повний Auto Fix pipeline.
+    Повний Auto Fix pipeline для фотографій.
     Повертає оброблений uint8 BGR.
     """
     result = _step_lab_clahe_normalize(image)
     if use_hdr:
         result = hdr_module.apply(result, strength=hdr_strength)
+    result = sharpen_module.apply(result, strength=sharpen_strength)
+    return result
+
+
+def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, binary: bool = False) -> np.ndarray:
+    """
+    Pipeline для чорно-білих документів.
+    Без HDR (щоб не псувати чіткість тексту).
+    Послідовність: CLAHE → Auto-Contrast → Sharpen → Grayscale → [бінаризація].
+    Параметр binary=False за замовчуванням (grayscale зберігає напівтони, бінаризація — чистий чорно-білий).
+    """
+    result = _step_lab_clahe_normalize(image)
+    result = bc.auto_contrast(result)
+    result = sharpen_module.apply(result, strength=sharpen_strength)
+    result = bc.to_grayscale(result)
+
+    if binary:
+        # Адаптивна бінаризація: збереже текст навіть при нерівному освітленні
+        result = cv2.adaptiveThreshold(result, 255,
+                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY,
+                                     15, 10)
+    return result
+
+
+def apply_color_document(image: np.ndarray, sharpen_strength: float = 0.2) -> np.ndarray:
+    """
+    Pipeline для кольорових документів (грамоти, посвідчення).
+    Без HDR (щоб не змінювати кольори).
+    Послідовність: CLAHE → Auto-Brightness → Auto-Contrast → легка Sharpen.
+    """
+    result = _step_lab_clahe_normalize(image)
+    result = bc.auto_brightness(result)
+    result = bc.auto_contrast(result)
     result = sharpen_module.apply(result, strength=sharpen_strength)
     return result
 
