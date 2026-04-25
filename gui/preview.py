@@ -210,12 +210,12 @@ class PreviewPanel(QWidget):
 
         # Після
         right = QVBoxLayout()
-        lbl_a = QLabel("ПІСЛЯ")
-        lbl_a.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_a.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+        self._lbl_after = QLabel("ПІСЛЯ")
+        self._lbl_after.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
         self._after = ImageLabel()
         self._after.set_placeholder("Тут з'явиться результат")
-        right.addWidget(lbl_a)
+        right.addWidget(self._lbl_after)
         right.addWidget(self._after)
 
         layout.addLayout(left)
@@ -227,9 +227,19 @@ class PreviewPanel(QWidget):
     def set_after(self, image: np.ndarray):
         self._after.set_image(image)
 
+    def set_autofix_applied(self, applied: bool):
+        """Візуальний індикатор застосованої автокорекції."""
+        if applied:
+            self._lbl_after.setText("✓ ПІСЛЯ (Auto Fix)")
+            self._lbl_after.setStyleSheet("font-weight:bold; color:#006600; font-size:13px;")
+        else:
+            self._lbl_after.setText("ПІСЛЯ")
+            self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+
     def clear(self):
         self._before.set_placeholder()
         self._after.set_placeholder("Тут з'явиться результат")
+        self.set_autofix_applied(False)
 
     def enable_perspective_edit(self, corners: list[QPoint] | None = None):
         self._before.set_edit_mode(True, corners)

@@ -11,11 +11,13 @@ import numpy as np
 from core import loader, saver, printer as printer_module
 from processing import pipeline
 from utils import file_utils
+from utils.logger import get_logger
 
 
 class BatchProcessor:
 
     def __init__(self, settings: dict):
+        self._logger = get_logger(__name__)
         self.settings = settings
         self._files: list[str] = []
         self._index: int = 0
@@ -82,7 +84,7 @@ class BatchProcessor:
             try:
                 image = loader.load(path)
                 if s.get("autofix_enabled", True):
-                    processed = pipeline.run_autofix(
+                    processed, _ = pipeline.run_autofix(
                         image,
                         sharpen_strength=s.get("sharpen_strength", 0.4),
                         hdr_strength=s.get("hdr_strength", 0.5),
@@ -103,6 +105,7 @@ class BatchProcessor:
                 )
                 printed += 1
             except Exception as exc:
+                self._logger.error(f"Помилка обробки файлу {filename}: {exc}", exc_info=True)
                 if on_error:
                     on_error(i, filename, str(exc))
 

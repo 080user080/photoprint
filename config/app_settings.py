@@ -21,6 +21,7 @@ def load(path=None) -> dict:
     return {
         "default_mode":      cfg.get("general",    "default_mode",    fallback="auto"),
         "autofix_enabled":   cfg.getboolean("processing", "autofix_enabled",   fallback=True),
+        "auto_apply_autofix": cfg.getboolean("processing", "auto_apply_autofix", fallback=True),
         "hdr_in_autofix":    cfg.getboolean("processing", "hdr_in_autofix",    fallback=True),
         "auto_perspective":  cfg.getboolean("processing", "auto_perspective",  fallback=True),
         "sharpen_strength":  cfg.getfloat("processing",  "sharpen_strength",   fallback=0.4),
@@ -50,11 +51,12 @@ def save(settings: dict, path=None):
         "default_mode": settings.get("default_mode", "auto"),
     }
     cfg["processing"] = {
-        "autofix_enabled":  str(settings.get("autofix_enabled",  True)).lower(),
-        "hdr_in_autofix":   str(settings.get("hdr_in_autofix",   True)).lower(),
-        "auto_perspective": str(settings.get("auto_perspective", True)).lower(),
-        "sharpen_strength": str(settings.get("sharpen_strength", 0.4)),
-        "hdr_strength":     str(settings.get("hdr_strength",     0.5)),
+        "autofix_enabled":   str(settings.get("autofix_enabled",   True)).lower(),
+        "auto_apply_autofix": str(settings.get("auto_apply_autofix", True)).lower(),
+        "hdr_in_autofix":    str(settings.get("hdr_in_autofix",    True)).lower(),
+        "auto_perspective":  str(settings.get("auto_perspective", True)).lower(),
+        "sharpen_strength":  str(settings.get("sharpen_strength", 0.4)),
+        "hdr_strength":      str(settings.get("hdr_strength",     0.5)),
         # Авто-різкість
         "autosharp_threshold":    str(settings.get("autosharp_threshold",    80.0)),
         "autosharp_max_strength": str(settings.get("autosharp_max_strength", 0.7)),

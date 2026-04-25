@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QButtonGroup, QRadioButton,
     QFileDialog, QProgressBar, QScrollArea, QApplication
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
 
 # WM_DROPFILES — єдиний надійний механізм Drag&Drop на Windows 10/11 з PyQt6
 if sys.platform == "win32":
@@ -28,6 +28,7 @@ from gui.settings_window import SettingsWindow
 from batch.batch_processor import BatchProcessor
 from processing import pipeline
 from utils import file_utils, image_utils
+from utils.logger import get_logger
 from config import app_settings
 
 
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("PhotoPrint")
         self.setMinimumSize(1100, 680)
 
+        self._logger = get_logger(__name__)
         self._settings   = app_settings.load()
         self._processor  = BatchProcessor(self._settings)
         self._orig:      np.ndarray | None = None
@@ -353,8 +355,13 @@ class MainWindow(QMainWindow):
             self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
-            self._update_buttons()
+            # Авто-застосування Auto Fix при завантаженні
+            if self._settings.get("auto_apply_autofix", True):
+                self._do_autofix()
+            else:
+                self._update_buttons()
         except Exception as e:
+            self._logger.error(f"Помилка завантаження файлу {path}: {e}", exc_info=True)
             self._set_status(f"Помилка завантаження: {e}")
 
     # ------------------------------------------------------------------
@@ -369,7 +376,7 @@ class MainWindow(QMainWindow):
             s = self._settings
             vals = self._controls.values()
             if s.get("autofix_enabled", True):
-                result = pipeline.run_autofix(
+                result, status_msg = pipeline.run_autofix(
                     self._orig,
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
@@ -382,6 +389,8 @@ class MainWindow(QMainWindow):
                 )
                 # Оновлюємо базове зображення після автофіксу
                 self._base = result.copy()
+                self._set_status(status_msg)
+                self._preview.set_autofix_applied(True)
             else:
                 # autofix_enabled=False: тільки ручні налаштування
                 result = pipeline.run_manual_adjustments(
@@ -392,12 +401,15 @@ class MainWindow(QMainWindow):
                     hdr_strength=vals["hdr_strength"],
                     grayscale=vals["grayscale"],
                 )
+                self._set_status("Ручні налаштування")
+                self._preview.set_autofix_applied(False)
             if s.get("autofix_enabled", True) and vals["grayscale"]:
                 result = pipeline.run_grayscale(result)
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
             self._update_buttons()
         except Exception as e:
+            self._logger.error(f"Помилка Auto Fix: {e}", exc_info=True)
             self._set_status(f"Помилка Auto Fix: {e}")
 
     def _on_controls_changed(self, vals: dict):
@@ -418,7 +430,10 @@ class MainWindow(QMainWindow):
             )
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
+            # Скидаємо індикатор Auto Fix при ручних налаштуваннях
+            self._preview.set_autofix_applied(False)
         except Exception as e:
+            self._logger.error(f"Помилка обробки слайдерів: {e}", exc_info=True)
             self._set_status(f"Помилка обробки: {e}")
 
     def _do_auto_brightness(self):
@@ -471,48 +486,60 @@ class MainWindow(QMainWindow):
             self._set_status("Зображення достатньо різке — різкість не потрібна")
 
     def _do_persp_auto(self):
+        """Авто-детекція перспективи з fallback до ручного режиму."""
         if self._orig is None:
             return
-        result, found = pipeline.run_perspective_auto(self._orig)
-        # Оновлюємо базове зображення після перспективи
-        self._base = result.copy()
-        self._processed = result
-        self._preview.set_before(image_utils.make_preview(result))
-        self._preview.set_after(image_utils.make_preview(result))
-        if found:
-            self._set_status("Перспективу виправлено автоматично")
-        else:
-            self._set_status(
-                "Документ не знайдено на фоні — спробуйте ручну корекцію (4 точки)"
-            )
-
-    def _do_persp_manual(self):
-        if self._orig is None:
-            return
-        from PyQt6.QtCore import QPoint
-
-        orig_h, orig_w = self._orig.shape[:2]
-        # Використовуємо оригінальне зображення для відображення точок
-        prev = image_utils.make_preview(self._orig)
-        prev_h, prev_w = prev.shape[:2]
-        # Масштаб: оригінал → прев'ю
-        sx = prev_w / max(orig_w, 1)
-        sy = prev_h / max(orig_h, 1)
-
         corners = pipeline.detect_corners(self._orig)
         if corners is not None:
-            # Кути в оригінальних координатах → переводимо в прев'ю
-            pts = [QPoint(int(p[0] * sx), int(p[1] * sy)) for p in corners]
+            # Авто знайшло документ — застосовуємо + показуємо точки для підправлення
+            result, _ = pipeline.run_perspective_auto(self._orig)
+            self._base = result.copy()
+            self._processed = result
+            self._preview.set_before(image_utils.make_preview(result))
+            self._preview.set_after(image_utils.make_preview(result))
+            self._show_perspective_points(corners, "Перспективу виправлено — підправте точки якщо потрібно")
         else:
-            m = 2
-            pts = [
-                QPoint(m,          m),
-                QPoint(prev_w - m, m),
-                QPoint(prev_w - m, prev_h - m),
-                QPoint(m,          prev_h - m),
-            ]
+            # Fallback: документ не знайдено → ручний режим з дефолтними точками
+            self._do_persp_manual_fallback()
+        self._update_buttons()
+
+    def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
+        """Показує 4 точки перспективи на прев'ю."""
+        orig_h, orig_w = self._orig.shape[:2]
+        prev = image_utils.make_preview(self._orig)
+        prev_h, prev_w = prev.shape[:2]
+        sx = prev_w / max(orig_w, 1)
+        sy = prev_h / max(orig_h, 1)
+        pts = [QPoint(int(p[0] * sx), int(p[1] * sy)) for p in corners]
         self._preview.enable_perspective_edit(pts)
-        self._set_status("Тягніть кольорові точки для корекції перспективи")
+        self._set_status(status_msg)
+
+    def _do_persp_manual_fallback(self):
+        """Ручний режим з дефолтними точками по кутах прев'ю."""
+        if self._orig is None:
+            return
+        orig_h, orig_w = self._orig.shape[:2]
+        prev = image_utils.make_preview(self._orig)
+        prev_h, prev_w = prev.shape[:2]
+        m = 2
+        pts = [
+            QPoint(m,          m),
+            QPoint(prev_w - m, m),
+            QPoint(prev_w - m, prev_h - m),
+            QPoint(m,          prev_h - m),
+        ]
+        self._preview.enable_perspective_edit(pts)
+        self._set_status("Документ не знайдено — встановіть точки вручну")
+
+    def _do_persp_manual(self):
+        """Ручна корекція: спочатку пробуємо знайти точки авто, інакше дефолтні."""
+        if self._orig is None:
+            return
+        corners = pipeline.detect_corners(self._orig)
+        if corners is not None:
+            self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
+        else:
+            self._do_persp_manual_fallback()
 
     def _on_persp_pts(self, points: list):
         if self._orig is None or len(points) != 4:
@@ -535,11 +562,12 @@ class MainWindow(QMainWindow):
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
         except Exception as e:
+            self._logger.error(f"Помилка перспективи: {e}", exc_info=True)
             self._set_status(f"Помилка перспективи: {e}")
 
-    # ------------------------------------------------------------------
-    # Друк та збереження
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Друк та збереження
+# ------------------------------------------------------------------
 
     def _do_print_current(self):
         # Правильна перевірка numpy array через "is not None"
@@ -559,6 +587,7 @@ class MainWindow(QMainWindow):
             self._set_status(f"Надруковано: {os.path.basename(printed_path)}")
             self._load_next_manual()
         except Exception as e:
+            self._logger.error(f"Помилка друку: {e}", exc_info=True)
             self._set_status(f"Помилка друку: {e}")
 
     def _do_skip(self):
@@ -587,6 +616,7 @@ class MainWindow(QMainWindow):
             saver.save(image, path, quality=self._settings.get("jpg_quality", 95))
             self._set_status(f"Збережено: {os.path.basename(path)}")
         except Exception as e:
+            self._logger.error(f"Помилка збереження: {e}", exc_info=True)
             self._set_status(f"Помилка збереження: {e}")
 
     def _do_print_all(self):
@@ -673,6 +703,7 @@ class MainWindow(QMainWindow):
             )
             self._update_buttons()
         except Exception as e:
+            self._logger.error(f"Помилка завантаження з черги: {e}", exc_info=True)
             self._set_status(f"Помилка завантаження: {e}")
 
     # ------------------------------------------------------------------

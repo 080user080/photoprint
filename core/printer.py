@@ -9,6 +9,7 @@ import tempfile
 import subprocess
 import numpy as np
 import cv2
+from utils.logger import get_logger
 
 
 def _save_temp_jpg(image: np.ndarray, quality: int = 95) -> str:
@@ -31,13 +32,16 @@ def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = 95
 
     Кидає RuntimeError якщо не вдалося надіслати.
     """
+    logger = get_logger(__name__)
     tmp_path = _save_temp_jpg(image, jpg_quality)
+    logger.info(f"Відправка на друк: {tmp_path}, принтер: {printer_name or 'за замовчуванням'}")
 
     try:
         if sys.platform == "win32":
             _print_windows(tmp_path, printer_name)
         else:
             _print_unix(tmp_path, printer_name)
+        logger.info("Зображення успішно надіслано на друк")
     finally:
         # Видаляємо тимчасовий файл із затримкою (Windows блокує файл під час друку)
         if sys.platform != "win32":
@@ -53,6 +57,7 @@ def _print_windows(path: str, printer_name: str) -> None:
     Якщо printer_name задано — використовує mspaint /pt (тихий друк на конкретний принтер).
     Інакше — ShellExecute 'print' (відкриває діалог з принтером за замовчуванням).
     """
+    logger = get_logger(__name__)
     import ctypes
 
     if printer_name:
@@ -62,6 +67,7 @@ def _print_windows(path: str, printer_name: str) -> None:
             capture_output=True
         )
         if result.returncode != 0:
+            logger.error(f"mspaint /pt повернув код {result.returncode}, принтер: {printer_name}")
             raise RuntimeError(
                 f"mspaint /pt повернув код {result.returncode}. "
                 f"Перевірте назву принтера: '{printer_name}'"
@@ -70,15 +76,18 @@ def _print_windows(path: str, printer_name: str) -> None:
         # ShellExecute 'print' — Windows сам обирає програму
         ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
         if ret <= 32:
+            logger.error(f"ShellExecute 'print' повернув код {ret}")
             raise RuntimeError(f"ShellExecute 'print' повернув код {ret}")
 
 
 def _print_unix(path: str, printer_name: str) -> None:
     """Друк на Linux/Mac через lp (для розробки)."""
+    logger = get_logger(__name__)
     cmd = ["lp"]
     if printer_name:
         cmd += ["-d", printer_name]
     cmd.append(path)
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
+        logger.error(f"lp помилка: {result.stderr}")
         raise RuntimeError(f"lp помилка: {result.stderr}")

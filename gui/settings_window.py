@@ -42,12 +42,14 @@ class SettingsWindow(QWidget):
         proc_box = QGroupBox("Обробка")
         proc_form = QFormLayout(proc_box)
 
-        self._cb_autofix    = QCheckBox()
-        self._cb_hdr        = QCheckBox()
-        self._cb_perspective = QCheckBox()
-        proc_form.addRow("Auto Fix за замовчуванням:", self._cb_autofix)
-        proc_form.addRow("HDR в Auto Fix:",            self._cb_hdr)
-        proc_form.addRow("Авто-перспектива:",          self._cb_perspective)
+        self._cb_autofix        = QCheckBox()
+        self._cb_auto_apply     = QCheckBox()
+        self._cb_hdr            = QCheckBox()
+        self._cb_perspective    = QCheckBox()
+        proc_form.addRow("Auto Fix за замовчуванням:",    self._cb_autofix)
+        proc_form.addRow("Авто-застосувати при завантаженні:", self._cb_auto_apply)
+        proc_form.addRow("HDR в Auto Fix:",                self._cb_hdr)
+        proc_form.addRow("Авто-перспектива:",              self._cb_perspective)
 
         self._spin_sharpen = QDoubleSpinBox()
         self._spin_sharpen.setRange(0.0, 1.0)
@@ -189,6 +191,7 @@ class SettingsWindow(QWidget):
 
     def _apply_settings(self, s: dict):
         self._cb_autofix.setChecked(s.get("autofix_enabled", True))
+        self._cb_auto_apply.setChecked(s.get("auto_apply_autofix", True))
         self._cb_hdr.setChecked(s.get("hdr_in_autofix", True))
         self._cb_perspective.setChecked(s.get("auto_perspective", True))
         self._spin_sharpen.setValue(s.get("sharpen_strength", 0.4))
@@ -213,11 +216,12 @@ class SettingsWindow(QWidget):
 
     def _collect_settings(self) -> dict:
         return {
-            "autofix_enabled":   self._cb_autofix.isChecked(),
-            "hdr_in_autofix":    self._cb_hdr.isChecked(),
-            "auto_perspective":  self._cb_perspective.isChecked(),
-            "sharpen_strength":  self._spin_sharpen.value(),
-            "hdr_strength":      self._spin_hdr.value(),
+            "autofix_enabled":    self._cb_autofix.isChecked(),
+            "auto_apply_autofix": self._cb_auto_apply.isChecked(),
+            "hdr_in_autofix":     self._cb_hdr.isChecked(),
+            "auto_perspective":   self._cb_perspective.isChecked(),
+            "sharpen_strength":   self._spin_sharpen.value(),
+            "hdr_strength":       self._spin_hdr.value(),
 
             "classify_bw_std_thresh":   self._spin_bw_std.value(),
             "classify_edge_ratio_min":  self._spin_edge_ratio.value(),

@@ -18,9 +18,10 @@ def run_autofix(
     classify_bw_std_thresh: float = 20.0,
     classify_edge_ratio_min: float = 0.03,
     classify_line_count_min: int = 3,
-) -> np.ndarray:
+) -> tuple[np.ndarray, str]:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
+    Повертає (результат, статус_повідомлення).
 
     Типи:
       bw_document   — чб документ (без HDR, grayscale/bw, сильний контраст)
@@ -32,11 +33,13 @@ def run_autofix(
     bw_binary — чи застосовувати адаптивну бінаризацію для bw_document.
     """
     result = image
+    status_parts = []
 
     if use_perspective:
         corrected, found = perspective.auto_correct(result)
         if found:
             result = corrected
+            status_parts.append("перспектива виправлена")
 
     if doc_type is None:
         doc_type = doc_classifier.classify(
@@ -48,8 +51,12 @@ def run_autofix(
 
     if doc_type == "bw_document":
         result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
+        status_parts.append("ч-б документ")
+        if bw_binary:
+            status_parts.append("бінаризація")
     elif doc_type == "color_document":
         result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)
+        status_parts.append("кольоровий документ")
     else:
         # photo або fallback — повний pipeline
         result = autofix.apply(
@@ -58,7 +65,13 @@ def run_autofix(
             hdr_strength=hdr_strength,
             use_hdr=use_hdr,
         )
-    return result
+        status_parts.append("фото")
+        if use_hdr:
+            status_parts.append("HDR")
+
+    status_parts.append(f"різкість {sharpen_strength:.2f}")
+    status_msg = "Auto Fix: " + ", ".join(status_parts)
+    return result, status_msg
 
 
 def run_sharpen(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
