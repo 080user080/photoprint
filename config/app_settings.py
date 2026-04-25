@@ -23,7 +23,8 @@ def load(path=None) -> dict:
         "autofix_enabled":   cfg.getboolean("processing", "autofix_enabled",   fallback=True),
         "auto_apply_autofix": cfg.getboolean("processing", "auto_apply_autofix", fallback=True),
         "hdr_in_autofix":    cfg.getboolean("processing", "hdr_in_autofix",    fallback=True),
-        "auto_perspective":  cfg.getboolean("processing", "auto_perspective",  fallback=True),
+        "auto_perspective":  cfg.getboolean("processing", "auto_perspective",  fallback=False),
+        "shadow_highlight_strength": cfg.getfloat("processing", "shadow_highlight_strength", fallback=0.0),
         "sharpen_strength":  cfg.getfloat("processing",  "sharpen_strength",   fallback=0.4),
         "hdr_strength":      cfg.getfloat("processing",  "hdr_strength",       fallback=0.5),
         # Авто-різкість
@@ -55,6 +56,7 @@ def save(settings: dict, path=None):
         "auto_apply_autofix": str(settings.get("auto_apply_autofix", True)).lower(),
         "hdr_in_autofix":    str(settings.get("hdr_in_autofix",    True)).lower(),
         "auto_perspective":  str(settings.get("auto_perspective", True)).lower(),
+        "shadow_highlight_strength": str(settings.get("shadow_highlight_strength", 0.0)),
         "sharpen_strength":  str(settings.get("sharpen_strength", 0.4)),
         "hdr_strength":      str(settings.get("hdr_strength",     0.5)),
         # Авто-різкість

@@ -94,6 +94,7 @@ class BatchProcessor:
                         classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
                         classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
                         classify_line_count_min=s.get("classify_line_count_min", 3),
+                        shadow_highlight_strength=s.get("shadow_highlight_strength", 0.0),
                     )
                 else:
                     processed = image

@@ -260,6 +260,7 @@ class MainWindow(QMainWindow):
             self._radio_auto.setChecked(True)
         else:
             self._radio_manual.setChecked(True)
+        self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
 
@@ -284,11 +285,15 @@ class MainWindow(QMainWindow):
         if not supported:
             self._set_status("Жоден з файлів не підтримується")
             return
+        was_empty = self._processor.total == 0
         self._processor.add_files(supported)
         self._set_status(
             f"Додано {len(supported)} файл(ів). Всього у черзі: {self._processor.total}"
         )
         self._update_buttons()
+        # Автоматично відкриваємо перший файл якщо черга була порожня
+        if was_empty and supported:
+            self._on_queue_selection(supported[0])
 
     def _browse_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -334,13 +339,13 @@ class MainWindow(QMainWindow):
         if vals is None:
             self._controls.reset_all()
             return
+        self._controls.set_shadow_highlight(vals.get("shadow_highlight", 0.0), silent=True)
         self._controls.set_brightness(vals.get("brightness", 0.0), silent=True)
         self._controls.set_contrast(vals.get("contrast", 0.0), silent=True)
         self._controls.set_sharpen(vals.get("sharpen_strength", 0.0), silent=True)
         self._controls.set_hdr(vals.get("hdr_strength", 0.0), silent=True)
         self._controls.set_grayscale(vals.get("grayscale", False), silent=True)
-        # Оновлюємо прев'ю з відновленими значеннями
-        self._on_controls_changed(self._controls.values())
+        # Не викликаємо _on_controls_changed тут - дозволяємо слайдерам працювати самостійно
 
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
@@ -386,6 +391,7 @@ class MainWindow(QMainWindow):
                     classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
                     classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
                     classify_line_count_min=s.get("classify_line_count_min", 3),
+                    shadow_highlight_strength=sh_strength,
                 )
                 # Оновлюємо базове зображення після автофіксу
                 self._base = result.copy()
@@ -400,6 +406,7 @@ class MainWindow(QMainWindow):
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
                     grayscale=vals["grayscale"],
+                    shadow_highlight_strength=vals["shadow_highlight"],
                 )
                 self._set_status("Ручні налаштування")
                 self._preview.set_autofix_applied(False)
@@ -427,6 +434,7 @@ class MainWindow(QMainWindow):
                 sharpen_strength=vals["sharpen_strength"],
                 hdr_strength=vals["hdr_strength"],
                 grayscale=vals["grayscale"],
+                shadow_highlight_strength=vals["shadow_highlight"],
             )
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -581,10 +589,29 @@ class MainWindow(QMainWindow):
             # Синхронізуємо черги якщо ще не зроблено
             if self._processor.total == 0:
                 self._processor.set_files(self._queue.get_all_paths())
-            printed_path = self._processor.print_current(image)
-            idx = self._processor.current_index - 1
-            self._queue.mark_done(idx)
-            self._set_status(f"Надруковано: {os.path.basename(printed_path)}")
+            # Якщо файл відкритий вручну, використовуємо _current_path
+            if self._current_path and self._current_path in self._queue.get_all_paths():
+                # Знаходимо індекс файлу в черзі
+                all_paths = self._queue.get_all_paths()
+                idx = all_paths.index(self._current_path)
+                # Друкуємо напряму через printer_module
+                s = self._settings
+                from core import saver, printer as printer_module
+                if s.get("save_before_print", True):
+                    saved_path = saver.save(image, self._current_path, quality=s.get("jpg_quality", 95))
+                printer_module.print_image(
+                    image,
+                    printer_name=s.get("printer_name", ""),
+                    jpg_quality=s.get("jpg_quality", 95),
+                )
+                self._queue.mark_done(idx)
+                self._set_status(f"Надруковано: {os.path.basename(self._current_path)}")
+            else:
+                # Батч режим - використовуємо processor
+                printed_path = self._processor.print_current(image)
+                idx = self._processor.current_index - 1
+                self._queue.mark_done(idx)
+                self._set_status(f"Надруковано: {os.path.basename(printed_path)}")
             self._load_next_manual()
         except Exception as e:
             self._logger.error(f"Помилка друку: {e}", exc_info=True)

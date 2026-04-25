@@ -96,6 +96,14 @@ class ControlsPanel(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
+        # Висвітлення тіней
+        sh_box = QGroupBox("Висвітлення тіней")
+        sh_box.setStyleSheet(self._group_style())
+        sh_lay = QVBoxLayout(sh_box)
+        self._shadow_highlight = _SliderRow("Тіні", 0.0, 2.0, 0.0)
+        self._shadow_highlight.changed.connect(self._emit)
+        sh_lay.addWidget(self._shadow_highlight)
+
         # Яскравість
         br_box = QGroupBox("Яскравість")
         br_box.setStyleSheet(self._group_style())
@@ -115,13 +123,13 @@ class ControlsPanel(QWidget):
         ct_lay.addWidget(self._contrast)
 
         # Різкість
-        sh_box = QGroupBox("Різкість")
-        sh_box.setStyleSheet(self._group_style())
-        sh_lay = QVBoxLayout(sh_box)
+        sharpen_box = QGroupBox("Різкість")
+        sharpen_box.setStyleSheet(self._group_style())
+        sharpen_lay = QVBoxLayout(sharpen_box)
         self._sharpen = _SliderRow("Різкість", 0.0, 1.0, 0.4, show_auto=True)
         self._sharpen.changed.connect(self._emit)
         self._sharpen.auto_clicked.connect(self.auto_sharpen_clicked)
-        sh_lay.addWidget(self._sharpen)
+        sharpen_lay.addWidget(self._sharpen)
 
         # HDR
         hdr_box = QGroupBox("HDR")
@@ -158,9 +166,10 @@ class ControlsPanel(QWidget):
         )
         btn_reset.clicked.connect(self.reset_all)
 
+        root.addWidget(sh_box)
         root.addWidget(br_box)
         root.addWidget(ct_box)
-        root.addWidget(sh_box)
+        root.addWidget(sharpen_box)
         root.addWidget(hdr_box)
         root.addWidget(bw_box)
         root.addWidget(persp_box)
@@ -172,6 +181,7 @@ class ControlsPanel(QWidget):
 
     def values(self):
         return {
+            "shadow_highlight": self._shadow_highlight.value(),
             "brightness":       self._brightness.value(),
             "contrast":         self._contrast.value(),
             "sharpen_strength": self._sharpen.value(),
@@ -180,7 +190,7 @@ class ControlsPanel(QWidget):
         }
 
     def reset_all(self):
-        for w in (self._brightness, self._contrast, self._sharpen, self._hdr):
+        for w in (self._shadow_highlight, self._brightness, self._contrast, self._sharpen, self._hdr):
             w.reset()
         self._cb_bw.setChecked(False)
         self._emit()
@@ -203,3 +213,6 @@ class ControlsPanel(QWidget):
         self._cb_bw.blockSignals(False)
         if not silent:
             self._emit()
+
+    def set_shadow_highlight(self, v, silent=True):
+        self._shadow_highlight.set_value(v, silent=silent)

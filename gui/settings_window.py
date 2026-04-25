@@ -51,6 +51,11 @@ class SettingsWindow(QWidget):
         proc_form.addRow("HDR в Auto Fix:",                self._cb_hdr)
         proc_form.addRow("Авто-перспектива:",              self._cb_perspective)
 
+        self._spin_shadow = QDoubleSpinBox()
+        self._spin_shadow.setRange(0.0, 2.0)
+        self._spin_shadow.setSingleStep(0.1)
+        self._spin_shadow.setDecimals(2)
+
         self._spin_sharpen = QDoubleSpinBox()
         self._spin_sharpen.setRange(0.0, 1.0)
         self._spin_sharpen.setSingleStep(0.05)
@@ -61,6 +66,7 @@ class SettingsWindow(QWidget):
         self._spin_hdr.setSingleStep(0.05)
         self._spin_hdr.setDecimals(2)
 
+        proc_form.addRow("Висвітлення тіней (0–1):", self._spin_shadow)
         proc_form.addRow("Сила різкості (0–1):", self._spin_sharpen)
         proc_form.addRow("Сила HDR (0–1):",      self._spin_hdr)
 
@@ -193,7 +199,8 @@ class SettingsWindow(QWidget):
         self._cb_autofix.setChecked(s.get("autofix_enabled", True))
         self._cb_auto_apply.setChecked(s.get("auto_apply_autofix", True))
         self._cb_hdr.setChecked(s.get("hdr_in_autofix", True))
-        self._cb_perspective.setChecked(s.get("auto_perspective", True))
+        self._cb_perspective.setChecked(s.get("auto_perspective", False))
+        self._spin_shadow.setValue(s.get("shadow_highlight_strength", 0.0))
         self._spin_sharpen.setValue(s.get("sharpen_strength", 0.4))
         self._spin_hdr.setValue(s.get("hdr_strength", 0.5))
 
@@ -220,6 +227,7 @@ class SettingsWindow(QWidget):
             "auto_apply_autofix": self._cb_auto_apply.isChecked(),
             "hdr_in_autofix":     self._cb_hdr.isChecked(),
             "auto_perspective":   self._cb_perspective.isChecked(),
+            "shadow_highlight_strength": self._spin_shadow.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
