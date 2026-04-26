@@ -20,6 +20,9 @@ def load(path=None) -> dict:
 
     return {
         "default_mode":      cfg.get("general",    "default_mode",    fallback="auto"),
+        "window_width":      cfg.getint("general",   "window_width",    fallback=1100),
+        "window_height":     cfg.getint("general",   "window_height",   fallback=680),
+        "queue_width":       cfg.getint("general",   "queue_width",     fallback=200),
         "autofix_enabled":   cfg.getboolean("processing", "autofix_enabled",   fallback=True),
         "auto_apply_autofix": cfg.getboolean("processing", "auto_apply_autofix", fallback=True),
         "hdr_in_autofix":    cfg.getboolean("processing", "hdr_in_autofix",    fallback=True),
@@ -50,6 +53,9 @@ def save(settings: dict, path=None):
     cfg = configparser.ConfigParser()
     cfg["general"] = {
         "default_mode": settings.get("default_mode", "auto"),
+        "window_width": str(settings.get("window_width", 1100)),
+        "window_height": str(settings.get("window_height", 680)),
+        "queue_width": str(settings.get("queue_width", 200)),
     }
     cfg["processing"] = {
         "autofix_enabled":   str(settings.get("autofix_enabled",   True)).lower(),

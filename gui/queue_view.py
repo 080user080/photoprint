@@ -3,8 +3,9 @@
 Drag & Drop сумісний з Windows 10/11.
 """
 
+from typing import Optional, List
 from PyQt6.QtWidgets import (
-    QListWidget, QListWidgetItem, QAbstractItemView, QFrame
+    QWidget, QListWidget, QListWidgetItem, QAbstractItemView, QFrame
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
 from PyQt6.QtGui  import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent
@@ -24,7 +25,7 @@ class QueueView(QListWidget):
     }
     _PREFIX = {"done": "✓ ", "error": "✗ ", "skipped": "– ", "current": "▶ "}
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
         # --- Критично для Windows ---
@@ -35,8 +36,8 @@ class QueueView(QListWidget):
         # ----------------------------
 
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.setMinimumWidth(200)
-        self.setMaximumWidth(300)
+        self.setMinimumWidth(150)
+        self.setMaximumWidth(500)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.itemClicked.connect(self._on_clicked)
 
@@ -44,52 +45,52 @@ class QueueView(QListWidget):
     # Публічний API
     # ------------------------------------------------------------------
 
-    def set_files(self, paths):
+    def set_files(self, paths: List[str]) -> None:
         self.clear()
         for p in paths:
             self._add_item(p)
 
-    def add_files(self, paths):
+    def add_files(self, paths: List[str]) -> None:
         existing = set(self._all_paths())
         for p in paths:
             if p not in existing:
                 self._add_item(p)
                 existing.add(p)
 
-    def mark_current(self, idx):  self._set_status(idx, "current")
-    def mark_done(self, idx):     self._set_status(idx, "done")
-    def mark_error(self, idx):    self._set_status(idx, "error")
-    def mark_skipped(self, idx):  self._set_status(idx, "skipped")
+    def mark_current(self, idx: int) -> None:  self._set_status(idx, "current")
+    def mark_done(self, idx: int) -> None:     self._set_status(idx, "done")
+    def mark_error(self, idx: int) -> None:    self._set_status(idx, "error")
+    def mark_skipped(self, idx: int) -> None:  self._set_status(idx, "skipped")
 
-    def get_all_paths(self):
+    def get_all_paths(self) -> List[str]:
         return self._all_paths()
 
-    def get_path(self, idx):
+    def get_path(self, idx: int) -> Optional[str]:
         item = self.item(idx)
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
-    def clear_queue(self):
+    def clear_queue(self) -> None:
         self.clear()
 
     # ------------------------------------------------------------------
     # Drag & Drop — перевизначаємо на viewport теж (Windows)
     # ------------------------------------------------------------------
 
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             event.ignore()
 
-    def dragMoveEvent(self, event: QDragMoveEvent):
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
         if event.mimeData().hasUrls():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             event.ignore()
 
-    def dropEvent(self, event: QDropEvent):
+    def dropEvent(self, event: QDropEvent) -> None:
         if not event.mimeData().hasUrls():
             event.ignore()
             return
@@ -104,7 +105,7 @@ class QueueView(QListWidget):
     # Внутрішнє
     # ------------------------------------------------------------------
 
-    def _urls_to_paths(self, urls):
+    def _urls_to_paths(self, urls: List[QUrl]) -> List[str]:
         result = []
         for url in urls:
             path = url.toLocalFile()
@@ -115,7 +116,7 @@ class QueueView(QListWidget):
                 result.extend(collect_images_from_folder(path))
         return result
 
-    def _add_item(self, path, status="pending"):
+    def _add_item(self, path: str, status: str = "pending") -> None:
         name = os.path.basename(path)
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
@@ -124,7 +125,7 @@ class QueueView(QListWidget):
         item.setToolTip(path)
         self.addItem(item)
 
-    def _set_status(self, idx, status):
+    def _set_status(self, idx: int, status: str) -> None:
         item = self.item(idx)
         if not item:
             return
@@ -138,7 +139,7 @@ class QueueView(QListWidget):
             self.setCurrentRow(idx)
             self.scrollToItem(item)
 
-    def _all_paths(self):
+    def _all_paths(self) -> List[str]:
         result = []
         for i in range(self.count()):
             item = self.item(i)
@@ -148,7 +149,7 @@ class QueueView(QListWidget):
                     result.append(p)
         return result
 
-    def _on_clicked(self, item):
+    def _on_clicked(self, item: QListWidgetItem) -> None:
         p = item.data(Qt.ItemDataRole.UserRole)
         if p:
             self.selection_changed.emit(p)

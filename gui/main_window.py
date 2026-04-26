@@ -8,6 +8,7 @@ Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено
 
 import os
 import sys
+from typing import Optional, Dict, Any
 import numpy as np
 
 from PyQt6.QtWidgets import (
@@ -30,6 +31,14 @@ from processing import pipeline
 from utils import file_utils, image_utils
 from utils.logger import get_logger
 from config import app_settings
+
+
+# Константи
+DEFAULT_WINDOW_WIDTH = 1100
+DEFAULT_WINDOW_HEIGHT = 680
+DEFAULT_QUEUE_WIDTH = 200
+MIN_QUEUE_WIDTH = 150
+MAX_QUEUE_WIDTH = 500
 
 
 # ---------------------------------------------------------------------------
@@ -62,18 +71,18 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PhotoPrint")
-        self.setMinimumSize(1100, 680)
+        self.setMinimumSize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
 
         self._logger = get_logger(__name__)
-        self._settings   = app_settings.load()
-        self._processor  = BatchProcessor(self._settings)
-        self._orig:      np.ndarray | None = None
-        self._base:      np.ndarray | None = None  # базове зображення після перспективи
-        self._processed: np.ndarray | None = None
-        self._auto_thread = None
-        self._drop_filter = None
-        self._current_path: str | None = None          # поточний файл у ручному/перегляді
-        self._per_file: dict[str, dict] = {}            # збережені налаштування слайдерів по файлу
+        self._settings: Dict[str, Any] = app_settings.load()
+        self._processor: BatchProcessor = BatchProcessor(self._settings)
+        self._orig: Optional[np.ndarray] = None
+        self._base: Optional[np.ndarray] = None  # базове зображення після перспективи
+        self._processed: Optional[np.ndarray] = None
+        self._auto_thread: Optional[QThread] = None
+        self._drop_filter: Optional[DropEventFilter] = None
+        self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
+        self._per_file: Dict[str, Dict[str, Any]] = {}  # збережені налаштування слайдерів по файлу
 
         self._settings_win = SettingsWindow()
         self._settings_win.settings_saved.connect(self._on_settings_saved)
@@ -81,6 +90,9 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_default_mode()
         self._update_buttons()
+
+        # Завантажуємо розмір вікна та ширину черги
+        self._load_window_geometry()
 
         # Drag & Drop реєструємо після показу вікна
         if sys.platform == "win32":
@@ -116,7 +128,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(8)
 
-        # === Ліва колонка: черга ===
+        # === Ліва колонка: черга (resizable) ===
         left = QVBoxLayout()
         left.setSpacing(4)
 
@@ -143,7 +155,7 @@ class MainWindow(QMainWindow):
         left.addWidget(btn_folder)
         left.addWidget(btn_clear)
 
-        # === Центр: прев'ю ===
+        # === Центр: прев'ю + керування внизу ===
         center = QVBoxLayout()
         center.setSpacing(6)
 
@@ -162,19 +174,16 @@ class MainWindow(QMainWindow):
         center.addWidget(self._progress)
         center.addWidget(self._status)
 
-        # === Права колонка: керування ===
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFixedWidth(320)
-        right_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
-
-        right_widget = QWidget()
-        right = QVBoxLayout(right_widget)
-        right.setSpacing(8)
-        right.setContentsMargins(4, 4, 4, 4)
+        # === Внизу під прев'ю: керування ===
+        controls_container = QWidget()
+        controls_layout = QVBoxLayout(controls_container)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(4)
 
         # Режим
-        lbl_mode = QLabel("Режим обробки")
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(8)
+        lbl_mode = QLabel("Режим:")
         lbl_mode.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
         self._radio_auto   = QRadioButton("Авто")
         self._radio_manual = QRadioButton("Ручний")
@@ -183,24 +192,25 @@ class MainWindow(QMainWindow):
         self._mode_group = QButtonGroup()
         self._mode_group.addButton(self._radio_auto,   0)
         self._mode_group.addButton(self._radio_manual, 1)
+        mode_row.addWidget(lbl_mode)
+        mode_row.addWidget(self._radio_auto)
+        mode_row.addWidget(self._radio_manual)
+        mode_row.addStretch()
 
-        # Кнопки дій
+        # Кнопки дій в один ряд
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(4)
+
         self._btn_autofix   = QPushButton("⚡ Auto Fix")
         self._btn_print     = QPushButton("🖨  Друк")
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
-        self._btn_save_img  = QPushButton("💾  Зберегти зображення")
+        self._btn_save_img  = QPushButton("💾  Зберегти")
 
         for b in (self._btn_autofix, self._btn_print,
-                  self._btn_skip, self._btn_print_all):
-            b.setFixedHeight(34)
+                  self._btn_skip, self._btn_print_all, self._btn_save_img):
+            b.setFixedHeight(32)
             b.setStyleSheet(self._btn_style())
-
-        self._btn_save_img.setFixedHeight(30)
-        self._btn_save_img.setStyleSheet(
-            "background:#5A8A5A; color:white; border:none;"
-            "border-radius:4px; padding:4px 8px; font-size:12px;"
-        )
 
         self._btn_autofix.clicked.connect(self._do_autofix)
         self._btn_print.clicked.connect(self._do_print_current)
@@ -208,7 +218,20 @@ class MainWindow(QMainWindow):
         self._btn_print_all.clicked.connect(self._do_print_all)
         self._btn_save_img.clicked.connect(self._do_save_image)
 
-        # Слайдери
+        buttons_row.addWidget(self._btn_autofix)
+        buttons_row.addWidget(self._btn_print)
+        buttons_row.addWidget(self._btn_skip)
+        buttons_row.addWidget(self._btn_print_all)
+        buttons_row.addWidget(self._btn_save_img)
+        buttons_row.addStretch()
+
+        # Налаштування
+        btn_settings = QPushButton("⚙  Налаштування")
+        btn_settings.setStyleSheet(self._btn_style("#555555"))
+        btn_settings.clicked.connect(self._open_settings)
+        buttons_row.addWidget(btn_settings)
+
+        # Слайдери в два ряди
         self._controls = ControlsPanel()
         self._controls.changed.connect(self._on_controls_changed)
         self._controls.auto_brightness_clicked.connect(self._do_auto_brightness)
@@ -216,31 +239,16 @@ class MainWindow(QMainWindow):
         self._controls.auto_sharpen_clicked.connect(self._do_auto_sharpen)
         self._controls.perspective_auto_clicked.connect(self._do_persp_auto)
         self._controls.perspective_manual_clicked.connect(self._do_persp_manual)
+        self._controls.perspective_reset_clicked.connect(self._do_persp_reset)
 
-        # Налаштування
-        btn_settings = QPushButton("⚙  Налаштування")
-        btn_settings.setStyleSheet(self._btn_style("#555555"))
-        btn_settings.clicked.connect(self._open_settings)
+        controls_layout.addLayout(mode_row)
+        controls_layout.addLayout(buttons_row)
+        controls_layout.addWidget(self._controls)
 
-        right.addWidget(lbl_mode)
-        right.addWidget(self._radio_auto)
-        right.addWidget(self._radio_manual)
-        right.addSpacing(4)
-        right.addWidget(self._btn_autofix)
-        right.addWidget(self._btn_print)
-        right.addWidget(self._btn_skip)
-        right.addWidget(self._btn_print_all)
-        right.addWidget(self._btn_save_img)
-        right.addSpacing(4)
-        right.addWidget(self._controls)
-        right.addStretch()
-        right.addWidget(btn_settings)
-
-        right_scroll.setWidget(right_widget)
+        center.addWidget(controls_container)
 
         root.addLayout(left,   0)
         root.addLayout(center, 1)
-        root.addWidget(right_scroll, 0)
 
     def _btn_style(self, color="#2E5FA3"):
         return (
@@ -263,6 +271,26 @@ class MainWindow(QMainWindow):
         self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
+
+    def _load_window_geometry(self):
+        """Завантажує розмір вікна та ширину черги з налаштувань."""
+        width = self._settings.get("window_width", 1100)
+        height = self._settings.get("window_height", 680)
+        queue_width = self._settings.get("queue_width", 200)
+        self.resize(width, height)
+        self._queue.setFixedWidth(queue_width)
+
+    def _save_window_geometry(self):
+        """Зберігає розмір вікна та ширину черги в налаштуваннях."""
+        self._settings["window_width"] = self.width()
+        self._settings["window_height"] = self.height()
+        self._settings["queue_width"] = self._queue.width()
+        app_settings.save(self._settings)
+
+    def resizeEvent(self, event):
+        """Перевизначення resizeEvent для збереження розміру вікна."""
+        super().resizeEvent(event)
+        self._save_window_geometry()
 
     def _on_settings_saved(self, s: dict):
         self._settings = s
@@ -419,14 +447,12 @@ class MainWindow(QMainWindow):
             self._logger.error(f"Помилка Auto Fix: {e}", exc_info=True)
             self._set_status(f"Помилка Auto Fix: {e}")
 
-    def _on_controls_changed(self, vals: dict):
+    def _on_controls_changed(self, vals: dict = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
         if self._base is None:
             return
         try:
-            # Зберігаємо поточні значення для активного файлу
-            self._store_current_settings()
-            # Використовуємо базове зображення (з перспективою якщо була)
+            vals = self._controls.values()
             result = pipeline.run_manual_adjustments(
                 self._base,
                 brightness=vals["brightness"],
@@ -440,6 +466,9 @@ class MainWindow(QMainWindow):
             self._preview.set_after(image_utils.make_preview(result))
             # Скидаємо індикатор Auto Fix при ручних налаштуваннях
             self._preview.set_autofix_applied(False)
+            self._update_buttons()
+            # Зберігаємо нові значення для поточного файлу
+            self._store_current_settings()
         except Exception as e:
             self._logger.error(f"Помилка обробки слайдерів: {e}", exc_info=True)
             self._set_status(f"Помилка обробки: {e}")
@@ -548,6 +577,20 @@ class MainWindow(QMainWindow):
             self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
         else:
             self._do_persp_manual_fallback()
+
+    def _do_persp_reset(self):
+        """Скидає перспективу до оригінального зображення."""
+        if self._orig is None:
+            return
+        self._base = self._orig.copy()
+        self._processed = self._orig.copy()
+        self._preview.set_before(image_utils.make_preview(self._orig))
+        self._preview.set_after(image_utils.make_preview(self._orig))
+        self._preview.disable_perspective_edit()
+        self._set_status("Перспективу скинуто")
+        self._update_buttons()
+        # Після скидання перспективи застосовуємо поточні слайдери
+        self._on_controls_changed()
 
     def _on_persp_pts(self, points: list):
         if self._orig is None or len(points) != 4:
