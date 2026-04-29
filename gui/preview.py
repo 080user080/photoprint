@@ -10,6 +10,36 @@ from PyQt6.QtGui     import QPixmap, QImage, QPainter, QPen, QColor, QBrush
 import numpy as np
 import cv2
 
+# Константи для ImageLabel
+POINT_RADIUS = 9
+POINT_HIT_RADIUS_MULTIPLIER = 2
+POINT_HIT_TOLERANCE = 4
+MIN_IMAGE_SIZE = 280
+IMAGE_MARGIN = 12
+FIT_PADDING = 24  # IMAGE_MARGIN * 2
+
+# Константи для малювання
+LINE_WIDTH = 2
+LINE_ALPHA = 200
+SHADOW_ALPHA = 80
+SHADOW_OFFSET = 2
+CORNER_COUNT = 4
+
+# Константи для кольорів точок
+COLOR_TL = QColor(220, 50,  50)   # червоний
+COLOR_TR = QColor(50,  180, 50)   # зелений
+COLOR_BR = QColor(50,  50,  220)  # синій
+COLOR_BL = QColor(220, 160, 0)    # жовтий
+
+# Константи для міток
+LABEL_TL = "TL"
+LABEL_TR = "TR"
+LABEL_BR = "BR"
+LABEL_BL = "BL"
+
+# Константи для PreviewPanel
+LAYOUT_SPACING = 8
+
 
 def _np_to_pixmap(image: np.ndarray) -> QPixmap:
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -23,22 +53,16 @@ class ImageLabel(QLabel):
 
     points_changed = pyqtSignal(list)   # list[QPoint] у координатах зображення
 
-    _RADIUS = 9
-    _COLORS = [
-        QColor(220, 50,  50),   # TL червоний
-        QColor(50,  180, 50),   # TR зелений
-        QColor(50,  50,  220),  # BR синій
-        QColor(220, 160, 0),    # BL жовтий
-    ]
-    _LABELS = ["TL", "TR", "BR", "BL"]
+    _COLORS = [COLOR_TL, COLOR_TR, COLOR_BR, COLOR_BL]
+    _LABELS = [LABEL_TL, LABEL_TR, LABEL_BR, LABEL_BL]
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumSize(280, 280)
+        self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
         # Залишаємо місце навколо для точок що на краю
-        self.setContentsMargins(12, 12, 12, 12)
+        self.setContentsMargins(IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN)
         self._pixmap_orig: QPixmap | None = None
         self._img_w = 1
         self._img_h = 1
@@ -81,17 +105,17 @@ class ImageLabel(QLabel):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if not self._edit_mode or len(self._points) != 4:
+        if not self._edit_mode or len(self._points) != CORNER_COUNT:
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Лінії між точками
-        pen = QPen(QColor(255, 255, 255, 200), 2, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(255, 255, 255, LINE_ALPHA), LINE_WIDTH, Qt.PenStyle.DashLine)
         painter.setPen(pen)
-        for i in range(4):
+        for i in range(CORNER_COUNT):
             d1 = self._img_to_widget(self._points[i])
-            d2 = self._img_to_widget(self._points[(i + 1) % 4])
+            d2 = self._img_to_widget(self._points[(i + 1) % CORNER_COUNT])
             painter.drawLine(d1, d2)
 
         # Точки
@@ -99,17 +123,17 @@ class ImageLabel(QLabel):
             dp = self._img_to_widget(pt)
             color = self._COLORS[i]
             # Тінь
-            painter.setBrush(QBrush(QColor(0, 0, 0, 80)))
+            painter.setBrush(QBrush(QColor(0, 0, 0, SHADOW_ALPHA)))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(dp.x() - self._RADIUS + 2,
-                                dp.y() - self._RADIUS + 2,
-                                self._RADIUS * 2, self._RADIUS * 2)
+            painter.drawEllipse(dp.x() - POINT_RADIUS + SHADOW_OFFSET,
+                                dp.y() - POINT_RADIUS + SHADOW_OFFSET,
+                                POINT_RADIUS * 2, POINT_RADIUS * 2)
             # Кружок
             painter.setBrush(QBrush(color))
-            painter.setPen(QPen(QColor(255, 255, 255), 2))
-            painter.drawEllipse(dp.x() - self._RADIUS,
-                                dp.y() - self._RADIUS,
-                                self._RADIUS * 2, self._RADIUS * 2)
+            painter.setPen(QPen(QColor(255, 255, 255), LINE_WIDTH))
+            painter.drawEllipse(dp.x() - POINT_RADIUS,
+                                dp.y() - POINT_RADIUS,
+                                POINT_RADIUS * 2, POINT_RADIUS * 2)
             # Мітка
             painter.setPen(QPen(QColor(255, 255, 255)))
             painter.drawText(dp.x() - 8, dp.y() + 4, self._LABELS[i])
@@ -120,7 +144,7 @@ class ImageLabel(QLabel):
         pos = event.pos()
         for i, pt in enumerate(self._points):
             dp = self._img_to_widget(pt)
-            if (pos - dp).manhattanLength() <= self._RADIUS * 2 + 4:
+            if (pos - dp).manhattanLength() <= POINT_RADIUS * POINT_HIT_RADIUS_MULTIPLIER + POINT_HIT_TOLERANCE:
                 self._drag_idx = i
                 return
         self._drag_idx = -1
@@ -144,7 +168,7 @@ class ImageLabel(QLabel):
             return
         avail = self.size()
         scaled = self._pixmap_orig.scaled(
-            avail.width() - 24, avail.height() - 24,
+            avail.width() - FIT_PADDING, avail.height() - FIT_PADDING,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation
         )
@@ -180,8 +204,11 @@ class ImageLabel(QLabel):
         return self._clamp_to_image(QPoint(ix, iy))
 
     def _clamp_to_image(self, pt: QPoint) -> QPoint:
-        x = max(0, min(pt.x(), self._img_w - 1))
-        y = max(0, min(pt.y(), self._img_h - 1))
+        # Дозволяємо точки виходити за межі зображення на 20%
+        margin_x = int(self._img_w * 0.2)
+        margin_y = int(self._img_h * 0.2)
+        x = max(-margin_x, min(pt.x(), self._img_w - 1 + margin_x))
+        y = max(-margin_y, min(pt.y(), self._img_h - 1 + margin_y))
         return QPoint(x, y)
 
 
@@ -195,7 +222,7 @@ class PreviewPanel(QWidget):
     def _build_ui(self):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(LAYOUT_SPACING)
 
         # До
         left = QVBoxLayout()

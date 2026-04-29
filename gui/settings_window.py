@@ -6,10 +6,82 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox,
-    QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox
+    QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox,
+    QComboBox
 )
 from PyQt6.QtCore import pyqtSignal
 from config import app_settings
+
+# Константи для layout
+WINDOW_MIN_WIDTH = 1100
+WINDOW_MIN_HEIGHT = 700
+LAYOUT_SPACING = 12
+GROUPBOX_STYLE = (
+    "QGroupBox { font-weight:bold; border:1px solid #BBBBBB; border-radius:4px; "
+    "margin-top:8px; padding-top:14px; background:#FAFAFA; }"
+    "QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 4px; }"
+)
+
+# Константи для Shadow Highlight
+SHADOW_MIN = 0.0
+SHADOW_MAX = 2.0
+SHADOW_STEP = 0.1
+SHADOW_DECIMALS = 2
+
+# Константи для Sharpen
+SHARPEN_MIN = 0.0
+SHARPEN_MAX = 1.0
+SHARPEN_STEP = 0.05
+SHARPEN_DECIMALS = 2
+
+# Константи для HDR
+HDR_MIN = 0.0
+HDR_MAX = 1.0
+HDR_STEP = 0.05
+HDR_DECIMALS = 2
+
+# Константи для класифікації
+BW_STD_MIN = 1.0
+BW_STD_MAX = 100.0
+BW_STD_STEP = 1.0
+BW_STD_DECIMALS = 1
+
+EDGE_RATIO_MIN = 0.001
+EDGE_RATIO_MAX = 0.5
+EDGE_RATIO_STEP = 0.01
+EDGE_RATIO_DECIMALS = 3
+
+LINE_COUNT_MIN = 0
+LINE_COUNT_MAX = 50
+
+# Константи для авто-різкості
+AUTOSHARP_THRESH_MIN = 1.0
+AUTOSHARP_THRESH_MAX = 500.0
+AUTOSHARP_THRESH_STEP = 5.0
+AUTOSHARP_THRESH_DECIMALS = 1
+
+AUTOSHARP_MAX_MIN = 0.1
+AUTOSHARP_MAX_MAX = 1.0
+AUTOSHARP_MAX_STEP = 0.05
+AUTOSHARP_MAX_DECIMALS = 2
+
+# Константи для процентилів
+PCT_LOW_MIN = 0.0
+PCT_LOW_MAX = 25.0
+PCT_LOW_STEP = 1.0
+PCT_LOW_DECIMALS = 1
+
+PCT_HIGH_MIN = 75.0
+PCT_HIGH_MAX = 100.0
+PCT_HIGH_STEP = 1.0
+PCT_HIGH_DECIMALS = 1
+
+# Константи для якості JPG
+QUALITY_MIN = 50
+QUALITY_MAX = 100
+
+# Константи для кнопок
+BROWSE_BUTTON_WIDTH = 32
 
 
 class SettingsWindow(QWidget):
@@ -20,7 +92,8 @@ class SettingsWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Налаштування")
-        self.setMinimumWidth(420)
+        self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.resize(1200, 750)
         self.setWindowFlag(self._qt_tool_flag(), True)
         self._build_ui()
         self.load_from_file()
@@ -36,10 +109,19 @@ class SettingsWindow(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setSpacing(12)
+        root.setSpacing(LAYOUT_SPACING)
+
+        # === Дві колонки ===
+        columns = QHBoxLayout()
+        columns.setSpacing(LAYOUT_SPACING)
+
+        # --- Ліва колонка ---
+        left = QVBoxLayout()
+        left.setSpacing(LAYOUT_SPACING)
 
         # === Обробка ===
         proc_box = QGroupBox("Обробка")
+        proc_box.setStyleSheet(GROUPBOX_STYLE)
         proc_form = QFormLayout(proc_box)
 
         self._cb_autofix        = QCheckBox()
@@ -52,40 +134,41 @@ class SettingsWindow(QWidget):
         proc_form.addRow("Авто-перспектива:",              self._cb_perspective)
 
         self._spin_shadow = QDoubleSpinBox()
-        self._spin_shadow.setRange(0.0, 2.0)
-        self._spin_shadow.setSingleStep(0.1)
-        self._spin_shadow.setDecimals(2)
+        self._spin_shadow.setRange(SHADOW_MIN, SHADOW_MAX)
+        self._spin_shadow.setSingleStep(SHADOW_STEP)
+        self._spin_shadow.setDecimals(SHADOW_DECIMALS)
 
         self._spin_sharpen = QDoubleSpinBox()
-        self._spin_sharpen.setRange(0.0, 1.0)
-        self._spin_sharpen.setSingleStep(0.05)
-        self._spin_sharpen.setDecimals(2)
+        self._spin_sharpen.setRange(SHARPEN_MIN, SHARPEN_MAX)
+        self._spin_sharpen.setSingleStep(SHARPEN_STEP)
+        self._spin_sharpen.setDecimals(SHARPEN_DECIMALS)
 
         self._spin_hdr = QDoubleSpinBox()
-        self._spin_hdr.setRange(0.0, 1.0)
-        self._spin_hdr.setSingleStep(0.05)
-        self._spin_hdr.setDecimals(2)
+        self._spin_hdr.setRange(HDR_MIN, HDR_MAX)
+        self._spin_hdr.setSingleStep(HDR_STEP)
+        self._spin_hdr.setDecimals(HDR_DECIMALS)
 
-        proc_form.addRow("Висвітлення тіней (0–1):", self._spin_shadow)
+        proc_form.addRow("Висвітлення тіней (0–2):", self._spin_shadow)
         proc_form.addRow("Сила різкості (0–1):", self._spin_sharpen)
         proc_form.addRow("Сила HDR (0–1):",      self._spin_hdr)
 
         # === Класифікація документів ===
         cls_box = QGroupBox("Класифікація документів")
+        cls_box.setStyleSheet(GROUPBOX_STYLE)
         cls_form = QFormLayout(cls_box)
 
         self._spin_bw_std = QDoubleSpinBox()
-        self._spin_bw_std.setRange(1.0, 100.0)
-        self._spin_bw_std.setSingleStep(1.0)
-        self._spin_bw_std.setDecimals(1)
+        self._spin_bw_std.setRange(BW_STD_MIN, BW_STD_MAX)
+        self._spin_bw_std.setSingleStep(BW_STD_STEP)
+        self._spin_bw_std.setDecimals(BW_STD_DECIMALS)
 
         self._spin_edge_ratio = QDoubleSpinBox()
-        self._spin_edge_ratio.setRange(0.001, 0.5)
-        self._spin_edge_ratio.setSingleStep(0.01)
-        self._spin_edge_ratio.setDecimals(3)
+        self._spin_edge_ratio.setRange(EDGE_RATIO_MIN, EDGE_RATIO_MAX)
+        self._spin_edge_ratio.setSingleStep(EDGE_RATIO_STEP)
+        self._spin_edge_ratio.setDecimals(EDGE_RATIO_DECIMALS)
 
         self._spin_line_count = QSpinBox()
-        self._spin_line_count.setRange(0, 50)
+        self._spin_line_count.setRange(LINE_COUNT_MIN, LINE_COUNT_MAX)
 
         cls_form.addRow("Поріг std(a,b) для ЧБ:",    self._spin_bw_std)
         cls_form.addRow("Мін. частка країв (0–1):",   self._spin_edge_ratio)
@@ -93,78 +176,113 @@ class SettingsWindow(QWidget):
 
         # === Авто-різкість ===
         sh_box = QGroupBox("Авто-різкість")
+        sh_box.setStyleSheet(GROUPBOX_STYLE)
         sh_form = QFormLayout(sh_box)
 
         self._spin_asharp_thresh = QDoubleSpinBox()
-        self._spin_asharp_thresh.setRange(1.0, 500.0)
-        self._spin_asharp_thresh.setSingleStep(5.0)
-        self._spin_asharp_thresh.setDecimals(1)
+        self._spin_asharp_thresh.setRange(AUTOSHARP_THRESH_MIN, AUTOSHARP_THRESH_MAX)
+        self._spin_asharp_thresh.setSingleStep(AUTOSHARP_THRESH_STEP)
+        self._spin_asharp_thresh.setDecimals(AUTOSHARP_THRESH_DECIMALS)
 
         self._spin_asharp_max = QDoubleSpinBox()
-        self._spin_asharp_max.setRange(0.1, 1.0)
-        self._spin_asharp_max.setSingleStep(0.05)
-        self._spin_asharp_max.setDecimals(2)
+        self._spin_asharp_max.setRange(AUTOSHARP_MAX_MIN, AUTOSHARP_MAX_MAX)
+        self._spin_asharp_max.setSingleStep(AUTOSHARP_MAX_STEP)
+        self._spin_asharp_max.setDecimals(AUTOSHARP_MAX_DECIMALS)
 
         sh_form.addRow("Поріг Laplacian variance:",  self._spin_asharp_thresh)
         sh_form.addRow("Макс. сила різкості (0–1):", self._spin_asharp_max)
 
         # === Авто-яскравість/контраст ===
-        pct_box = QGroupBox("Авто-яскравість/контраст")
+        pct_box = QGroupBox("Авто-яскравість / контраст")
+        pct_box.setStyleSheet(GROUPBOX_STYLE)
         pct_form = QFormLayout(pct_box)
 
         self._spin_pct_low = QDoubleSpinBox()
-        self._spin_pct_low.setRange(0.0, 25.0)
-        self._spin_pct_low.setSingleStep(1.0)
-        self._spin_pct_low.setDecimals(1)
+        self._spin_pct_low.setRange(PCT_LOW_MIN, PCT_LOW_MAX)
+        self._spin_pct_low.setSingleStep(PCT_LOW_STEP)
+        self._spin_pct_low.setDecimals(PCT_LOW_DECIMALS)
 
         self._spin_pct_high = QDoubleSpinBox()
-        self._spin_pct_high.setRange(75.0, 100.0)
-        self._spin_pct_high.setSingleStep(1.0)
-        self._spin_pct_high.setDecimals(1)
+        self._spin_pct_high.setRange(PCT_HIGH_MIN, PCT_HIGH_MAX)
+        self._spin_pct_high.setSingleStep(PCT_HIGH_STEP)
+        self._spin_pct_high.setDecimals(PCT_HIGH_DECIMALS)
 
         pct_form.addRow("Нижній процентиль (%):",  self._spin_pct_low)
         pct_form.addRow("Верхній процентиль (%):", self._spin_pct_high)
 
-        # === Чорно-білий ===
-        bw_box = QGroupBox("Чорно-білий документ")
-        bw_form = QFormLayout(bw_box)
+        left.addWidget(proc_box)
+        left.addWidget(cls_box)
+        left.addWidget(sh_box)
+        left.addWidget(pct_box)
+        left.addStretch()
 
-        self._cb_bw_binary = QCheckBox("Адаптивна бінаризація")
-        bw_form.addRow(self._cb_bw_binary)
+        # --- Права колонка ---
+        right = QVBoxLayout()
+        right.setSpacing(LAYOUT_SPACING)
 
-        # === Вихід ===
-        out_box = QGroupBox("Збереження")
+        # === Формат виходу ===
+        out_box = QGroupBox("Формат виходу")
+        out_box.setStyleSheet(GROUPBOX_STYLE)
         out_form = QFormLayout(out_box)
 
+        self._combo_color_mode = QComboBox()
+        self._combo_color_mode.addItem("Авто (за типом документа)", "auto")
+        self._combo_color_mode.addItem("Кольоровий", "color")
+        self._combo_color_mode.addItem("Чорно-білий (напівтони)", "grayscale")
+        self._combo_color_mode.addItem("Чорно-білий (бінаризація)", "binary")
+
+        out_form.addRow("Формат виходу:", self._combo_color_mode)
+
+        self._cb_bw_binary = QCheckBox("Адаптивна бінаризація")
+        out_form.addRow("Ч-б бінаризація:", self._cb_bw_binary)
+
+        # === Збереження ===
+        save_box = QGroupBox("Збереження")
+        save_box.setStyleSheet(GROUPBOX_STYLE)
+        save_form = QFormLayout(save_box)
+
         self._spin_quality = QSpinBox()
-        self._spin_quality.setRange(50, 100)
+        self._spin_quality.setRange(QUALITY_MIN, QUALITY_MAX)
 
         self._edit_folder = QLineEdit()
         self._edit_folder.setPlaceholderText("(порожньо = не зберігати)")
         btn_browse = QPushButton("...")
-        btn_browse.setFixedWidth(32)
+        btn_browse.setFixedWidth(BROWSE_BUTTON_WIDTH)
         btn_browse.clicked.connect(self._browse_folder)
 
         folder_row = QHBoxLayout()
         folder_row.addWidget(self._edit_folder)
         folder_row.addWidget(btn_browse)
 
-        out_form.addRow("Якість JPG (50–100):", self._spin_quality)
-        out_form.addRow("Папка збереження:",    folder_row)
+        save_form.addRow("Якість JPG (50–100):", self._spin_quality)
+        save_form.addRow("Папка збереження:",    folder_row)
 
         # === Принтер ===
         print_box = QGroupBox("Принтер")
+        print_box.setStyleSheet(GROUPBOX_STYLE)
         print_form = QFormLayout(print_box)
 
         self._edit_printer = QLineEdit()
         self._edit_printer.setPlaceholderText("priPrinter")
         print_form.addRow("Назва принтера:", self._edit_printer)
 
-        # === Режим за замовчуванням ===
+        # === Режим запуску ===
         mode_box = QGroupBox("Режим запуску")
+        mode_box.setStyleSheet(GROUPBOX_STYLE)
         mode_form = QFormLayout(mode_box)
         self._cb_default_auto = QCheckBox("Авто (інакше — Ручний)")
         mode_form.addRow(self._cb_default_auto)
+
+        right.addWidget(out_box)
+        right.addWidget(save_box)
+        right.addWidget(print_box)
+        right.addWidget(mode_box)
+        right.addStretch()
+
+        # === Збираємо колонки ===
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
+        root.addLayout(columns)
 
         # === Кнопки ===
         btn_row = QHBoxLayout()
@@ -176,15 +294,6 @@ class SettingsWindow(QWidget):
         btn_row.addStretch()
         btn_row.addWidget(btn_save)
         btn_row.addWidget(btn_cancel)
-
-        root.addWidget(proc_box)
-        root.addWidget(cls_box)
-        root.addWidget(sh_box)
-        root.addWidget(pct_box)
-        root.addWidget(bw_box)
-        root.addWidget(out_box)
-        root.addWidget(print_box)
-        root.addWidget(mode_box)
         root.addLayout(btn_row)
 
     # ------------------------------------------------------------------
@@ -216,6 +325,12 @@ class SettingsWindow(QWidget):
 
         self._cb_bw_binary.setChecked(s.get("bw_binary", False))
 
+        # Формат виходу
+        color_mode = s.get("output_color_mode", "auto")
+        idx = self._combo_color_mode.findData(color_mode)
+        if idx >= 0:
+            self._combo_color_mode.setCurrentIndex(idx)
+
         self._spin_quality.setValue(s.get("jpg_quality", 95))
         self._edit_folder.setText(s.get("save_folder", ""))
         self._edit_printer.setText(s.get("printer_name", "priPrinter"))
@@ -243,6 +358,7 @@ class SettingsWindow(QWidget):
 
             "bw_binary": self._cb_bw_binary.isChecked(),
 
+            "output_color_mode": self._combo_color_mode.currentData(),
             "jpg_quality":       self._spin_quality.value(),
             "save_folder":       self._edit_folder.text().strip(),
             "printer_name":      self._edit_printer.text().strip(),

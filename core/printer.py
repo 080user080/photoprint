@@ -11,18 +11,24 @@ import numpy as np
 import cv2
 from utils.logger import get_logger
 
+# Константи
+DEFAULT_JPG_QUALITY = 95
+TEMP_FILE_PREFIX = "photoprint_"
+TEMP_FILE_SUFFIX = ".jpg"
+SHELLEXECUTE_SUCCESS_MIN = 32
 
-def _save_temp_jpg(image: np.ndarray, quality: int = 95) -> str:
+
+def _save_temp_jpg(image: np.ndarray, quality: int = DEFAULT_JPG_QUALITY) -> str:
     """Зберігає зображення у тимчасовий JPG файл. Повертає шлях."""
-    fd, path = tempfile.mkstemp(suffix=".jpg", prefix="photoprint_")
+    fd, path = tempfile.mkstemp(suffix=TEMP_FILE_SUFFIX, prefix=TEMP_FILE_PREFIX)
     os.close(fd)
     params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-    _, buf = cv2.imencode(".jpg", image, params)
+    _, buf = cv2.imencode(TEMP_FILE_SUFFIX, image, params)
     buf.tofile(path)
     return path
 
 
-def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = 95) -> None:
+def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DEFAULT_JPG_QUALITY) -> None:
     """
     Відправляє зображення на друк.
 
@@ -75,7 +81,7 @@ def _print_windows(path: str, printer_name: str) -> None:
     else:
         # ShellExecute 'print' — Windows сам обирає програму
         ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
-        if ret <= 32:
+        if ret <= SHELLEXECUTE_SUCCESS_MIN:
             logger.error(f"ShellExecute 'print' повернув код {ret}")
             raise RuntimeError(f"ShellExecute 'print' повернув код {ret}")
 

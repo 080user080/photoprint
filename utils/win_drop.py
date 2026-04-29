@@ -8,7 +8,16 @@ import ctypes
 import ctypes.wintypes
 from PyQt6.QtCore import QAbstractNativeEventFilter
 
+# Константи Windows API
 WM_DROPFILES = 0x0233
+UINT_MAX = 0xFFFFFFFF
+MAX_PATH = 260
+
+# Константи для структури MSG (64-bit)
+MSG_SIZE = 32
+MSG_HWND_OFFSET = 0
+MSG_ID_OFFSET = 8
+MSG_WPARAM_OFFSET = 16
 
 # --- shell32 з правильними типами ---
 _shell32 = ctypes.windll.shell32
@@ -28,11 +37,11 @@ def register_drop_window(hwnd: int):
 
 def _read_drop_files(hdrop_int: int) -> list[str]:
     hdrop = ctypes.c_void_p(hdrop_int)
-    count = _shell32.DragQueryFileW(hdrop, 0xFFFFFFFF, None, 0)
+    count = _shell32.DragQueryFileW(hdrop, UINT_MAX, None, 0)
     files = []
     for i in range(count):
-        buf = ctypes.create_unicode_buffer(260)
-        _shell32.DragQueryFileW(hdrop, i, buf, 260)
+        buf = ctypes.create_unicode_buffer(MAX_PATH)
+        _shell32.DragQueryFileW(hdrop, i, buf, MAX_PATH)
         files.append(buf.value)
     _shell32.DragFinish(hdrop)
     return files
@@ -51,12 +60,12 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
         try:
             addr = int(message)
-            raw  = (ctypes.c_uint8 * 32).from_address(addr)
+            raw  = (ctypes.c_uint8 * MSG_SIZE).from_address(addr)
             data = bytes(raw)
             # MSG layout (64-bit): HWND(8) + UINT(4) + pad(4) + WPARAM(8) + LPARAM(8)
-            msg_id = struct.unpack_from('<I', data, 8)[0]
+            msg_id = struct.unpack_from('<I', data, MSG_ID_OFFSET)[0]
             if msg_id == WM_DROPFILES:
-                wparam = struct.unpack_from('<Q', data, 16)[0]
+                wparam = struct.unpack_from('<Q', data, MSG_WPARAM_OFFSET)[0]
                 files  = _read_drop_files(wparam)
                 if files:
                     self._cb(files)

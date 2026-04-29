@@ -9,6 +9,34 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
+# Константи для слайдерів
+SLIDER_SCALE = 100
+LABEL_WIDTH = 80
+VALUE_LABEL_WIDTH = 45
+AUTO_BUTTON_WIDTH = 50
+AUTO_BUTTON_HEIGHT = 24
+
+# Константи для діапазонів слайдерів
+SHADOW_HIGHLIGHT_MIN = 0.0
+SHADOW_HIGHLIGHT_MAX = 2.0
+SHADOW_HIGHLIGHT_DEFAULT = 0.0
+
+BRIGHTNESS_MIN = -1.0
+BRIGHTNESS_MAX = 1.0
+BRIGHTNESS_DEFAULT = 0.0
+
+CONTRAST_MIN = -1.0
+CONTRAST_MAX = 1.0
+CONTRAST_DEFAULT = 0.0
+
+SHARPEN_MIN = 0.0
+SHARPEN_MAX = 1.0
+SHARPEN_DEFAULT = 0.4
+
+HDR_MIN = 0.0
+HDR_MAX = 1.0
+HDR_DEFAULT = 0.0
+
 
 class _SliderRow(QWidget):
     changed = pyqtSignal(float)
@@ -18,14 +46,14 @@ class _SliderRow(QWidget):
         super().__init__(parent)
         self._min = min_val
         self._max = max_val
-        self._scale = 100
+        self._scale = SLIDER_SCALE
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
         lbl = QLabel(label)
-        lbl.setFixedWidth(80)
+        lbl.setFixedWidth(LABEL_WIDTH)
         lbl.setStyleSheet("color: #111111; font-size: 13px;")
 
         self._slider = QSlider(Qt.Orientation.Horizontal)
@@ -34,7 +62,7 @@ class _SliderRow(QWidget):
         self._slider.valueChanged.connect(self._on_change)
 
         self._val_lbl = QLabel(f"{default:.2f}")
-        self._val_lbl.setFixedWidth(45)
+        self._val_lbl.setFixedWidth(VALUE_LABEL_WIDTH)
         self._val_lbl.setStyleSheet("color: #111111; font-size: 13px;")
 
         layout.addWidget(lbl)
@@ -43,8 +71,8 @@ class _SliderRow(QWidget):
 
         if show_auto:
             btn = QPushButton("Авто")
-            btn.setFixedWidth(50)
-            btn.setFixedHeight(24)
+            btn.setFixedWidth(AUTO_BUTTON_WIDTH)
+            btn.setFixedHeight(AUTO_BUTTON_HEIGHT)
             btn.setStyleSheet(
                 "background:#4A7FC1; color:white; font-size:12px;"
                 "border-radius:3px; padding:0px;"
@@ -80,6 +108,7 @@ class ControlsPanel(QWidget):
     perspective_auto_clicked  = pyqtSignal()
     perspective_manual_clicked = pyqtSignal()
     perspective_reset_clicked  = pyqtSignal()
+    reset_all_clicked         = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -103,18 +132,18 @@ class ControlsPanel(QWidget):
         row1.setSpacing(4)
 
         # Висвітлення тіней
-        self._shadow_highlight = _SliderRow("Тіні", 0.0, 2.0, 0.0)
+        self._shadow_highlight = _SliderRow("Тіні", SHADOW_HIGHLIGHT_MIN, SHADOW_HIGHLIGHT_MAX, SHADOW_HIGHLIGHT_DEFAULT)
         self._shadow_highlight.changed.connect(self._emit)
         row1.addWidget(self._shadow_highlight)
 
         # Яскравість
-        self._brightness = _SliderRow("Яскравість", -1.0, 1.0, 0.0, show_auto=True)
+        self._brightness = _SliderRow("Яскравість", BRIGHTNESS_MIN, BRIGHTNESS_MAX, BRIGHTNESS_DEFAULT, show_auto=True)
         self._brightness.changed.connect(self._emit)
         self._brightness.auto_clicked.connect(self.auto_brightness_clicked)
         row1.addWidget(self._brightness)
 
         # Контраст
-        self._contrast = _SliderRow("Контраст", -1.0, 1.0, 0.0, show_auto=True)
+        self._contrast = _SliderRow("Контраст", CONTRAST_MIN, CONTRAST_MAX, CONTRAST_DEFAULT, show_auto=True)
         self._contrast.changed.connect(self._emit)
         self._contrast.auto_clicked.connect(self.auto_contrast_clicked)
         row1.addWidget(self._contrast)
@@ -124,13 +153,13 @@ class ControlsPanel(QWidget):
         row2.setSpacing(4)
 
         # Різкість
-        self._sharpen = _SliderRow("Різкість", 0.0, 1.0, 0.4, show_auto=True)
+        self._sharpen = _SliderRow("Різкість", SHARPEN_MIN, SHARPEN_MAX, SHARPEN_DEFAULT, show_auto=True)
         self._sharpen.changed.connect(self._emit)
         self._sharpen.auto_clicked.connect(self.auto_sharpen_clicked)
         row2.addWidget(self._sharpen)
 
         # HDR
-        self._hdr = _SliderRow("HDR", 0.0, 1.0, 0.0)
+        self._hdr = _SliderRow("HDR", HDR_MIN, HDR_MAX, HDR_DEFAULT)
         self._hdr.changed.connect(self._emit)
         row2.addWidget(self._hdr)
 
@@ -189,6 +218,8 @@ class ControlsPanel(QWidget):
         for w in (self._shadow_highlight, self._brightness, self._contrast, self._sharpen, self._hdr):
             w.reset()
         self._cb_bw.setChecked(False)
+        # Emit сигнал для скидання базового зображення
+        self.reset_all_clicked.emit()
         # Emit сигнал для оновлення прев'ю
         self._emit()
 

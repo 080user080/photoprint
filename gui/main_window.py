@@ -40,6 +40,23 @@ DEFAULT_QUEUE_WIDTH = 200
 MIN_QUEUE_WIDTH = 150
 MAX_QUEUE_WIDTH = 500
 
+# Константи для layout
+LAYOUT_MARGIN = 8
+LAYOUT_SPACING = 8
+LEFT_LAYOUT_SPACING = 4
+CENTER_LAYOUT_SPACING = 6
+CONTROLS_LAYOUT_SPACING = 4
+MODE_ROW_SPACING = 8
+BUTTONS_ROW_SPACING = 4
+BUTTON_HEIGHT = 32
+
+# Константи для таймерів
+DROP_SETUP_DELAY_MS = 300
+
+# Константи для режимів
+MODE_AUTO_ID = 0
+MODE_MANUAL_ID = 1
+
 
 # ---------------------------------------------------------------------------
 # Worker для авто-режиму (окремий потік — GUI не зависає)
@@ -80,6 +97,7 @@ class MainWindow(QMainWindow):
         self._base: Optional[np.ndarray] = None  # базове зображення після перспективи
         self._processed: Optional[np.ndarray] = None
         self._auto_thread: Optional[QThread] = None
+        self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
         self._drop_filter: Optional[DropEventFilter] = None
         self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
         self._per_file: Dict[str, Dict[str, Any]] = {}  # збережені налаштування слайдерів по файлу
@@ -96,7 +114,7 @@ class MainWindow(QMainWindow):
 
         # Drag & Drop реєструємо після показу вікна
         if sys.platform == "win32":
-            QTimer.singleShot(300, self._setup_win_drop)
+            QTimer.singleShot(DROP_SETUP_DELAY_MS, self._setup_win_drop)
 
     def _setup_win_drop(self):
         hwnd = int(self.winId())
@@ -125,12 +143,12 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(8)
+        root.setContentsMargins(LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN)
+        root.setSpacing(LAYOUT_SPACING)
 
-        # === Ліва колонка: черга (resizable) ===
+        # Ліва панель: черга
         left = QVBoxLayout()
-        left.setSpacing(4)
+        left.setSpacing(LEFT_LAYOUT_SPACING)
 
         lbl_q = QLabel("Черга файлів")
         lbl_q.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
@@ -157,7 +175,7 @@ class MainWindow(QMainWindow):
 
         # === Центр: прев'ю + керування внизу ===
         center = QVBoxLayout()
-        center.setSpacing(6)
+        center.setSpacing(CENTER_LAYOUT_SPACING)
 
         self._preview = PreviewPanel()
         self._preview.perspective_points_changed.connect(self._on_persp_pts)
@@ -175,14 +193,14 @@ class MainWindow(QMainWindow):
         center.addWidget(self._status)
 
         # === Внизу під прев'ю: керування ===
-        controls_container = QWidget()
-        controls_layout = QVBoxLayout(controls_container)
+        # Панель керування (controls + кнопки)
+        controls_layout = QVBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(4)
+        controls_layout.setSpacing(CONTROLS_LAYOUT_SPACING)
 
         # Режим
         mode_row = QHBoxLayout()
-        mode_row.setSpacing(8)
+        mode_row.setSpacing(MODE_ROW_SPACING)
         lbl_mode = QLabel("Режим:")
         lbl_mode.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
         self._radio_auto   = QRadioButton("Авто")
@@ -190,8 +208,8 @@ class MainWindow(QMainWindow):
         self._radio_auto.setStyleSheet("color:#111111;")
         self._radio_manual.setStyleSheet("color:#111111;")
         self._mode_group = QButtonGroup()
-        self._mode_group.addButton(self._radio_auto,   0)
-        self._mode_group.addButton(self._radio_manual, 1)
+        self._mode_group.addButton(self._radio_auto,   MODE_AUTO_ID)
+        self._mode_group.addButton(self._radio_manual, MODE_MANUAL_ID)
         mode_row.addWidget(lbl_mode)
         mode_row.addWidget(self._radio_auto)
         mode_row.addWidget(self._radio_manual)
@@ -199,7 +217,7 @@ class MainWindow(QMainWindow):
 
         # Кнопки дій в один ряд
         buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(4)
+        buttons_row.setSpacing(BUTTONS_ROW_SPACING)
 
         self._btn_autofix   = QPushButton("⚡ Auto Fix")
         self._btn_print     = QPushButton("🖨  Друк")
@@ -209,7 +227,7 @@ class MainWindow(QMainWindow):
 
         for b in (self._btn_autofix, self._btn_print,
                   self._btn_skip, self._btn_print_all, self._btn_save_img):
-            b.setFixedHeight(32)
+            b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
         self._btn_autofix.clicked.connect(self._do_autofix)
@@ -240,11 +258,14 @@ class MainWindow(QMainWindow):
         self._controls.perspective_auto_clicked.connect(self._do_persp_auto)
         self._controls.perspective_manual_clicked.connect(self._do_persp_manual)
         self._controls.perspective_reset_clicked.connect(self._do_persp_reset)
+        self._controls.reset_all_clicked.connect(self._do_reset_all)
 
         controls_layout.addLayout(mode_row)
         controls_layout.addLayout(buttons_row)
         controls_layout.addWidget(self._controls)
 
+        controls_container = QWidget()
+        controls_container.setLayout(controls_layout)
         center.addWidget(controls_container)
 
         root.addLayout(left,   0)
@@ -349,6 +370,7 @@ class MainWindow(QMainWindow):
         self._orig = None
         self._base = None
         self._processed = None
+        self._perspective_corners = None  # скидаємо кути перспективи
         self._current_path = None
         self._per_file.clear()
         self._update_buttons()
@@ -384,6 +406,7 @@ class MainWindow(QMainWindow):
             self._orig = img
             self._base = img.copy()  # початково base = orig
             self._processed = None
+            self._perspective_corners = None  # скидаємо кути перспективи для нового файлу
             self._current_path = path
             self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
@@ -414,13 +437,18 @@ class MainWindow(QMainWindow):
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
-                    use_perspective=s.get("auto_perspective", True),
+                    use_perspective=False,  # вимикаємо авто-перспективу в pipeline, бо застосовуємо вручну
                     bw_binary=s.get("bw_binary", False),
                     classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
                     classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
                     classify_line_count_min=s.get("classify_line_count_min", 3),
-                    shadow_highlight_strength=sh_strength,
+                    shadow_highlight_strength=vals["shadow_highlight"],
+                    output_color_mode=s.get("output_color_mode", "auto"),
                 )
+                # Якщо є збережені кути перспективи — застосовуємо їх після автофікс
+                if self._perspective_corners is not None:
+                    result = pipeline.run_perspective_manual(result, self._perspective_corners)
+                    status_msg += " + перспектива"
                 # Оновлюємо базове зображення після автофіксу
                 self._base = result.copy()
                 self._set_status(status_msg)
@@ -524,17 +552,30 @@ class MainWindow(QMainWindow):
 
     def _do_persp_auto(self):
         """Авто-детекція перспективи з fallback до ручного режиму."""
-        if self._orig is None:
+        if self._orig is None or self._base is None:
             return
-        corners = pipeline.detect_corners(self._orig)
+        # Шукаємо кути на _base (після автофікс), бо координати мають відповідати зображенню до якого застосовуємо перспективу
+        corners = pipeline.detect_corners(self._base)
         if corners is not None:
-            # Авто знайшло документ — застосовуємо + показуємо точки для підправлення
-            result, _ = pipeline.run_perspective_auto(self._orig)
+            # Зберігаємо кути для повторного застосування після автофікс
+            self._perspective_corners = corners.copy()
+            # Авто знайшло документ — застосовуємо перспективу до _base
+            result = pipeline.run_perspective_manual(self._base, corners)
             self._base = result.copy()
             self._processed = result
             self._preview.set_before(image_utils.make_preview(result))
             self._preview.set_after(image_utils.make_preview(result))
-            self._show_perspective_points(corners, "Перспективу виправлено — підправте точки якщо потрібно")
+            # Показуємо точки кутів нового зображення (після перспективи)
+            h, w = result.shape[:2]
+            new_corners = np.array([
+                [0, 0],
+                [w - 1, 0],
+                [w - 1, h - 1],
+                [0, h - 1]
+            ], dtype=np.float32)
+            self._show_perspective_points(new_corners, "Перспективу виправлено — підправте точки якщо потрібно")
+            # Застосовуємо поточні слайдери до нового базового зображення
+            self._on_controls_changed()
         else:
             # Fallback: документ не знайдено → ручний режим з дефолтними точками
             self._do_persp_manual_fallback()
@@ -587,10 +628,25 @@ class MainWindow(QMainWindow):
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
         self._preview.disable_perspective_edit()
+        self._perspective_corners = None  # скидаємо збережені кути
         self._set_status("Перспективу скинуто")
         self._update_buttons()
         # Після скидання перспективи застосовуємо поточні слайдери
         self._on_controls_changed()
+
+    def _do_reset_all(self):
+        """Скидає всі корекції до оригінального зображення."""
+        if self._orig is None:
+            return
+        self._base = self._orig.copy()
+        self._processed = self._orig.copy()
+        self._preview.set_before(image_utils.make_preview(self._orig))
+        self._preview.set_after(image_utils.make_preview(self._orig))
+        self._preview.set_autofix_applied(False)
+        self._set_status("Всі корекції скинуто")
+        self._update_buttons()
+        # Зберігаємо скинуті налаштування для поточного файлу
+        self._store_current_settings()
 
     def _on_persp_pts(self, points: list):
         if self._orig is None or len(points) != 4:
@@ -640,8 +696,11 @@ class MainWindow(QMainWindow):
                 # Друкуємо напряму через printer_module
                 s = self._settings
                 from core import saver, printer as printer_module
-                if s.get("save_before_print", True):
-                    saved_path = saver.save(image, self._current_path, quality=s.get("jpg_quality", 95))
+                # Зберігаємо тільки якщо налаштована save_folder (ніколи не перезаписуємо оригінал)
+                save_folder = s.get("save_folder", "")
+                if save_folder:
+                    output_path = file_utils.build_output_path(self._current_path, save_folder, suffix="_edited")
+                    saver.save(image, output_path, quality=s.get("jpg_quality", 95))
                 printer_module.print_image(
                     image,
                     printer_name=s.get("printer_name", ""),

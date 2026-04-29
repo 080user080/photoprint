@@ -11,19 +11,37 @@ from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
 from PyQt6.QtGui  import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent
 import os
 
+# Константи для розмірів черги
+QUEUE_MIN_WIDTH = 150
+QUEUE_MAX_WIDTH = 500
+
+# Константи для кольорів статусів
+COLOR_PENDING = QColor("#FFFFFF")
+COLOR_CURRENT = QColor("#D6EAF8")
+COLOR_DONE = QColor("#D5F5E3")
+COLOR_ERROR = QColor("#FADBD8")
+COLOR_SKIPPED = QColor("#F0F0F0")
+COLOR_TEXT = QColor("#111111")
+
+# Константи для префіксів статусів
+PREFIX_DONE = "✓ "
+PREFIX_ERROR = "✗ "
+PREFIX_SKIPPED = "– "
+PREFIX_CURRENT = "▶ "
+
 
 class QueueView(QListWidget):
     files_dropped     = pyqtSignal(list)   # list[str]
     selection_changed = pyqtSignal(str)
 
     _COLOR = {
-        "pending": QColor("#FFFFFF"),
-        "current": QColor("#D6EAF8"),
-        "done":    QColor("#D5F5E3"),
-        "error":   QColor("#FADBD8"),
-        "skipped": QColor("#F0F0F0"),
+        "pending": COLOR_PENDING,
+        "current": COLOR_CURRENT,
+        "done":    COLOR_DONE,
+        "error":   COLOR_ERROR,
+        "skipped": COLOR_SKIPPED,
     }
-    _PREFIX = {"done": "✓ ", "error": "✗ ", "skipped": "– ", "current": "▶ "}
+    _PREFIX = {"done": PREFIX_DONE, "error": PREFIX_ERROR, "skipped": PREFIX_SKIPPED, "current": PREFIX_CURRENT}
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -36,8 +54,8 @@ class QueueView(QListWidget):
         # ----------------------------
 
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.setMinimumWidth(150)
-        self.setMaximumWidth(500)
+        self.setMinimumWidth(QUEUE_MIN_WIDTH)
+        self.setMaximumWidth(QUEUE_MAX_WIDTH)
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.itemClicked.connect(self._on_clicked)
 
@@ -121,7 +139,7 @@ class QueueView(QListWidget):
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setBackground(self._COLOR["pending"])
-        item.setForeground(QColor("#111111"))
+        item.setForeground(COLOR_TEXT)
         item.setToolTip(path)
         self.addItem(item)
 
@@ -134,7 +152,7 @@ class QueueView(QListWidget):
         prefix = self._PREFIX.get(status, "")
         item.setText(prefix + name)
         item.setBackground(self._COLOR.get(status, self._COLOR["pending"]))
-        item.setForeground(QColor("#111111"))
+        item.setForeground(COLOR_TEXT)
         if status == "current":
             self.setCurrentRow(idx)
             self.scrollToItem(item)

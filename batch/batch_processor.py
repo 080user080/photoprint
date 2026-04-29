@@ -13,6 +13,15 @@ from processing import pipeline
 from utils import file_utils
 from utils.logger import get_logger
 
+# Константи для налаштувань за замовчуванням
+DEFAULT_SHARPEN_STRENGTH = 0.4
+DEFAULT_HDR_STRENGTH = 0.5
+DEFAULT_JPG_QUALITY = 95
+DEFAULT_CLASSIFY_BW_STD_THRESH = 20.0
+DEFAULT_CLASSIFY_EDGE_RATIO_MIN = 0.03
+DEFAULT_CLASSIFY_LINE_COUNT_MIN = 3
+DEFAULT_SHADOW_HIGHLIGHT_STRENGTH = 0.0
+
 
 class BatchProcessor:
 
@@ -86,15 +95,15 @@ class BatchProcessor:
                 if s.get("autofix_enabled", True):
                     processed, _ = pipeline.run_autofix(
                         image,
-                        sharpen_strength=s.get("sharpen_strength", 0.4),
-                        hdr_strength=s.get("hdr_strength", 0.5),
+                        sharpen_strength=s.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH),
+                        hdr_strength=s.get("hdr_strength", DEFAULT_HDR_STRENGTH),
                         use_hdr=s.get("hdr_in_autofix", True),
                         use_perspective=s.get("auto_perspective", True),
                         bw_binary=s.get("bw_binary", False),
-                        classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
-                        classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
-                        classify_line_count_min=s.get("classify_line_count_min", 3),
-                        shadow_highlight_strength=s.get("shadow_highlight_strength", 0.0),
+                        classify_bw_std_thresh=s.get("classify_bw_std_thresh", DEFAULT_CLASSIFY_BW_STD_THRESH),
+                        classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
+                        classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
+                        shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
                     )
                 else:
                     processed = image
@@ -102,7 +111,7 @@ class BatchProcessor:
                 printer_module.print_image(
                     processed,
                     printer_name=s.get("printer_name", ""),
-                    jpg_quality=s.get("jpg_quality", 95),
+                    jpg_quality=s.get("jpg_quality", DEFAULT_JPG_QUALITY),
                 )
                 printed += 1
             except Exception as exc:
@@ -144,7 +153,7 @@ class BatchProcessor:
         printer_module.print_image(
             processed_image,
             printer_name=s.get("printer_name", ""),
-            jpg_quality=s.get("jpg_quality", 95),
+            jpg_quality=s.get("jpg_quality", DEFAULT_JPG_QUALITY),
         )
         self._index += 1
         return path
@@ -163,5 +172,6 @@ class BatchProcessor:
         folder = self.settings.get("save_folder", "")
         if not folder:
             return
-        out_path = file_utils.build_output_path(source_path, folder)
-        saver.save(image, out_path, quality=self.settings.get("jpg_quality", 95))
+        # Додаємо суфікс _edited щоб не перезаписувати оригінал
+        out_path = file_utils.build_output_path(source_path, folder, suffix="_edited")
+        saver.save(image, out_path, quality=self.settings.get("jpg_quality", DEFAULT_JPG_QUALITY))

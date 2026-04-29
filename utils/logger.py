@@ -7,36 +7,42 @@ import logging
 import os
 from pathlib import Path
 
+# Константи для логування
+DEFAULT_LOG_LEVEL = logging.INFO
+LOG_FORMAT_CONSOLE = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_FORMAT_FILE = '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
-def setup_logger(name: str = "photoprint", log_file: str | None = None, level: int = logging.INFO) -> logging.Logger:
+
+def setup_logger(name: str = "photoprint", log_file: str | None = None, level: int = DEFAULT_LOG_LEVEL) -> logging.Logger:
     """
     Setup a logger with console and optional file output.
-    
+
     Args:
         name: Logger name (usually module name or 'photoprint' for root)
         log_file: Optional path to log file. If None, only console logging.
         level: Logging level (default: INFO)
-    
+
     Returns:
         Configured logger instance
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
-    
+
     # Avoid adding handlers multiple times
     if logger.handlers:
         return logger
-    
+
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
     console_formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        LOG_FORMAT_CONSOLE,
+        datefmt=DATE_FORMAT
     )
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
-    
+
     # File handler (optional)
     if log_file:
         log_path = Path(log_file)
@@ -44,12 +50,12 @@ def setup_logger(name: str = "photoprint", log_file: str | None = None, level: i
         file_handler = logging.FileHandler(log_file, encoding='utf-8')
         file_handler.setLevel(level)
         file_formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
+            LOG_FORMAT_FILE,
+            datefmt=DATE_FORMAT
         )
         file_handler.setFormatter(file_formatter)
         logger.addHandler(file_handler)
-    
+
     return logger
 
 

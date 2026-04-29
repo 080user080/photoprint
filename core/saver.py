@@ -8,8 +8,11 @@ import numpy as np
 import os
 from utils.logger import get_logger
 
+# Константи
+DEFAULT_JPG_QUALITY = 95
 
-def save(image: np.ndarray, path: str, quality: int = 95) -> str:
+
+def save(image: np.ndarray, path: str, quality: int = DEFAULT_JPG_QUALITY) -> str:
     """
     Зберігає BGR numpy array як JPG.
     Повертає шлях до збереженого файлу.

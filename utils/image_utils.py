@@ -6,8 +6,11 @@
 import cv2
 import numpy as np
 
+# Константи для прев'ю
+DEFAULT_PREVIEW_MAX_SIDE = 900
 
-def make_preview(image: np.ndarray, max_side: int = 900) -> np.ndarray:
+
+def make_preview(image: np.ndarray, max_side: int = DEFAULT_PREVIEW_MAX_SIDE) -> np.ndarray:
     """
     Повертає зменшену копію для прев'ю.
     Оригінальне зображення не змінюється.
