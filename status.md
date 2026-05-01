@@ -47,7 +47,411 @@
 
 ## Пріоритети розвитку (актуальні)
 
-### 0. Часткова корекція перспективи (ВИСОКИЙ ПРІОРИТЕТ)
+### 0. Автоматизований тестувальник GUI (НАЙВИЩИЙ ПРІОРИТЕТ)
+- Автоматизація тестування GUI через зовнішнє керування (клавіатура/мишка)
+- Архітектура: Ядро (Core) + Сценарії (Scenarios)
+- Підтримка кліків, натискань кнопок, введення тексту, скріншотів, перевірки результатів
+
+#### Статус реалізації:
+- ✅ Створено структуру директорій (tests/test_images, tests/expected, tests/results, tests/logs, tests/scenarios)
+- ✅ Реалізовано ядро GUITester в tests/gui_tester.py
+- ✅ Створено базові сценарії (test_autofix_toggle.py, test_perspective_auto.py)
+- ✅ Додано requirements.txt (pyautogui, pywin32, opencv-python, pytest)
+- ✅ Створено README.md з документацією
+- ⏸️ TODO: Реалізувати завантаження зображень через drag & drop
+- ⏸️ TODO: Реалізувати кліки по елементах через координати
+- ⏸️ TODO: Додати більше сценаріїв тестів
+- ⏸️ TODO: Інтеграція з pytest
+- ⏸️ TODO: CI/CD інтеграція
+
+#### Архітектура:
+
+**Частина 1: Ядро (Core) - tests/gui_tester.py**
+
+```python
+"""Автоматизований тестувальник GUI для PhotoPrint"""
+import subprocess
+import time
+import os
+import sys
+import threading
+from pathlib import Path
+
+class GUITester:
+    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
+
+    def __init__(self, app_path, venv_python=None):
+        self.app_path = app_path  # шлях до скрипта запуску GUI
+        self.venv_python = venv_python  # шлях до python у venv (опціонально)
+        self.process = None  # subprocess process
+        self.output_thread = None  # потік для читання виводу
+        self.test_images_dir = Path("tests/test_images")
+        self.expected_dir = Path("tests/expected")
+        self.results_dir = Path("tests/results")
+        self.logs_dir = Path("tests/logs")
+
+    def launch_app(self):
+        """Запускає GUI додаток через subprocess"""
+        python = self.venv_python or sys.executable
+        self.process = subprocess.Popen(
+            [python, self.app_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            cwd=str(Path(self.app_path).parent)
+        )
+
+        # Читання виводу в окремому потоці
+        def read_output():
+            for line in self.process.stdout:
+                try:
+                    if line.strip():
+                        print(f"[GUI] {line}", end='')
+                except UnicodeDecodeError:
+                    pass
+
+        self.output_thread = threading.Thread(target=read_output, daemon=True)
+        self.output_thread.start()
+
+    def activate_window(self, title):
+        """Активує вікно за назвою (через Windows API)"""
+        try:
+            from functions.aaa_voice_input import activate_window_by_title
+            result = activate_window_by_title(title=title)
+            print(f"✅ Вікно активовано: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ Помилка активації вікна: {e}")
+            return False
+
+    def type_text(self, text):
+        """Вставляє текст в активне вікно"""
+        try:
+            from functions.tools_mouse_keyboard import keyboard_type
+            result = keyboard_type(text=text)
+            print(f"✅ Текст вставлено: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ Помилка вставки тексту: {e}")
+            return False
+
+    def press_key(self, key):
+        """Натискає клавішу"""
+        try:
+            from functions.tools_mouse_keyboard import keyboard_press
+            result = keyboard_press(key=key)
+            print(f"✅ Клавіша натиснута: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ Помилка натискання клавіші: {e}")
+            return False
+
+    def click_at(self, x, y):
+        """Клікає мишкою по координатах"""
+        try:
+            from functions.tools_mouse_keyboard import mouse_click
+            result = mouse_click(x=x, y=y)
+            print(f"✅ Клік виконано: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ Помилка кліку: {e}")
+            return False
+
+    def wait(self, seconds):
+        """Чекає заданий час"""
+        print(f"⏳ Зачекайте {seconds} секунд...")
+        time.sleep(seconds)
+
+    def screenshot(self, filename):
+        """Зберігає скріншот вікна"""
+        try:
+            from functions.tools_mouse_keyboard import take_screenshot
+            result = take_screenshot(filename=filename)
+            print(f"✅ Скріншот збережено: {result}")
+            return result
+        except Exception as e:
+            print(f"❌ Помилка скріншоту: {e}")
+            return False
+
+    def compare_images(self, actual_path, expected_path, tolerance=5):
+        """Порівнює два зображення через OpenCV"""
+        try:
+            import cv2
+            import numpy as np
+
+            img1 = cv2.imread(str(actual_path))
+            img2 = cv2.imread(str(expected_path))
+
+            if img1 is None or img2 is None:
+                print(f"❌ Не вдалося завантажити зображення")
+                return False
+
+            # Перевіряємо розміри
+            if img1.shape != img2.shape:
+                print(f"❌ Розміри зображень не співпадають")
+                return False
+
+            # Порівнюємо пікселі з допуском
+            diff = np.abs(img1.astype(int) - img2.astype(int))
+            max_diff = np.max(diff)
+
+            if max_diff <= tolerance:
+                print(f"✅ Зображення співпадають (max diff: {max_diff})")
+                return True
+            else:
+                print(f"❌ Зображення не співпадають (max diff: {max_diff})")
+                return False
+
+        except Exception as e:
+            print(f"❌ Помилка порівняння: {e}")
+            return False
+
+    def close_app(self):
+        """Закриває GUI додаток"""
+        if self.process:
+            print("❌ Закриття програми...")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+
+    def setup_directories(self):
+        """Створює необхідні директорії"""
+        self.test_images_dir.mkdir(parents=True, exist_ok=True)
+        self.expected_dir.mkdir(parents=True, exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    def clear_logs(self):
+        """Очищає логи перед тестом"""
+        if self.logs_dir.exists():
+            for log_file in self.logs_dir.iterdir():
+                try:
+                    log_file.unlink()
+                    print(f"✅ Видалено лог: {log_file.name}")
+                except Exception as e:
+                    print(f"❌ Помилка видалення {log_file.name}: {e}")
+
+    def read_logs(self):
+        """Читає логи після тесту"""
+        print("\n" + "=" * 60)
+        print("ЛОГИ:")
+        print("=" * 60)
+
+        if self.logs_dir.exists():
+            for log_file in self.logs_dir.iterdir():
+                print(f"\n📄 {log_file.name}:")
+                print("-" * 40)
+                try:
+                    content = log_file.read_text(encoding='utf-8')
+                    if content:
+                        print(content)
+                    else:
+                        print("(пустий)")
+                except Exception as e:
+                    print(f"❌ Помилка читання {log_file.name}: {e}")
+        else:
+            print("❌ Папка логів не існує")
+```
+
+**Частина 2: Сценарії (Scenarios) - tests/scenarios/*.py**
+
+```python
+# tests/scenarios/test_autofix_toggle.py
+def test_autofix_toggle(tester):
+    """Тест перемикання автофікс чекбоксу"""
+    print("=" * 60)
+    print("Тест: перемикання автофікс чекбоксу")
+    print("=" * 60)
+
+    # 1. Налаштування
+    tester.setup_directories()
+    tester.clear_logs()
+
+    # 2. Запуск додатка
+    print("🚀 Запуск PhotoPrint...")
+    tester.launch_app()
+    tester.wait(2)
+
+    # 3. Активація вікна
+    print("🔓 Активація вікна PhotoPrint...")
+    tester.activate_window(title="PhotoPrint")
+    tester.wait(0.5)
+
+    # 4. Завантаження тестового зображення (через drag & drop або меню)
+    # TODO: реалізувати завантаження через клавіатуру/мишку
+    print("📁 Завантаження тестового зображення...")
+    # tester.type_text("path/to/image.jpg")
+    # tester.press_key("Enter")
+    tester.wait(1)
+
+    # 5. Перемикання автофікс (клік по чекбоксу або комбінація клавіш)
+    print("🔄 Перемикання автофікс...")
+    # tester.click_at(x=100, y=200)  # координати чекбоксу
+    tester.wait(0.5)
+
+    # 6. Збереження скріншоту
+    screenshot_path = tester.results_dir / "autofix_toggle.png"
+    tester.screenshot(str(screenshot_path))
+
+    # 7. Закриття
+    tester.close_app()
+
+    # 8. Перевірка результатів
+    print("\n" + "=" * 60)
+    print("ТЕСТ ЗАВЕРШЕНО")
+    print("=" * 60)
+
+    return True
+
+# tests/scenarios/test_perspective_auto.py
+def test_perspective_auto(tester):
+    """Тест авто-перспективи"""
+    print("=" * 60)
+    print("Тест: авто-перспектива")
+    print("=" * 60)
+
+    tester.setup_directories()
+    tester.clear_logs()
+
+    print("🚀 Запуск PhotoPrint...")
+    tester.launch_app()
+    tester.wait(2)
+
+    print("🔓 Активація вікна PhotoPrint...")
+    tester.activate_window(title="PhotoPrint")
+    tester.wait(0.5)
+
+    print("📁 Завантаження тестового зображення з перспективою...")
+    # TODO: завантажити test_images/perspective_sample.jpg
+    tester.wait(1)
+
+    print("🔲 Клік на кнопку авто-перспектива...")
+    # tester.click_at(x=300, y=400)  # координати кнопки
+    tester.wait(2)
+
+    screenshot_path = tester.results_dir / "perspective_auto.png"
+    tester.screenshot(str(screenshot_path))
+
+    # Порівняння з очікуваним результатом
+    expected_path = tester.expected_dir / "perspective_expected.jpg"
+    if expected_path.exists():
+        tester.compare_images(screenshot_path, expected_path, tolerance=10)
+
+    tester.close_app()
+
+    print("\n" + "=" * 60)
+    print("ТЕСТ ЗАВЕРШЕНО")
+    print("=" * 60)
+
+    return True
+
+# tests/scenarios/test_slider_adjustment.py
+def test_slider_adjustment(tester):
+    """Тест слайдерів"""
+    print("=" * 60)
+    print("Тест: налаштування слайдерів")
+    print("=" * 60)
+
+    tester.setup_directories()
+    tester.clear_logs()
+
+    print("🚀 Запуск PhotoPrint...")
+    tester.launch_app()
+    tester.wait(2)
+
+    print("🔓 Активація вікна PhotoPrint...")
+    tester.activate_window(title="PhotoPrint")
+    tester.wait(0.5)
+
+    print("📁 Завантаження тестового зображення...")
+    # TODO: завантажити test_images/sample.jpg
+    tester.wait(1)
+
+    print("🎚️ Встановлення яскравості на 0.5...")
+    # TODO: клік по слайдеру та переміщення
+    tester.wait(0.5)
+
+    screenshot_path = tester.results_dir / "slider_brightness.png"
+    tester.screenshot(str(screenshot_path))
+
+    tester.close_app()
+
+    print("\n" + "=" * 60)
+    print("ТЕСТ ЗАВЕРШЕНО")
+    print("=" * 60)
+
+    return True
+```
+
+#### План реалізації:
+
+**Крок 1: Базове ядро (Core)**
+- Реалізувати GUITester клас
+- Підтримка запуску GUI через subprocess
+- Активація вікна за назвою (Windows API)
+- Вставка тексту та натискання клавіш
+- Кліки мишкою по координатах
+- Збереження скріншотів
+- Порівняння зображень (OpenCV)
+
+**Крок 2: Розширення ядра**
+- Drag & drop завантаження файлів
+- Навігація по меню через клавіатуру
+- Пошук елементів по координатах/кольору
+- Очікування подій/тайм-аути
+- Логування дій та результатів
+- Читання логів додатка
+
+**Крок 3: Базові сценарії**
+- test_autofix_toggle.py - перемикання автофікс
+- test_perspective_auto.py - авто-перспектива
+- test_perspective_manual.py - ручна перспектива
+- test_slider_adjustment.py - слайдери
+- test_grayscale_toggle.py - ч/б режим
+- test_reset_buttons.py - скидання
+
+**Крок 4: Сценарії для захисту оригіналу**
+- test_original_immutability.py - перевірка незмінності оригіналу
+- test_before_preview_unchanged.py - прев'ю "До" не змінюється
+- test_all_functions_no_modify_orig.py - всі функції не змінюють оригінал
+
+**Крок 5: Сценарії для часткової перспективи**
+- test_partial_perspective_detection.py - детекція кривої сторони
+- test_partial_perspective_warp.py - частковий warp
+- test_full_vs_partial_perspective.py - порівняння повної та часткової
+
+**Крок 6: Інфраструктура**
+- Тестові зображення (tests/test_images/)
+- Очікувані результати (tests/expected/)
+- Результати тестів (tests/results/)
+- Логи додатка (tests/logs/)
+- Запуск всіх тестів (pytest)
+
+**Крок 7: Інтеграція в CI/CD**
+- Автоматичний запуск тестів при комміті
+- Звіти про результати
+- Скріншоти при невдачах
+
+#### Технології:
+- subprocess для запуску GUI
+- Windows API для активації вікна
+- pyautogui або custom functions для клавіатури/мишки
+- OpenCV для порівняння зображень
+- pytest для запуску тестів
+
+#### Очікуваний результат:
+- Автоматичне тестування всіх GUI функцій
+- Виявлення регресій при змінах
+- Документація роботи через сценарії
+- Швидка перевірка нових функцій
+- Незалежність від внутрішньої структури GUI
+
+### 0.1 Часткова корекція перспективи (ВИСОКИЙ ПРІОРИТЕТ)
 - Вирівнювання тільки однієї сторони документа, не чіпаючи інші
 - Визначення рівної сторони (горизонтальної чи вертикальної)
 - Визначення кривої сторони через різницю координат
@@ -350,7 +754,7 @@
 
 ---
 
-*Останнє оновлення: 2026-04-29*
+*Останнє оновлення: 2026-05-01*
 
 ## Резюме виконаної роботи (Фаза 1)
 
@@ -378,6 +782,13 @@
   - Застосування збережених кутів в _do_autofix (use_perspective=False в pipeline)
   - Скидання кутів в _do_persp_reset, _clear_queue, _on_queue_selection
 - ✅ Збільшено padding з 2% до 6% для уникнення обрізання зображення (PADDING_RATIO = 0.06)
+
+**Автоматизований тестувальник GUI (2026-05-01):**
+- ✅ Створено структуру директорій для тестів (tests/test_images, tests/expected, tests/results, tests/logs, tests/scenarios)
+- ✅ Реалізовано ядро GUITester в tests/gui_tester.py (subprocess, pyautogui, pywin32, opencv)
+- ✅ Створено базові сценарії (test_autofix_toggle.py, test_perspective_auto.py)
+- ✅ Додано requirements.txt (pyautogui, pywin32, opencv-python, pytest)
+- ✅ Створено README.md з документацією та інструкціями
 
 **Відкладено:**
 - ⏸️ Адаптивний HDR для фото документів (потребує додаткового дослідження алгоритмів)
