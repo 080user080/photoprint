@@ -27,6 +27,9 @@ git add -A
 set msg=Update: %date% %time%
 git commit -m "%msg%"
 
+:: Пул якщо на GitHub є нові коміти
+git pull origin main --allow-unrelated-histories --no-edit
+
 :: Пуш в main
 git push origin main
 
