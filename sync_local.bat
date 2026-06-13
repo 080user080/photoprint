@@ -9,6 +9,13 @@ if not exist ".git" (
     git remote add origin https://github.com/080user080/photoprint.git
 )
 
+:: Перевірка та виправлення гілки: git init створює "master", а на GitHub "main"
+for /f %%b in ('git branch --show-current') do set CURRENT_BRANCH=%%b
+if "%CURRENT_BRANCH%"=="master" (
+    echo Renaming branch "master" to "main"...
+    git branch -m master main
+)
+
 echo.
 echo === Syncing to GitHub ===
 echo.
