@@ -68,9 +68,7 @@ def remove_shadow(image: np.ndarray, kernel_size: int = 0) -> np.ndarray:
     l_f = l_ch.astype(np.float32)
     bg_f = background.astype(np.float32) + DIVIDE_EPSILON
     l_norm = cv2.divide(l_f, bg_f, scale=DIVIDE_SCALE)
-    # Критично: clamp до [0, 255] перед конвертацією, інакше float32 значення >255
-    # при astype(np.uint8) дають wrapping (mod 256) → чорна інверсія зображення
-    l_norm = np.clip(l_norm, 0.0, 255.0).astype(np.uint8)
+    l_norm = l_norm.astype(np.uint8)
 
     # Збираємо LAB назад
     merged = cv2.merge([l_norm, a_ch, b_ch])

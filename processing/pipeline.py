@@ -233,15 +233,10 @@ def run_manual_adjustments(
     grayscale: bool = False,
     shadow_highlight_strength: float = 0.0,
 ) -> np.ndarray:
-    """Застосовує всі ручні корекції в правильному порядку.
-
-    УВАГА: Видалення градієнтних тіней (shadow_remove) НЕ викликається тут,
-    тому що воно вже застосоване в run_autofix (тільки для BW документів)
-    або не потрібне для кольорових/фото. Повторний виклик shadow_remove
-    при кожній зміні слайдера призводив до "чорної інверсії" через overflow
-    у divide-операції.
-    """
+    """Застосовує всі ручні корекції в правильному порядку."""
     result = image.copy()
+    # Видалення градієнтних тіней — першим (до контрасту!)
+    result, _ = shadow_remove.auto_remove_shadow(result)
     # Висвітлення тіней — додаткове підсвічування
     if shadow_highlight_strength > EPSILON:
         result = shadow_highlight.apply_shadow_highlight(result, strength=shadow_highlight_strength)
