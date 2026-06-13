@@ -1,0 +1,734 @@
+СТРУКТУРА ПРОЄКТУ
+============================================================
+D:\Python\Print_COPY\photoprint\photoprint-main
+batch\__init__.py
+batch\batch_processor.py
+config\__init__.py
+config\app_settings.py
+core\__init__.py
+core\loader.py
+core\printer.py
+core\saver.py
+gui\__init__.py
+gui\controls.py
+gui\main_window.py
+gui\preview.py
+gui\queue_view.py
+gui\settings_window.py
+logs
+processing\__init__.py
+processing\autofix.py
+processing\brightness_contrast.py
+processing\doc_classifier.py
+processing\hdr.py
+processing\perspective.py
+processing\pipeline.py
+processing\shadow_highlight.py
+processing\shadow_remove.py
+processing\sharpen.py
+scaner\scaner.py
+tests\results\widgets_debug.txt
+tests\scenarios\debug_widgets.py
+tests\scenarios\test_autofix_toggle.py
+tests\scenarios\test_batch_queue.py
+tests\scenarios\test_perspective_auto.py
+tests\scenarios\test_sliders.py
+tests\test_images
+tests\README.md
+tests\gui_tester.py
+tests\requirements.txt
+utils\__init__.py
+utils\file_utils.py
+utils\image_utils.py
+utils\logger.py
+utils\win_drop.py
+README.md
+main.py
+requirements.txt
+status.md
+
+============================================================
+ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
+============================================================
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\batch\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\batch\batch_processor.py
+============================================================
+Імпорти:
+  import os
+  from typing import Callable
+  import numpy
+  from core import loader, saver, printer
+  from processing import pipeline
+  from utils import file_utils
+  from utils.logger import get_logger
+
+Сутності:
+class BatchProcessor:
+    def __init__(self, settings: dict):
+    def set_files(self, paths: list[str]) -> None:
+    def add_files(self, paths: list[str]) -> None:
+    def add_folder(self, folder: str) -> None:
+    def clear(self) -> None:
+    def files(self) -> list[str]:
+    def total(self) -> int:
+    def current_index(self) -> int:
+    def run_auto(self, on_progress: Callable[[int, int, str], None] | None, on_error: Callable[[int, str, str], None] | None) -> int:
+    def has_next(self) -> bool:
+    def current_file(self) -> str | None:
+    def load_current(self) -> np.ndarray:
+    def print_current(self, processed_image: np.ndarray) -> str:
+    def skip_current(self) -> str | None:
+    def _maybe_save(self, image: np.ndarray, source_path: str) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\config\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\config\app_settings.py
+============================================================
+Імпорти:
+  import configparser
+  import os
+
+Сутності:
+def _get_path(path):
+def load(path) -> dict:
+def save(settings: dict, path):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\loader.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import os
+  from utils.logger import get_logger
+
+Сутності:
+def _load_heic(path: str) -> np.ndarray:
+def load(path: str) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\printer.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  import tempfile
+  import subprocess
+  import numpy
+  import cv2
+  from utils.logger import get_logger
+
+Сутності:
+def _save_temp_jpg(image: np.ndarray, quality: int) -> str:
+def print_image(image: np.ndarray, printer_name: str, jpg_quality: int) -> None:
+def _print_windows(path: str, printer_name: str) -> None:
+def _print_unix(path: str, printer_name: str) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\saver.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import os
+  from utils.logger import get_logger
+
+Сутності:
+def save(image: np.ndarray, path: str, quality: int) -> str:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\controls.py
+============================================================
+Імпорти:
+  from typing import Optional, Dict, Any
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, QGroupBox, QCheckBox
+  from PyQt6.QtCore import Qt, pyqtSignal
+
+Сутності:
+class _SliderRow(QWidget):
+    def __init__(self, label: str, min_val: float, max_val: float, default: float, show_auto: bool, parent: Optional[QWidget]):
+    def _on_change(self, raw: int) -> None:
+    def value(self) -> float:
+    def set_value(self, v: float, silent: bool) -> None:
+    def reset(self) -> None:
+class ControlsPanel(QWidget):
+    def __init__(self, parent: Optional[QWidget]):
+    def _group_style(self) -> str:
+    def _build_ui(self) -> None:
+    def _emit(self) -> None:
+    def values(self) -> Dict[str, Any]:
+    def reset_all(self) -> None:
+    def set_sharpen(self, v: float, silent: bool) -> None:
+    def set_hdr(self, v: float, silent: bool) -> None:
+    def set_brightness(self, v: float, silent: bool) -> None:
+    def set_contrast(self, v: float, silent: bool) -> None:
+    def set_grayscale(self, v: bool, silent: bool) -> None:
+    def set_shadow_highlight(self, v: float, silent: bool) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\main_window.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  from typing import Optional, Dict, Any
+  import numpy
+  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication
+  from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
+  from gui.preview import PreviewPanel
+  from gui.queue_view import QueueView
+  from gui.controls import ControlsPanel
+  from gui.settings_window import SettingsWindow
+  from batch.batch_processor import BatchProcessor
+  from processing import pipeline
+  from utils import file_utils, image_utils
+  from utils.logger import get_logger
+  from config import app_settings
+
+Сутності:
+class AutoWorker(QObject):
+    def __init__(self, processor: BatchProcessor):
+    def run(self):
+class MainWindow(QMainWindow):
+    def __init__(self):
+    def _setup_win_drop(self):
+    def _on_win_drop(self, paths: list[str]):
+    def _build_ui(self):
+    def _btn_style(self, color):
+    def _apply_default_mode(self):
+    def _load_window_geometry(self):
+    def _save_window_geometry(self):
+    def resizeEvent(self, event):
+    def _on_settings_saved(self, s: dict):
+    def _open_settings(self):
+    def _on_files_added(self, paths: list[str]):
+    def _browse_files(self):
+    def _browse_folder(self):
+    def _clear_queue(self):
+    def _store_current_settings(self):
+    def _restore_file_settings(self, path: str):
+    def _on_queue_selection(self, path: str):
+    def _do_autofix(self):
+    def _on_controls_changed(self, vals: dict):
+    def _do_auto_brightness(self):
+    def _do_auto_contrast(self):
+    def _do_auto_sharpen(self):
+    def _do_persp_auto(self):
+    def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
+    def _do_persp_manual_fallback(self):
+    def _do_persp_manual(self):
+    def _do_persp_reset(self):
+    def _do_reset_all(self):
+    def _on_persp_pts(self, points: list):
+    def _do_print_current(self):
+    def _do_skip(self):
+    def _do_save_image(self):
+    def _do_print_all(self):
+    def _start_auto(self):
+    def _on_auto_progress(self, cur: int, total: int, fname: str):
+    def _on_auto_error(self, idx: int, fname: str, msg: str):
+    def _on_auto_done(self, count: int):
+    def _load_next_manual(self):
+    def _update_buttons(self):
+    def _set_buttons_enabled(self, enabled: bool):
+    def _set_status(self, text: str):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\preview.py
+============================================================
+Імпорти:
+  from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy
+  from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal
+  from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush
+  import numpy
+  import cv2
+
+Сутності:
+def _np_to_pixmap(image: np.ndarray) -> QPixmap:
+class ImageLabel(QLabel):
+    def __init__(self, parent):
+    def set_image(self, image: np.ndarray):
+    def set_placeholder(self, text):
+    def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None):
+    def get_points(self) -> list[QPoint]:
+    def resizeEvent(self, event):
+    def paintEvent(self, event):
+    def mousePressEvent(self, event):
+    def mouseMoveEvent(self, event):
+    def mouseReleaseEvent(self, event):
+    def _fit(self):
+    def _img_rect(self) -> QRect | None:
+    def _img_to_widget(self, img_pt: QPoint) -> QPoint:
+    def _widget_to_img(self, pos: QPoint) -> QPoint | None:
+    def _clamp_to_image(self, pt: QPoint) -> QPoint:
+class PreviewPanel(QWidget):
+    def __init__(self, parent):
+    def _build_ui(self):
+    def set_before(self, image: np.ndarray):
+    def set_after(self, image: np.ndarray):
+    def set_autofix_applied(self, applied: bool):
+    def clear(self):
+    def enable_perspective_edit(self, corners: list[QPoint] | None):
+    def disable_perspective_edit(self):
+    def get_perspective_points(self) -> list[QPoint]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\queue_view.py
+============================================================
+Імпорти:
+  from typing import Optional, List
+  from PyQt6.QtWidgets import QWidget, QListWidget, QListWidgetItem, QAbstractItemView, QFrame
+  from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
+  from PyQt6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent
+  import os
+
+Сутності:
+class QueueView(QListWidget):
+    def __init__(self, parent: Optional[QWidget]):
+    def set_files(self, paths: List[str]) -> None:
+    def add_files(self, paths: List[str]) -> None:
+    def mark_current(self, idx: int) -> None:
+    def mark_done(self, idx: int) -> None:
+    def mark_error(self, idx: int) -> None:
+    def mark_skipped(self, idx: int) -> None:
+    def get_all_paths(self) -> List[str]:
+    def get_path(self, idx: int) -> Optional[str]:
+    def clear_queue(self) -> None:
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+    def dropEvent(self, event: QDropEvent) -> None:
+    def _urls_to_paths(self, urls: List[QUrl]) -> List[str]:
+    def _add_item(self, path: str, status: str) -> None:
+    def _set_status(self, idx: int, status: str) -> None:
+    def _all_paths(self) -> List[str]:
+    def _on_clicked(self, item: QListWidgetItem) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\settings_window.py
+============================================================
+Імпорти:
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox
+  from PyQt6.QtCore import pyqtSignal
+  from config import app_settings
+
+Сутності:
+class SettingsWindow(QWidget):
+    def __init__(self, parent):
+    def _qt_tool_flag():
+    def _build_ui(self):
+    def load_from_file(self):
+    def _apply_settings(self, s: dict):
+    def _collect_settings(self) -> dict:
+    def _save(self):
+    def _browse_folder(self):
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\logs
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\autofix.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  from processing import hdr
+  from processing import sharpen
+  from processing import brightness_contrast
+
+Сутності:
+def apply(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool) -> np.ndarray:
+def apply_bw_document(image: np.ndarray, sharpen_strength: float, binary: bool) -> np.ndarray:
+def apply_color_document(image: np.ndarray, sharpen_strength: float) -> np.ndarray:
+def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\brightness_contrast.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def apply_brightness(image: np.ndarray, value: float) -> np.ndarray:
+def auto_brightness(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def apply_contrast(image: np.ndarray, value: float) -> np.ndarray:
+def auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def to_grayscale(image: np.ndarray) -> np.ndarray:
+def _make_brightness_lut(shift: float) -> np.ndarray:
+def _make_contrast_lut(alpha: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\doc_classifier.py
+============================================================
+Імпорти:
+  from typing import Literal
+  import cv2
+  import numpy
+
+Сутності:
+def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def apply(image: np.ndarray, strength: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import logging
+
+Сутності:
+def auto_detect_corners(image: np.ndarray, max_dim: int) -> np.ndarray | None:
+def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def auto_correct(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, bool]:
+def _detect_corners_impl(gray: np.ndarray) -> np.ndarray | None:
+def _try_adaptive_threshold(gray: np.ndarray) -> np.ndarray | None:
+def _try_canny(gray: np.ndarray) -> np.ndarray | None:
+def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
+def _find_quad_contour(binary: np.ndarray) -> np.ndarray | None:
+def _validate_document(approx: np.ndarray, image_shape: tuple) -> bool:
+def _order_points(pts: np.ndarray) -> np.ndarray:
+def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\pipeline.py
+============================================================
+Імпорти:
+  from enum import Enum
+  from typing import Optional
+  import cv2
+  import numpy
+  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove
+
+Сутності:
+class DocType(str, Enum):
+def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str) -> tuple[np.ndarray, str]:
+def run_sharpen(image: np.ndarray, strength: float) -> np.ndarray:
+def run_auto_sharpen(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
+def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> str:
+def run_hdr(image: np.ndarray, strength: float) -> np.ndarray:
+def run_perspective_auto(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def run_perspective_manual(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def detect_corners(image: np.ndarray) -> np.ndarray | None:
+def run_brightness(image: np.ndarray, value: float) -> np.ndarray:
+def run_auto_brightness(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
+def run_auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def run_grayscale(image: np.ndarray) -> np.ndarray:
+def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_highlight.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def apply_shadow_highlight(image: np.ndarray, strength: float) -> np.ndarray:
+def auto_shadow_highlight(image: np.ndarray, percentile_low: float, max_strength: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_remove.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def remove_shadow(image: np.ndarray, kernel_size: int) -> np.ndarray:
+def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def _auto_kernel_size(image: np.ndarray) -> int:
+def _detect_shadow(image: np.ndarray) -> bool:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\sharpen.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def measure_sharpness(image: np.ndarray) -> float:
+def auto_apply(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\scaner\scaner.py
+============================================================
+Імпорти:
+  import sys
+  import os
+  import json
+  import ast
+  import hashlib
+  from pathlib import Path
+  from typing import List, Optional, Dict, Set, Tuple, Any
+  from datetime import datetime
+  from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QModelIndex, QSortFilterProxyModel, QStandardPaths, QSettings, QByteArray, QItemSelectionModel
+  from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
+  from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QGroupBox, QTreeView, QPlainTextEdit, QProgressDialog, QMessageBox, QLabel, QSplitter, QScrollArea, QMenu, QStyle, QHeaderView, QComboBox
+
+Сутності:
+def get_function_signature(node: ast.FunctionDef) -> str:
+def get_class_signature(node: ast.ClassDef) -> str:
+def extract_docstring(node) -> Optional[str]:
+def extract_full_docstring(node) -> Optional[str]:
+class ScannerWorker(QObject):
+    def __init__(self, root: Path, show_system: bool, include_docs: bool, include_other_text: bool):
+    def run(self):
+class GeneratorWorker(QObject):
+    def __init__(self, selected_files: List[str], root: Path, configs: List[dict]):
+    def run(self):
+    def _process_file(self, file_path: Path, config: dict) -> str:
+    def _process_py(self, file_path: Path, config: dict) -> str:
+    def _process_text(self, file_path: Path) -> str:
+class MainWindow(QMainWindow):
+    def __init__(self):
+    def init_ui(self):
+    def browse_project(self):
+    def scan_project(self):
+    def on_scan_finished(self, file_paths: List[str], dir_structure: dict):
+    def build_tree(self, dir_structure: dict):
+    def on_expand_toggled(self, checked: bool):
+    def on_selection_combo_changed(self, index: int):
+    def apply_saved_selection(self):
+    def on_item_changed(self, item: QStandardItem):
+    def _set_children_checkstate(self, item: QStandardItem, state: Qt.CheckState):
+    def _update_parent_checkstate(self, parent: QStandardItem):
+    def filter_tree(self, text: str):
+    def on_tree_context_menu(self, pos):
+    def _set_all_checkstate(self, state: Qt.CheckState):
+    def _invert_checkstates(self):
+    def _invert_children(self, item: QStandardItem):
+    def _update_all_parents(self, item: QStandardItem):
+    def _get_current_detail(self) -> str:
+    def _generate_filename(self) -> str:
+    def choose_output_file(self):
+    def generate_report(self):
+    def on_generation_finished(self, results: List[dict], user_output_path: Optional[str], is_batch: bool):
+    def _get_checked_files(self) -> List[str]:
+    def _collect_checked(self, item: QStandardItem, result: List[str]):
+    def copy_to_clipboard(self):
+    def save_settings(self):
+    def restore_settings(self):
+    def closeEvent(self, event):
+    def _load_exclusions(self) -> Dict[str, List[str]]:
+    def _save_exclusions(self):
+    def _collect_unchecked(self, item: QStandardItem, result: List[str]):
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\results\widgets_debug.txt
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\scenarios\debug_widgets.py
+============================================================
+Імпорти:
+  import sys
+  from pathlib import Path
+  from tests.gui_tester import GUITester
+
+Сутності:
+def debug_widgets():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\scenarios\test_autofix_toggle.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  from pathlib import Path
+  from tests.gui_tester import GUITester
+
+Сутності:
+def test_autofix_toggle():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\scenarios\test_batch_queue.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  from pathlib import Path
+  from tests.gui_tester import GUITester
+
+Сутності:
+def test_batch_queue():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\scenarios\test_perspective_auto.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  from pathlib import Path
+  from tests.gui_tester import GUITester
+
+Сутності:
+def test_perspective_auto():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\scenarios\test_sliders.py
+============================================================
+Імпорти:
+  import os
+  import sys
+  from pathlib import Path
+  from tests.gui_tester import GUITester
+
+Сутності:
+def test_sliders():
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
+
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
+============================================================
+Імпорти:
+  import subprocess
+  import time
+  import sys
+  import os
+  import ctypes
+  import threading
+  from pathlib import Path
+  from typing import Optional, Tuple, List
+
+Сутності:
+class GUITester:
+    def __init__(self, app_path: str, venv_python: Optional[str]):
+    def launch_app(self) -> bool:
+    def activate_window(self, title: str, max_retries: int, retry_delay: float) -> bool:
+    def type_text(self, text: str) -> bool:
+    def press_key(self, key: str) -> bool:
+    def click_at(self, x: int, y: int) -> bool:
+    def wait(self, seconds: float) -> None:
+    def screenshot(self, filename: str) -> bool:
+    def compare_images(self, actual_path: str, expected_path: str, tolerance: int) -> bool:
+    def close_app(self) -> None:
+    def setup_directories(self) -> None:
+    def clear_logs(self) -> None:
+    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
+    def drag_drop_files(self, file_paths: List[str]) -> bool:
+    def click_button_by_text(self, text: str) -> bool:
+    def set_checkbox(self, text: str, checked: bool) -> bool:
+    def _click_relative(self, rel_x: float, rel_y: float, label: str) -> bool:
+    def hotkey(self) -> bool:
+    def drag_slider(self, slider_label: str, value: float) -> bool:
+    def screenshot_window(self, filename: str) -> bool:
+    def get_window_text(self) -> Optional[str]:
+    def list_child_widgets(self) -> List[dict]:
+    def read_logs(self) -> None:
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\file_utils.py
+============================================================
+Імпорти:
+  import os
+
+Сутності:
+def is_supported_image(path: str) -> bool:
+def collect_images_from_folder(folder: str) -> list[str]:
+def filter_supported(paths: list[str]) -> list[str]:
+def build_output_path(source_path: str, save_folder: str, suffix: str) -> str:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\image_utils.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def make_preview(image: np.ndarray, max_side: int) -> np.ndarray:
+def bgr_to_rgb(image: np.ndarray) -> np.ndarray:
+def rgb_to_bgr(image: np.ndarray) -> np.ndarray:
+def ensure_bgr(image: np.ndarray) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\logger.py
+============================================================
+Імпорти:
+  import logging
+  import os
+  from pathlib import Path
+
+Сутності:
+def setup_logger(name: str, log_file: str | None, level: int) -> logging.Logger:
+def get_logger(name: str) -> logging.Logger:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\win_drop.py
+============================================================
+Імпорти:
+  import struct
+  import ctypes
+  import ctypes.wintypes
+  from PyQt6.QtCore import QAbstractNativeEventFilter
+
+Сутності:
+def register_drop_window(hwnd: int):
+def _read_drop_files(hdrop_int: int) -> list[str]:
+class DropEventFilter(QAbstractNativeEventFilter):
+    def __init__(self, callback):
+    def nativeEventFilter(self, event_type, message):
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\README.md
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
+============================================================
+Імпорти:
+  import sys
+  import os
+  from PyQt6.QtWidgets import QApplication
+  from PyQt6.QtCore import Qt
+  from gui.main_window import MainWindow
+
+Сутності:
+def main():
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
+
+# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\status.md

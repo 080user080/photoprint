@@ -1,0 +1,540 @@
+# PhotoPrint — детальний план робіт для агента кодування
+
+Документ складено на основі повного зрізу коду проєкту (`status.md`, `processing/perspective.py`,
+`processing/pipeline.py`, `gui/main_window.py`, `config/app_settings.py` та ін.).
+Завдання впорядковані за пріоритетом. Кожне завдання містить: мету, файли, кроки реалізації,
+зміни в налаштуваннях/GUI (якщо потрібні) та критерії приймання.
+
+---
+
+## 0. Загальні правила для агента (читати перед будь-якою зміною)
+
+1. **Архітектура не змінюється без потреби**: `gui/*` звертається тільки до `processing/pipeline.py`
+   та `batch/batch_processor.py`. Жодна функція в `processing/*`, `core/*`, `utils/*` не повинна
+   імпортувати щось з `gui/*`.
+2. **Immutability вхідних зображень**: будь-яка функція обробки повертає **новий** масив
+   (`.copy()` або операція, що створює новий буфер). Вхідний `image: np.ndarray` ніколи не
+   модифікується in-place.
+3. **Стиль коду**: type hints у сигнатурах, docstring українською для кожної публічної функції,
+   константи (магічні числа) — на початку файлу великими літерами, логування через
+   `utils.logger.get_logger(__name__)` рівнем `debug` для деталей алгоритму та `error` для винятків.
+4. **Налаштування** йдуть по ланцюжку: `config/app_settings.py` (default-константа + `load`/`save`)
+   → `dict settings` у `main_window` / `BatchProcessor` → елемент GUI (`controls.py` або
+   `settings_window.py`) → kwargs у `processing/pipeline.py`. Будь-яка нова "ручка" має пройти
+   весь ланцюжок, інакше вона буде "мертвою".
+5. **Тестування**: перед і після кожної задачі запускати наявні сценарії
+   `tests/scenarios/*.py` (там, де вони вже функціональні), а для нової логіки — додавати
+   юніт-тест у `tests/` (директорія `tests/unit/` — створити, якщо немає) для `processing/*`
+   без залежності від GUI.
+6. Кожне завдання нижче — окремий комміт/PR з описом і (за можливості) скриншотом
+   до/після з `tests/test_images`.
+
+---
+
+## ПРІОРИТЕТ 1 (КРИТИЧНО) — Захист оригіналу від змін (immutability)
+
+**Мета**: гарантувати, що `self._orig` у `gui/main_window.py` та вхідні масиви в усіх функціях
+`processing/*` ніколи не мутуються, а прев'ю "До" завжди показує справжній оригінал.
+
+### Файли та кроки
+
+1. **Аудит `processing/*`** — перевірити кожну публічну функцію на наявність in-place операцій
+   (`img[...] = `, `cv2.LUT` без присвоєння в новий масив, `+=`, `cv2.divide`/`cv2.add` з
+   параметром `dst=`):
+   - `processing/autofix.py`: `apply`, `apply_bw_document`, `apply_color_document`,
+     `_step_lab_clahe_normalize`
+   - `processing/brightness_contrast.py`: `apply_brightness`, `auto_brightness`,
+     `apply_contrast`, `auto_contrast`, `to_grayscale`
+   - `processing/hdr.py`: `apply`
+   - `processing/sharpen.py`: `apply`, `auto_apply`
+   - `processing/shadow_remove.py`: `remove_shadow`, `auto_remove_shadow`
+   - `processing/shadow_highlight.py`: `apply_shadow_highlight`
+   - `processing/perspective.py`: `apply_correction` (warpPerspective повертає новий буфер —
+     перевірити лише, що `image` не передається в операції з `dst=image`)
+   - Там, де знайдено ризик — додати `.copy()` на вході функції або перед першою модифікуючою
+     операцією.
+
+2. **Аудит `gui/main_window.py`**:
+   - `_on_persp_pts` (рядок ~1497) передає `self._orig` напряму в
+     `pipeline.run_perspective_manual(self._orig, corners)`. Перевірити, що результат —
+     новий масив, і `self._orig` не змінено.
+   - Перевірити всі місця, де `self._orig` передається у `pipeline.*`
+     (`_do_autofix`, `_do_persp_manual`, `_show_perspective_points`) — жодного присвоєння
+     назад у `self._orig`.
+   - `_do_persp_reset`, `_do_reset_all`, завантаження нового файлу (`set_files`/відкриття) —
+     перевірити, що `self._base = self._orig.copy()` і `self._processed = self._orig.copy()`
+     завжди створюють копії (вже є — звірити, що жодне місце не присвоює без `.copy()`).
+
+3. **Тест immutability** — створити `tests/unit/test_immutability.py`:
+   ```python
+   import numpy as np
+   from processing import autofix, brightness_contrast as bc, hdr, sharpen, \
+       shadow_remove, shadow_highlight, perspective
+
+   def _check(fn, image, **kwargs):
+       before = image.copy()
+       fn(image, **kwargs)
+       assert np.array_equal(image, before), f"{fn.__name__} змінив вхідне зображення"
+   ```
+   Перевірити кожну функцію зі списку п.1 на тестовому зображенні
+   (`tests/test_images/sample.jpg`, BGR uint8, ~800x600).
+
+4. **Критерії приймання**:
+   - Тест `test_immutability.py` зелений для всіх перелічених функцій.
+   - Ручна перевірка в GUI: відкрити файл → застосувати Auto Fix → застосувати перспективу
+     (авто і ручну) → натиснути "Скинути перспективу" і "Скинути все" → прев'ю "До" у всіх
+     випадках показує саме оригінал, без артефактів попередньої обробки.
+
+---
+
+## ПРІОРИТЕТ 2 (ВИСОКИЙ) — Часткова корекція перспективи
+
+**Мета**: коли одна сторона документа крива, а інші три прямі — виправляти тільки криву сторону,
+не деформуючи решту зображення.
+
+### 2.1 Нова логіка в `processing/perspective.py`
+
+Додати після `_order_points`:
+
+```python
+# Поріг "кривизни" сторони — у частках від відповідного розміру (не в пікселях!),
+# бо кути повертаються у координатах оригінального (повнорозмірного) зображення.
+PARTIAL_SKEW_THRESHOLD_RATIO = 0.01  # 1% від ширини/висоти документа
+
+def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
+    """
+    pts: впорядковані [TL, TR, BR, BL].
+    Повертає {"top": bool, "bottom": bool, "left": bool, "right": bool} —
+    True, якщо відповідна пара кутів відхиляється від "прямої" сторони
+    більше ніж на PARTIAL_SKEW_THRESHOLD_RATIO від розміру документа.
+    """
+    tl, tr, br, bl = pts
+    width = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl), 1.0)
+    height = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr), 1.0)
+    thr_w = width * PARTIAL_SKEW_THRESHOLD_RATIO
+    thr_h = height * PARTIAL_SKEW_THRESHOLD_RATIO
+    return {
+        "top":    abs(tl[1] - tr[1]) > thr_h,
+        "bottom": abs(bl[1] - br[1]) > thr_h,
+        "left":   abs(tl[0] - bl[0]) > thr_w,
+        "right":  abs(tr[0] - br[0]) > thr_w,
+    }
+
+
+def apply_partial_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """
+    Виправляє перспективу лише для "кривих" сторін документа.
+    Якщо жодна сторона не крива — повертає копію без змін.
+    Якщо всі 4 сторони криві — делегує в apply_correction (повна корекція).
+    """
+    pts = _order_points(corners.astype(np.float32))
+    skew = detect_skewed_sides(pts)
+
+    if not any(skew.values()):
+        return image.copy()
+    if all(skew.values()):
+        return apply_correction(image, corners)
+
+    adjusted = pts.copy()
+    tl, tr, br, bl = 0, 1, 2, 3
+
+    if skew["top"]:
+        y = (pts[tl][1] + pts[tr][1]) / 2.0
+        adjusted[tl][1] = y
+        adjusted[tr][1] = y
+    if skew["bottom"]:
+        y = (pts[bl][1] + pts[br][1]) / 2.0
+        adjusted[bl][1] = y
+        adjusted[br][1] = y
+    if skew["left"]:
+        x = (pts[tl][0] + pts[bl][0]) / 2.0
+        adjusted[tl][0] = x
+        adjusted[bl][0] = x
+    if skew["right"]:
+        x = (pts[tr][0] + pts[br][0]) / 2.0
+        adjusted[tr][0] = x
+        adjusted[br][0] = x
+
+    # dst — той самий bounding rect, що й adjusted-точки (без розтягування на весь прямокутник,
+    # щоб не деформувати прямі сторони)
+    dst, width, height = _compute_destination(adjusted)
+    M = cv2.getPerspectiveTransform(pts, dst)
+    return cv2.warpPerspective(
+        image, M, (width, height),
+        borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
+    )
+```
+
+> Примітка: `_compute_destination` уже існує і додає `PADDING_RATIO`. Перевірити, що він
+> коректно працює і для "adjusted" точок (не лише для чотирикутника з реальної детекції).
+
+### 2.2 Інтеграція в `processing/pipeline.py`
+
+- Додати параметр `partial: bool = False` до:
+  - `run_perspective_auto(image, partial=False)` → викликає
+    `perspective.auto_correct(image, partial=partial)`
+  - `run_perspective_manual(image, corners, partial=False)` → викликає
+    `perspective.apply_partial_correction` якщо `partial=True`, інакше `apply_correction`
+- У `perspective.auto_correct` додати параметр `partial: bool = False`, який після
+  `auto_detect_corners` обирає `apply_partial_correction` або `apply_correction`.
+- У `run_autofix` додати параметр `partial_perspective: bool = False` і прокинути його у
+  `perspective.auto_correct(result, partial=partial_perspective)`.
+
+### 2.3 Налаштування (`config/app_settings.py`)
+
+- Додати константу `DEFAULT_PARTIAL_PERSPECTIVE = False`.
+- У `load()`: `"partial_perspective": cfg.getboolean("processing", "partial_perspective", fallback=DEFAULT_PARTIAL_PERSPECTIVE)`.
+- У `save()`: відповідний запис у секцію `processing`.
+
+### 2.4 GUI
+
+- `gui/controls.py`: додати чекбокс/перемикач "Часткова перспектива" поруч із кнопками
+  перспективи (`perspective_auto_clicked` тощо). Прокинути сигнал зміни так само, як інші
+  чекбокси (наприклад grayscale).
+- `gui/main_window.py`:
+  - `_do_persp_auto`: прочитати значення чекбокса (`self._controls.values()["partial_perspective"]`
+    або з `self._settings`) і передати `partial=...` у `pipeline.run_perspective_manual(self._base, corners, partial=...)`.
+  - `_on_persp_pts` (ручна корекція через 4 точки прев'ю): аналогічно передати `partial=...`
+    у `pipeline.run_perspective_manual(self._orig, corners, partial=...)`.
+  - `_do_autofix`: якщо `self._perspective_corners is not None`, прокинути `partial=...` у
+    повторне застосування перспективи після Auto Fix.
+- `gui/settings_window.py`: за потреби — дублюючий перемикач у глобальних налаштуваннях
+  (значення за замовчуванням для нових файлів), синхронізований із `app_settings`.
+
+### 2.5 Тести
+
+- `tests/scenarios/test_partial_perspective_detection.py` — перевірити `detect_skewed_sides`
+  на синтетичних наборах точок (одна сторона крива, дві криві, всі рівні, всі криві).
+- `tests/scenarios/test_partial_perspective_warp.py` — на тестовому зображенні з кривою тільки
+  однією стороною: перевірити, що прямі сторони залишились на тих самих координатах
+  (порівняти кути результату з вхідними поза "кривою" зоною).
+- `tests/scenarios/test_full_vs_partial_perspective.py` — порівняти результати `apply_correction`
+  і `apply_partial_correction` на тому ж зображенні для документації різниці.
+
+### Критерії приймання
+
+- При перемиканні "Часткова перспектива" в GUI результат авто- та ручної перспективи змінюється
+  відповідно.
+- На зображенні з ідеально прямими 3 сторонами і кривою 1 — після часткової корекції 3 сторони
+  не змінили положення (з точністю до 1-2px).
+- На зображенні де всі 4 сторони рівні — `apply_partial_correction` повертає копію без
+  візуальних змін.
+
+---
+
+## ПРІОРИТЕТ 3 (ВИСОКИЙ) — Покращення авто-детекції кутів (`processing/perspective.py`)
+
+Поточна реалізація вже має resize→800px, AdaptiveThreshold (обидва напрямки), Canny, fallback
+bounding box, перевірку площі/пропорцій, MORPH_CLOSE, padding 6%. Нижче — конкретні доопрацювання
+з попереднього аналізу багів.
+
+### 3.1 Захист fallback від "рамки фото / столу" (solidity + border-touch)
+
+У `_try_largest_contour` та у блоці "більше 4 кутів" в `_find_quad_contour`:
+
+- Додати функцію:
+  ```python
+  BORDER_MARGIN_PX = 2
+  MAX_BORDER_AREA_RATIO = 0.92  # контур, що майже = всьому кадру — підозра на фон/стіл
+
+  def _touches_image_border(cnt: np.ndarray, shape: tuple, margin: int = BORDER_MARGIN_PX) -> bool:
+      h, w = shape[:2]
+      x, y, bw, bh = cv2.boundingRect(cnt)
+      return x <= margin or y <= margin or (x + bw) >= (w - margin) or (y + bh) >= (h - margin)
+  ```
+- Якщо контур торкається межі зображення **і** його площа > `MAX_BORDER_AREA_RATIO * image_area`
+  — пропускати цей контур (ймовірно це фон/стіл/рамка кадру, а не документ).
+- Додати solidity-перевірку (компактність форми):
+  ```python
+  MIN_SOLIDITY = 0.85
+
+  def _solidity(cnt: np.ndarray) -> float:
+      area = cv2.contourArea(cnt)
+      hull_area = cv2.contourArea(cv2.convexHull(cnt))
+      return area / hull_area if hull_area > 0 else 0.0
+  ```
+  Використовувати як додаткову умову у `_validate_document` (`solidity >= MIN_SOLIDITY`).
+
+### 3.2 Адаптивний epsilon для `approxPolyDP`
+
+Замінити одиничний `APPROX_POLY_EPSILON = 0.02` на список спроб:
+
+```python
+APPROX_POLY_EPSILONS = (0.01, 0.02, 0.03, 0.04)
+```
+
+У `_find_quad_contour` для кожного контуру з `contours[:CONTOURS_TO_CHECK]` пробувати кожен
+epsilon з `APPROX_POLY_EPSILONS` по черзі, поки не отримаємо `len(approx) == 4` і
+`_validate_document(...) == True`. Це знижує залежність результату від "магічного" одного
+значення.
+
+### 3.3 Sub-pixel уточнення кутів (cornerSubPix)
+
+Після того, як 4 кути знайдено (у `_detect_corners_impl`, перед поверненням `corners_small`),
+застосувати `cv2.cornerSubPix` для уточнення позицій:
+
+```python
+SUBPIX_WIN_SIZE = (5, 5)
+SUBPIX_ZERO_ZONE = (-1, -1)
+SUBPIX_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
+
+def _refine_corners_subpix(gray: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    pts = corners.reshape(-1, 1, 2).astype(np.float32)
+    refined = cv2.cornerSubPix(gray, pts, SUBPIX_WIN_SIZE, SUBPIX_ZERO_ZONE, SUBPIX_CRITERIA)
+    return refined.reshape(-1, 2)
+```
+
+Викликати після кожного успішного методу (`_try_adaptive_threshold`, `_try_canny`,
+`_try_largest_contour`) перед поверненням з `_detect_corners_impl`. Обгорнути в `try/except`
+(на однотонних ділянках `cornerSubPix` може кидати помилку) — при помилці повертати
+неуточнені кути.
+
+### 3.4 CLAHE перед бінаризацією (нерівне освітлення)
+
+У `_try_adaptive_threshold` перед `cv2.GaussianBlur` додати опціональний крок CLAHE:
+
+```python
+CLAHE_CLIP_LIMIT = 2.0
+CLAHE_TILE_GRID_SIZE = (8, 8)
+
+def _apply_clahe(gray: np.ndarray) -> np.ndarray:
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
+    return clahe.apply(gray)
+```
+
+Стратегія: спочатку пробувати без CLAHE (як зараз); якщо `_try_adaptive_threshold` і `_try_canny`
+не знайшли кутів — повторити обидва методи на `_apply_clahe(gray)` перед переходом до fallback
+(`_try_largest_contour`). Це додає "Спробу 1b/2b" у `_detect_corners_impl`.
+
+### 3.5 (Опціонально, окремий under-задача) Hough-based fallback
+
+Якщо після п.3.1–3.4 fallback (`_try_largest_contour`) теж не дає результату — додати
+`_try_hough_lines(gray)`:
+- `cv2.HoughLinesP` на Canny-краях;
+- розділити лінії на ~горизонтальні/~вертикальні за кутом нахилу;
+- взяти по 2 найдовші лінії з кожної групи, знайти 4 точки перетину;
+- провалідувати через `_validate_document`.
+Це **четверта** спроба, після bounding-box fallback. Якщо складно реалізувати надійно —
+винести в окрему задачу низького пріоритету (Фаза 2.x), не блокувати інше.
+
+### 3.6 Тести
+
+Оновити/доповнити `tests/scenarios/test_perspective_auto.py` (зараз там лише каркас з TODO):
+- Підготувати у `tests/test_images/` мінімум 4 зразки:
+  1. ч-б документ на темному фоні (без інверсії)
+  2. кольоровий документ (грамота/паспорт) на рябому фоні
+  3. документ з нерівним освітленням/тінню (для CLAHE)
+  4. фото зі столом/рамкою навколо документа (для border/solidity перевірки)
+- Для кожного — викликати `perspective.auto_detect_corners` напряму (юніт-рівень, без GUI) і
+  перевіряти: кути не None, площа знайденого чотирикутника в межах очікуваного діапазону,
+  жодна сторона не торкається межі вхідного зображення (за виключенням випадків, коли документ
+  справді займає весь кадр).
+
+### Критерії приймання
+
+- На всіх 4 тестових зображеннях `auto_detect_corners` повертає валідні 4 кути.
+- На зображенні №4 (стіл/рамка) кути відповідають документу, а не зовнішньому контуру столу.
+- Регресія: попередні тестові зображення (якщо є в `tests/test_images`) продовжують працювати
+  не гірше, ніж до змін.
+
+---
+
+## ПРІОРИТЕТ 4 — Завершення авто-тестувальника GUI (`tests/gui_tester.py`)
+
+`status.md` фіксує це як найвищий пріоритет (п.0), частково реалізовано.
+
+### Кроки
+
+1. **Drag & drop завантаження файлів**:
+   - Використати існуючий `utils/win_drop.py` (WM_DROPFILES) як референс для емуляції drop-події
+     у `GUITester`. Додати метод `GUITester.drop_files(window_title: str, file_paths: list[str])`,
+     що знаходить handle вікна (через `pywin32`) і надсилає `WM_DROPFILES`.
+2. **Кліки по елементах через об'єктні імена, а не "магічні" координати**:
+   - Замінити заглушки типу `# tester.click_at(x=300, y=400)` на пошук позиції елемента через
+     `objectName` (PyQt6: кожен віджет має `setObjectName`). Додати у `gui/*` (controls.py,
+     main_window.py) `setObjectName(...)` для ключових кнопок/чекбоксів (`btn_autofix`,
+     `btn_persp_auto`, `chk_partial_perspective`, `chk_grayscale`, слайдери `slider_brightness`
+     тощо), якщо їх ще немає.
+   - У `GUITester` додати метод `get_widget_geometry(object_name)` через окремий debug-хук
+     (наприклад, тимчасовий QtTest/локальний сервер або файл-дамп геометрії при старті в
+     debug-режимі) — або, простіше, прокинути через існуючий `tests/scenarios/debug_widgets.py`
+     (вже є в проєкті — переглянути й розширити для виводу координат усіх ключових віджетів у
+     `tests/results/widgets_debug.txt`).
+3. **Нові сценарії** (за списком зі `status.md`):
+   - `tests/scenarios/test_perspective_manual.py`
+   - `tests/scenarios/test_slider_adjustment.py` (довести до робочого стану — зараз TODO)
+   - `tests/scenarios/test_grayscale_toggle.py`
+   - `tests/scenarios/test_reset_buttons.py`
+   - `tests/scenarios/test_partial_perspective_*` (див. Пріоритет 2.5)
+   - `tests/scenarios/test_original_immutability.py`,
+     `tests/scenarios/test_before_preview_unchanged.py`,
+     `tests/scenarios/test_all_functions_no_modify_orig.py` (див. Пріоритет 1)
+4. **pytest інтеграція**:
+   - Кожен сценарій повинен мати функцію `test_<name>(tester)` що повертає `True`/`False` або
+     використовує `assert`. Створити `tests/conftest.py` з фікстурою `tester`, що створює
+     `GUITester(app_path=".../main.py", venv_python=...)`.
+   - `pytest.ini` / `pyproject.toml` з `testpaths = tests/scenarios`.
+5. **CI/CD**:
+   - GitHub Actions workflow `.github/workflows/tests.yml`: встановлення залежностей з
+     `requirements.txt` + `tests/requirements.txt`, запуск `pytest tests/unit` (юніт-тести без
+     GUI — обов'язково в CI). GUI-сценарії (`tests/scenarios`), що потребують Windows-десктопу
+     з реальним дисплеєм, позначити `@pytest.mark.gui` і виключити з обов'язкового CI-кроку
+     (запускати окремо, наself-hosted Windows runner, якщо буде доступний).
+
+### Критерії приймання
+
+- `pytest tests/unit` проходить локально без GUI.
+- Принаймні 3 нові сценарії з п.3 виконуються через `GUITester` без падінь (можуть бути
+  позначені `xfail`, якщо координати ще не стабілізовані — але інфраструктура працює).
+
+---
+
+## ПРІОРИТЕТ 5 — Адаптивний HDR для фото-документів (Фаза 2.1)
+
+**Проблема**: поточний `processing/hdr.py` добре працює для звичайних фото, але для
+"документ-фото" (текст на світлому фоні) додає чорний відтінок у світлих ділянках —
+шкідливо для друку.
+
+### Кроки
+
+1. **Детектор текстових/однотонних областей** — новий модуль `processing/text_mask.py`:
+   ```python
+   def text_region_mask(gray: np.ndarray) -> np.ndarray:
+       """
+       Повертає бінарну маску (uint8, 0/255) ділянок, схожих на текст:
+       висока локальна щільність контрастних дрібних деталей.
+       Підхід: адаптивна бінаризація + морфологічна фільтрація дрібних компонент.
+       """
+   ```
+2. **Адаптивний HDR** у `processing/hdr.py` — нова функція
+   `apply_adaptive(image, strength, text_mask=None)`:
+   - Обчислює звичайний HDR-результат (як зараз).
+   - У зонах, де `text_mask == 255`, зменшує ефект HDR (наприклад,
+     `result = cv2.addWeighted(hdr_result, alpha, image, 1-alpha, 0)` з `alpha` меншим там,
+     де є текст — реалізувати через поелементне змішування за маскою:
+     `np.where(mask_3ch, blended_low, hdr_result)`).
+3. **Pipeline**: у `run_autofix`, для `DocType.PHOTO`, якщо документ класифіковано як
+   "фото документа" (потрібен додатковий прапорець від `doc_classifier`, наприклад
+   `is_document_like: bool`, що вже частково реалізований через edge density/Hough lines —
+   перевірити `processing/doc_classifier.py`), використовувати `hdr.apply_adaptive` замість
+   `hdr.apply`.
+4. **Налаштування**: `adaptive_hdr_enabled: bool` (за замовчуванням `True` для PHOTO+document-like),
+   додати в `app_settings.py` і у `settings_window.py`.
+
+### Критерії приймання
+
+- На фото документа (текст на світлому папері, знято при поганому світлі) після Auto Fix
+  світлі ділянки навколо тексту не темніють (порівняти середню яскравість фону до/після —
+  різниця не повинна перевищувати X% від еталону, визначити X емпірично на тестовому наборі).
+- На звичайному фото (без тексту) результат `apply_adaptive` практично не відрізняється від
+  поточного `apply`.
+
+---
+
+## ПРІОРИТЕТ 6 — Юніт-тести для critical модулів (Фаза 2.2)
+
+Створити `tests/unit/` (окремо від `tests/scenarios`, без GUI-залежностей):
+
+| Файл тесту | Що перевіряти |
+|---|---|
+| `test_pipeline.py` | `run_autofix` для кожного `DocType` (BW/COLOR/PHOTO) повертає коректну форму/тип; `run_manual_adjustments` — порядок застосування корекцій |
+| `test_doc_classifier.py` | `classify()` на синтетичних зображеннях (рівномірний ч-б текст vs кольорове фото vs кольоровий документ) повертає очікуваний `DocType` |
+| `test_brightness_contrast.py` | `auto_brightness`/`auto_contrast` зміщують 5/95 перцентилі гістограми у задані межі; `apply_brightness(image, 0.0)` повертає копію без змін |
+| `test_sharpen.py` | `measure_sharpness` корелює з відомим рівнем blur (Gaussian blur з різним sigma → монотонне зменшення значення); `auto_apply` не застосовує різкість до вже різкого зображення |
+| `test_loader.py` | `core.loader.load` коректно читає JPG/PNG/WEBP/TIFF/HEIC (за наявності тестових файлів), повертає BGR uint8 |
+| `test_saver.py` | `core.saver.save` записує файл із заданою якістю JPG, не змінює вхідний масив |
+| `test_file_utils.py` | `filter_supported` відкидає непідтримувані розширення; `collect_images_from_folder` рекурсивно/нерекурсивно (звірити з поточною поведінкою) збирає файли |
+| `test_perspective.py` | `_order_points` сортує довільні 4 точки в TL/TR/BR/BL; `apply_correction` на відомому прямокутнику з відомими кутами дає вихід очікуваного розміру; `auto_detect_corners` — див. Пріоритет 3.6 |
+
+Налаштувати `pytest` (root `pyproject.toml` або `pytest.ini`) з маркером, що відрізняє
+`unit` від `gui` тестів (див. Пріоритет 4, п.5).
+
+---
+
+## ПРІОРИТЕТ 7 — Оптимізація пам'яті (Фаза 2.3)
+
+1. **Профілювання** — написати скрипт `tools/profile_memory.py`, що прогонює
+   `BatchProcessor.run_auto` на черзі з N тестових зображень (N=10, 50, 100) з
+   `tracemalloc`/`memory_profiler`, виводить пік пам'яті.
+2. **Кешування прев'ю** — у `gui/preview.py` / `utils/image_utils.make_preview`: додати
+   простий LRU-кеш (`functools.lru_cache` не підходить для np.ndarray — реалізувати власний
+   словник `{path_or_id: preview_array}` з обмеженням розміру, наприклад 20 елементів).
+3. **Обмеження черги завантажених зображень**: `BatchProcessor` зараз тримає лише шляхи
+   (`_files: list[str]`), завантаження відбувається по одному файлу — перевірити, що жодне
+   місце не тримає всі зображення черги одночасно в пам'яті (особливо в `gui/queue_view.py` —
+   там, ймовірно, лише thumbnails). Якщо знайдено — додати explicit `del`/звільнення після
+   обробки кожного файлу в `run_auto`.
+4. **Streaming для дуже великих зображень** — окрема дослідницька задача (низький пріоритет
+   у межах Фази 2): для зображень понад заданий розмір (наприклад > 4000px по довшій стороні)
+   розглянути tile-based обробку для важких кроків (CLAHE, HDR). Це ризикована зміна — реалізувати
+   в окремій гілці з benchmark "до/після" по якості та швидкості, не зливати без явного
+   підтвердження користувача.
+
+---
+
+## ПРІОРИТЕТ 8 — Підтримка RAW-форматів (Фаза 2.4)
+
+1. Додати `rawpy` до `requirements.txt` (опціональна залежність — обернути імпорт у
+   `try/except ImportError` в `core/loader.py`, щоб додаток не падав, якщо `rawpy` не
+   встановлено, а просто не показував RAW-файли у `file_utils.filter_supported`).
+2. `core/loader.py`:
+   - Розширити список підтримуваних розширень (`.cr2`, `.nef`, `.arw`, ...) у
+     `utils/file_utils.py` (`SUPPORTED_EXTENSIONS`).
+   - У `load()`: якщо розширення RAW і `rawpy` доступний — `rawpy.imread(path).postprocess(...)`
+     → конвертація в BGR uint8 (rawpy повертає RGB → `cv2.cvtColor(..., cv2.COLOR_RGB2BGR)`).
+3. **Налаштування якості конвертації**: `raw_brightness`, `raw_use_camera_wb` (bool) —
+   параметри `postprocess()`, додати в `app_settings.py` за потреби (мінімально: один параметр
+   "auto white balance" увімкнено за замовчуванням).
+4. **Тестування**: якщо реальних RAW-файлів немає в репозиторії — задокументувати у
+   `tests/README.md`, що тест `test_loader.py::test_raw` пропускається (`pytest.mark.skipif`),
+   якщо немає тестового файлу/бібліотеки, і додати інструкцію, як його запустити локально з
+   власним RAW-файлом.
+
+---
+
+## ПРІОРИТЕТ 9 — Трей-режим (Фаза 2.5)
+
+1. `gui/main_window.py`: додати `QSystemTrayIcon` з іконкою застосунку, контекстне меню
+   "Відкрити" / "Вихід".
+2. Перевизначити `closeEvent`: якщо налаштування `minimize_to_tray=True` — `event.ignore()`
+   + `self.hide()` замість закриття; показ через клік по іконці трею або пункт меню "Відкрити".
+3. `config/app_settings.py`: `minimize_to_tray: bool = False`, перемикач у
+   `gui/settings_window.py`.
+4. Фонова обробка без GUI — окрема дослідницька задача (залежить від Фази 3, не блокувати
+   зараз; зафіксувати лише UI-перемикач "Запускати в трей" і мінімізацію, без headless-режиму).
+
+---
+
+## Рекомендований порядок виконання (залежності)
+
+```
+1. Захист оригіналу (immutability)         ──┐
+2. Часткова корекція перспективи            │  можна паралельно,
+3. Покращення авто-детекції кутів           │  але 1 бажано зробити
+                                             │  першим — інакше тести
+                                             │  для 2/3 можуть "плавати"
+4. Тестувальник GUI (інфраструктура)        ◄─┘  спирається на сценарії з 1-3
+
+5. Адаптивний HDR (Фаза 2.1)   ── незалежний, можна в будь-який момент після 1
+6. Юніт-тести (Фаза 2.2)        ── бажано робити паралельно з 1-5 (тест на кожен модуль одразу)
+7. Оптимізація пам'яті (Фаза 2.3) ── після 6 (потрібен baseline для порівняння)
+8. RAW (Фаза 2.4)               ── незалежний
+9. Трей-режим (Фаза 2.5)        ── незалежний, найнижчий пріоритет
+```
+
+---
+
+## Чек-лист перед завершенням кожної задачі
+
+- [ ] Немає нових залежностей `processing/*` → `gui/*`.
+- [ ] Усі нові публічні функції мають type hints і docstring.
+- [ ] Магічні числа винесені в константи на початку файлу.
+- [ ] Нові параметри pipeline мають значення за замовчуванням, що **зберігають поточну
+      поведінку** (backward compatible — старий код, який не передає новий kwarg, працює як
+      раніше).
+- [ ] Якщо додано нове налаштування — пройдено весь ланцюжок
+      `app_settings.py` → `settings dict` → GUI → `pipeline`.
+- [ ] Додано/оновлено тест (юніт або сценарій) для нової логіки.
+- [ ] Лог-повідомлення (`logger.debug`) додані для нових кроків алгоритму, як це зроблено в
+      `processing/perspective.py`.
+- [ ] `status.md` оновлено: позначити виконані пункти `[x]`/`✅` з датою.
