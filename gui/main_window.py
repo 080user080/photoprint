@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._processor: BatchProcessor = BatchProcessor(self._settings)
         self._orig: Optional[np.ndarray] = None
         self._base: Optional[np.ndarray] = None  # базове зображення після перспективи
+        self._base_for_perspective: Optional[np.ndarray] = None  # знімок _base до початку ручної перспективи
         self._processed: Optional[np.ndarray] = None
         self._auto_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
@@ -465,6 +466,7 @@ class MainWindow(QMainWindow):
         self._preview.clear()
         self._orig = None
         self._base = None
+        self._base_for_perspective = None
         self._processed = None
         self._perspective_corners = None  # скидаємо кути перспективи
         self._current_path = None
@@ -508,6 +510,7 @@ class MainWindow(QMainWindow):
             img = loader.load(path)
             self._orig = img
             self._base = img.copy()  # початково base = orig
+            self._base_for_perspective = None
             self._processed = None
             self._perspective_corners = None  # скидаємо кути перспективи для нового файлу
             self._current_path = path
@@ -687,6 +690,8 @@ class MainWindow(QMainWindow):
         """Авто-детекція перспективи з fallback до ручного режиму."""
         if self._orig is None or self._base is None:
             return
+        # Зберігаємо знімок _base до перспективи (для ручного редагування точок)
+        self._base_for_perspective = self._base.copy()
         # Шукаємо кути на _base (після автофікс), бо координати мають відповідати зображенню до якого застосовуємо перспективу
         corners = pipeline.detect_corners(self._base)
         if corners is not None:
@@ -748,6 +753,9 @@ class MainWindow(QMainWindow):
         """Ручна корекція: пробуємо знайти точки авто на _base, інакше дефолтні."""
         if self._orig is None or self._base is None:
             return
+        # Зберігаємо знімок _base — всі подальші перетягування точок
+        # будуть застосовуватись до цього знімку, а не до вже трансформованого _base
+        self._base_for_perspective = self._base.copy()
         corners = pipeline.detect_corners(self._base)
         if corners is not None:
             self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
@@ -759,6 +767,7 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         self._base = self._orig.copy()
+        self._base_for_perspective = None
         self._processed = self._orig.copy()
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
@@ -774,6 +783,7 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         self._base = self._orig.copy()
+        self._base_for_perspective = None
         self._processed = self._orig.copy()
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
@@ -785,24 +795,28 @@ class MainWindow(QMainWindow):
         self._store_current_settings()
 
     def _on_persp_pts(self, points: list):
-        """Користувач змінив точки перспективи — застосовуємо до _base."""
+        """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
         if self._base is None or len(points) != 4:
             return
         try:
-            base_h, base_w = self._base.shape[:2]
-            prev = image_utils.make_preview(self._base)
+            # Використовуємо знімок _base зроблений ДО початку ручної перспективи.
+            # Це гарантує що кожне перетягування точки застосовується до незміненого
+            # зображення, а не до результату попередньої трансформації.
+            source = self._base_for_perspective if self._base_for_perspective is not None else self._base
+            base_h, base_w = source.shape[:2]
+            prev = image_utils.make_preview(source)
             prev_h, prev_w = prev.shape[:2]
             # Координати точок — у системі прев'ю (≤900px).
-            # Масштабуємо назад в розмір базового зображення _base
+            # Масштабуємо назад в розмір базового зображення source
             scale_x = base_w / max(prev_w, 1)
             scale_y = base_h / max(prev_h, 1)
             corners = np.array(
                 [[p.x() * scale_x, p.y() * scale_y] for p in points],
                 dtype=np.float32
             )
-            result = pipeline.run_perspective_manual(self._base, corners)
-            # Оновлюємо базове зображення після ручної перспективи
-            self._base = result.copy()
+            result = pipeline.run_perspective_manual(source, corners)
+            # НЕ оновлюємо _base тут — це робиться лише після підтвердження
+            # (друк, авто-фікс тощо). _base залишається = _base_for_perspective.
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
         except Exception as e:
@@ -814,6 +828,10 @@ class MainWindow(QMainWindow):
 # ------------------------------------------------------------------
 
     def _do_print_current(self):
+        # Якщо є незафіксована ручна перспектива — фіксуємо
+        if self._base_for_perspective is not None and self._processed is not None:
+            self._base = self._processed.copy()
+            self._base_for_perspective = None
         # Правильна перевірка numpy array через "is not None"
         image = self._processed if self._processed is not None else self._base
         if image is None:

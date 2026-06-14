@@ -321,6 +321,7 @@ DEFAULT_AUTOFIX_CONTRAST = 0.15
 DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
 DEFAULT_FULL_AUTO_MODE = False
 DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
+DEFAULT_FULL_AUTO_PERSPECTIVE = False
 
 
 def _get_path(path=None):
@@ -366,6 +367,7 @@ def load(path=None) -> dict:
         "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
         "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
         "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
+        "full_auto_perspective": cfg.getboolean("processing", "full_auto_perspective", fallback=DEFAULT_FULL_AUTO_PERSPECTIVE),
     }
 
 
@@ -412,6 +414,7 @@ def save(settings: dict, path=None):
     cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
     cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
     cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
+    cfg["processing"]["full_auto_perspective"] = str(settings.get("full_auto_perspective", DEFAULT_FULL_AUTO_PERSPECTIVE)).lower()
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)
@@ -2796,6 +2799,8 @@ class SettingsWindow(QWidget):
         fa_form = QFormLayout(fa_box)
         self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
         fa_form.addRow(self._cb_full_auto_mode)
+        self._cb_full_auto_perspective = QCheckBox("Застосовувати перспективу в Full Auto")
+        fa_form.addRow(self._cb_full_auto_perspective)
         fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
                          "лише потрібні корекції з адаптивною силою.")
         fa_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -2873,6 +2878,7 @@ class SettingsWindow(QWidget):
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
         self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
+        self._cb_full_auto_perspective.setChecked(s.get("full_auto_perspective", False))
 
     def _collect_settings(self) -> dict:
         return {
@@ -2906,6 +2912,7 @@ class SettingsWindow(QWidget):
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
+            "full_auto_perspective": self._cb_full_auto_perspective.isChecked(),
         }
 
     def _save(self):
@@ -4886,8 +4893,8 @@ def run_full_auto(
             diag.brightness_mean_l = updated.get("brightness_mean_l", diag.brightness_mean_l)
             diag.brightness_correction = updated.get("brightness_correction", diag.brightness_correction)
 
-    # Крок 2 — Корекція перспективи
-    if diag.perspective_has:
+    # Крок 2 — Корекція перспективи (опціонально, керується full_auto_perspective)
+    if settings.get("full_auto_perspective", False) and diag.perspective_has:
         result = perspective.apply_correction(result, diag.perspective_corners)
         applied_steps["perspective"] = diag.perspective_skew_ratio
         status_parts.append("перспектива")
