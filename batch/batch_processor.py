@@ -90,6 +90,8 @@ class BatchProcessor:
             filename = os.path.basename(path)
             if on_progress:
                 on_progress(i + 1, self.total, filename)
+            image = None
+            processed = None
             try:
                 image = loader.load(path)
                 if s.get("autofix_enabled", True):
@@ -118,6 +120,13 @@ class BatchProcessor:
                 self._logger.error(f"Помилка обробки файлу {filename}: {exc}", exc_info=True)
                 if on_error:
                     on_error(i, filename, str(exc))
+            finally:
+                # Явне звільнення пам'яті: видаляємо великі масиви після кожного файлу
+                # щоб вони не накопичувались у циклі
+                if image is not None:
+                    del image
+                if processed is not None and processed is not image:
+                    del processed
 
         self._index = self.total
         return printed

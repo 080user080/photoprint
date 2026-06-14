@@ -4,6 +4,7 @@
 """
 import os
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -13,6 +14,7 @@ from tests.gui_tester import GUITester
 SCENARIO_NAME = "test_reset_buttons"
 
 
+@pytest.mark.gui
 def _run_scenario(tester: GUITester) -> bool:
     """Сценарій: Auto Fix → Скинути перспективу → Скинути слайдери → скріншот."""
     print("=" * 60)
@@ -86,6 +88,7 @@ def _run_scenario(tester: GUITester) -> bool:
     return True
 
 
+@pytest.mark.gui
 def test_reset_buttons():
     """pytest entry point."""
     tester = GUITester("main.py", debug_mode=False)

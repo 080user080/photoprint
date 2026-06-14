@@ -4,6 +4,7 @@
 """
 import os
 import sys
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -13,6 +14,7 @@ from tests.gui_tester import GUITester
 SCENARIO_NAME = "test_perspective_manual"
 
 
+@pytest.mark.gui
 def _run_scenario(tester: GUITester) -> bool:
     """Сценарій: завантаження → ручна перспектива → скріншот."""
     print("=" * 60)
@@ -47,7 +49,6 @@ def _run_scenario(tester: GUITester) -> bool:
     print("[ACTION] Натискаємо Ручна перспектива...")
     result = tester.click_widget("btn_persp_manual")
     if not result:
-        # fallback до тексту
         print("[WARN] Клік по objectName не вдався, пробуємо click_button_by_text...")
         tester.click_button_by_text("ручна перспектива")
     tester.wait(3)
@@ -69,6 +70,7 @@ def _run_scenario(tester: GUITester) -> bool:
     return True
 
 
+@pytest.mark.gui
 def test_perspective_manual():
     """pytest entry point."""
     tester = GUITester("main.py", debug_mode=False)

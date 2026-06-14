@@ -180,6 +180,7 @@ class MainWindow(QMainWindow):
         - Якщо minimize_to_tray == True — ховаємо в трей.
         - Інакше — завершуємо програму.
         """
+        image_utils.preview_cache_clear()  # очищуємо кеш прев'ю при закритті
         if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
             self._save_window_geometry()
             self.hide()
@@ -458,6 +459,7 @@ class MainWindow(QMainWindow):
         self._perspective_corners = None  # скидаємо кути перспективи
         self._current_path = None
         self._per_file.clear()
+        image_utils.preview_cache_clear()
         self._update_buttons()
         self._set_status("Черга очищена")
 
@@ -469,10 +471,16 @@ class MainWindow(QMainWindow):
         self._per_file[path] = self._controls.values()
 
     def _restore_file_settings(self, path: str):
-        """Відновлює слайдери для файлу path, або скидає до дефолту."""
+        """Відновлює слайдери для файлу path, або скидає до дефолту (без сигналів)."""
         vals = self._per_file.get(path)
         if vals is None:
-            self._controls.reset_all()
+            # Скидаємо всі слайдери в дефолтні значення silent — без сигналів
+            self._controls.set_shadow_highlight(0.0, silent=True)
+            self._controls.set_brightness(0.0, silent=True)
+            self._controls.set_contrast(0.0, silent=True)
+            self._controls.set_sharpen(0.4, silent=True)
+            self._controls.set_hdr(0.0, silent=True)
+            self._controls.set_grayscale(False, silent=True)
             return
         self._controls.set_shadow_highlight(vals.get("shadow_highlight", 0.0), silent=True)
         self._controls.set_brightness(vals.get("brightness", 0.0), silent=True)
@@ -518,11 +526,12 @@ class MainWindow(QMainWindow):
             vals = self._controls.values()
             if s.get("autofix_enabled", True):
                 result, status_msg = pipeline.run_autofix(
-                    self._orig,
+                    self._base,
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
                     use_perspective=False,  # вимикаємо авто-перспективу в pipeline, бо застосовуємо вручну
+                    partial_perspective=s.get("partial_perspective", False),
                     bw_binary=s.get("bw_binary", False),
                     classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
                     classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
@@ -530,10 +539,6 @@ class MainWindow(QMainWindow):
                     shadow_highlight_strength=vals["shadow_highlight"],
                     output_color_mode=s.get("output_color_mode", "auto"),
                 )
-                # Якщо є збережені кути перспективи — застосовуємо їх після автофікс
-                if self._perspective_corners is not None:
-                    result = pipeline.run_perspective_manual(result, self._perspective_corners)
-                    status_msg += " + перспектива"
                 # Оновлюємо базове зображення після автофіксу
                 self._base = result.copy()
                 self._set_status(status_msg)
@@ -598,6 +603,7 @@ class MainWindow(QMainWindow):
         # Оновлюємо базове зображення після авто-яскравості
         self._base = result.copy()
         self._processed = result
+        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-яскравість застосована")
 
@@ -613,6 +619,7 @@ class MainWindow(QMainWindow):
         # Оновлюємо базове зображення після авто-контрасту
         self._base = result.copy()
         self._processed = result
+        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-контраст застосований")
 
@@ -728,6 +735,7 @@ class MainWindow(QMainWindow):
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
         self._preview.set_autofix_applied(False)
+        self._perspective_corners = None  # скидаємо збережені кути перспективи
         self._set_status("Всі корекції скинуто")
         self._update_buttons()
         # Зберігаємо скинуті налаштування для поточного файлу
@@ -748,7 +756,7 @@ class MainWindow(QMainWindow):
                 [[p.x() * scale_x, p.y() * scale_y] for p in points],
                 dtype=np.float32
             )
-            result = pipeline.run_perspective_manual(self._orig, corners)
+            result = pipeline.run_perspective_manual(self._base, corners)
             # Оновлюємо базове зображення після ручної перспективи
             self._base = result.copy()
             self._processed = result
@@ -852,6 +860,8 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(True)
         self._progress.setRange(0, self._processor.total)
         self._set_buttons_enabled(False)
+        self._radio_auto.setEnabled(False)
+        self._radio_manual.setEnabled(False)
 
         self._auto_thread = QThread()
         self._worker = AutoWorker(self._processor)
@@ -875,6 +885,8 @@ class MainWindow(QMainWindow):
     def _on_auto_done(self, count: int):
         self._progress.setVisible(False)
         self._set_buttons_enabled(True)
+        self._radio_auto.setEnabled(True)
+        self._radio_manual.setEnabled(True)
         self._set_status(f"Готово. Надруковано {count} з {self._processor.total}")
         # Позначаємо всі що не мають статусу
         for i in range(self._queue.count()):

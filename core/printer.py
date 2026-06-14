@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import subprocess
+import threading
 import numpy as np
 import cv2
 from utils.logger import get_logger
@@ -16,6 +17,7 @@ DEFAULT_JPG_QUALITY = 95
 TEMP_FILE_PREFIX = "photoprint_"
 TEMP_FILE_SUFFIX = ".jpg"
 SHELLEXECUTE_SUCCESS_MIN = 32
+TEMP_FILE_DELETE_DELAY_SEC = 5.0
 
 
 def _save_temp_jpg(image: np.ndarray, quality: int = DEFAULT_JPG_QUALITY) -> str:
@@ -26,6 +28,17 @@ def _save_temp_jpg(image: np.ndarray, quality: int = DEFAULT_JPG_QUALITY) -> str
     _, buf = cv2.imencode(TEMP_FILE_SUFFIX, image, params)
     buf.tofile(path)
     return path
+
+
+def _delayed_remove(path: str, delay: float = TEMP_FILE_DELETE_DELAY_SEC) -> None:
+    """Відкладене видалення файлу через delay секунд (для Windows, де файл блокується)."""
+    def _remove():
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+    threading.Timer(delay, _remove).start()
 
 
 def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DEFAULT_JPG_QUALITY) -> None:
@@ -50,7 +63,9 @@ def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DE
         logger.info("Зображення успішно надіслано на друк")
     finally:
         # Видаляємо тимчасовий файл із затримкою (Windows блокує файл під час друку)
-        if sys.platform != "win32":
+        if sys.platform == "win32":
+            _delayed_remove(tmp_path)
+        else:
             try:
                 os.remove(tmp_path)
             except OSError:
