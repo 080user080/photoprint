@@ -157,6 +157,7 @@ def load(path: str) -> np.ndarray:
   import sys
   import tempfile
   import subprocess
+  import threading
   import numpy
   import cv2
   from utils.logger import get_logger
@@ -164,6 +165,8 @@ def load(path: str) -> np.ndarray:
 Сутності:
 def _save_temp_jpg(image: np.ndarray, quality: int) -> str:
     """Зберігає зображення у тимчасовий JPG файл. Повертає шлях."""
+def _delayed_remove(path: str, delay: float) -> None:
+    """Відкладене видалення файлу через delay секунд (для Windows, де файл блокується)."""
 def print_image(image: np.ndarray, printer_name: str, jpg_quality: int) -> None:
     """Відправляє зображення на друк.
 
@@ -290,7 +293,7 @@ class MainWindow(QMainWindow):
     def _store_current_settings(self):
         """Зберігає поточні значення слайдерів для _current_path."""
     def _restore_file_settings(self, path: str):
-        """Відновлює слайдери для файлу path, або скидає до дефолту."""
+        """Відновлює слайдери для файлу path, або скидає до дефолту (без сигналів)."""
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
     def _do_autofix(self):

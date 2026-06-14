@@ -539,8 +539,8 @@ class MainWindow(QMainWindow):
                     shadow_highlight_strength=vals["shadow_highlight"],
                     output_color_mode=s.get("output_color_mode", "auto"),
                 )
-                # Оновлюємо базове зображення після автофіксу
-                self._base = result.copy()
+                # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
+                # щоб повторне натискання не накладало ефекти каскадно.
                 self._set_status(status_msg)
                 self._preview.set_autofix_applied(True)
             else:

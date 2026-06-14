@@ -61,6 +61,8 @@ class ImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
+        # Сірий фон замість білого — запобігає білому спалаху при зміні зображення
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
         # Залишаємо місце навколо для точок що на краю
         self.setContentsMargins(IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN)
         self._pixmap_orig: QPixmap | None = None
@@ -83,7 +85,7 @@ class ImageLabel(QLabel):
         self._points = []
         self.clear()
         self.setText(text)
-        self.setStyleSheet("color: #777777; font-size: 13px;")
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px; color: #777777; font-size: 13px;")
 
     def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None = None):
         self._edit_mode = enabled
@@ -173,7 +175,8 @@ class ImageLabel(QLabel):
             Qt.TransformationMode.SmoothTransformation
         )
         self.setPixmap(scaled)
-        self.setStyleSheet("")
+        # Залишаємо фон сірим, прибираємо тільки текстову стилізацію
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def _img_rect(self) -> QRect | None:
         if not self.pixmap() or self.pixmap().isNull():

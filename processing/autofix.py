@@ -6,6 +6,7 @@ Auto Fix — автоматична корекція під фото докум�
 
 import cv2
 import numpy as np
+from processing import detail_map as detail_map_module
 from processing import hdr as hdr_module
 from processing import sharpen as sharpen_module
 from processing import brightness_contrast as bc
@@ -99,15 +100,21 @@ def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool = True) -> np.
     l_ch, a_ch, b_ch = cv2.split(lab)
 
     # CLAHE — адаптивне вирівнювання гістограми (безпечно для всіх)
-    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
+    # Используем resolution-independent tile grid
+    tile_grid = hdr_module.adaptive_tile_grid(l_ch.shape[0], l_ch.shape[1])
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=tile_grid)
     l_clahe = clahe.apply(l_ch)
 
     if aggressive:
         # Агресивний normalize — тільки для ч-б документів
         l_norm = cv2.normalize(l_clahe, None, 0, 255, cv2.NORM_MINMAX)
     else:
-        # Без глобального normalize — зберігаємо оригінальний діапазон
-        l_norm = l_clahe
+        # Фото/кольорові документи: CLAHE-ефект застосовуємо тільки там,
+        # де є реальна локальна деталізація. На плоских/світлих ділянках
+        # (detail_mask ≈ 0) результат лишається ≈ оригіналом.
+        dmask = detail_map_module.detail_mask(l_ch)
+        diff = hdr_module._apply_coring(l_clahe.astype(np.float32) - l_ch.astype(np.float32))
+        l_norm = np.clip(l_ch.astype(np.float32) + dmask * diff, 0, 255).astype(np.uint8)
 
     merged = cv2.merge([l_norm, a_ch, b_ch])
     result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)

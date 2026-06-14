@@ -425,6 +425,13 @@ from utils.logger import get_logger
 RAW_EXTENSIONS = {".cr2", ".nef", ".arw", ".dng", ".orf", ".rw2", ".srw",
                   ".raf", ".pef", ".x3f", ".3fr", ".raw"}
 
+# Прапорець доступності rawpy — перевіряється при імпорті
+try:
+    import rawpy  # noqa: F401
+    RAW_SUPPORTED = True
+except ImportError:
+    RAW_SUPPORTED = False
+
 
 def _load_heic(path: str) -> np.ndarray:
     """Завантаження HEIC через pillow-heif → BGR numpy."""
@@ -482,6 +489,11 @@ def load(path: str) -> np.ndarray:
     if ext in (".heic", ".heif"):
         image = _load_heic(path)
     elif ext in RAW_EXTENSIONS:
+        if not RAW_SUPPORTED:
+            raise RuntimeError(
+                "rawpy не встановлено. Неможливо завантажити RAW-файл.\n"
+                "Встановіть rawpy: pip install rawpy"
+            )
         image = _load_raw(path)
     else:
         # cv2.imread не підтримує unicode paths на Windows — використовуємо np.fromfile
@@ -509,6 +521,7 @@ import os
 import sys
 import tempfile
 import subprocess
+import threading
 import numpy as np
 import cv2
 from utils.logger import get_logger
@@ -518,6 +531,7 @@ DEFAULT_JPG_QUALITY = 95
 TEMP_FILE_PREFIX = "photoprint_"
 TEMP_FILE_SUFFIX = ".jpg"
 SHELLEXECUTE_SUCCESS_MIN = 32
+TEMP_FILE_DELETE_DELAY_SEC = 5.0
 
 
 def _save_temp_jpg(image: np.ndarray, quality: int = DEFAULT_JPG_QUALITY) -> str:
@@ -528,6 +542,17 @@ def _save_temp_jpg(image: np.ndarray, quality: int = DEFAULT_JPG_QUALITY) -> str
     _, buf = cv2.imencode(TEMP_FILE_SUFFIX, image, params)
     buf.tofile(path)
     return path
+
+
+def _delayed_remove(path: str, delay: float = TEMP_FILE_DELETE_DELAY_SEC) -> None:
+    """Відкладене видалення файлу через delay секунд (для Windows, де файл блокується)."""
+    def _remove():
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except OSError:
+            pass
+    threading.Timer(delay, _remove).start()
 
 
 def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DEFAULT_JPG_QUALITY) -> None:
@@ -552,7 +577,9 @@ def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DE
         logger.info("Зображення успішно надіслано на друк")
     finally:
         # Видаляємо тимчасовий файл із затримкою (Windows блокує файл під час друку)
-        if sys.platform != "win32":
+        if sys.platform == "win32":
+            _delayed_remove(tmp_path)
+        else:
             try:
                 os.remove(tmp_path)
             except OSError:
@@ -572,14 +599,19 @@ def _print_windows(path: str, printer_name: str) -> None:
         # mspaint /pt <file> <printer> — тихий друк без діалогу
         result = subprocess.run(
             ["mspaint", "/pt", path, printer_name],
-            capture_output=True
+            capture_output=True, text=True
         )
         if result.returncode != 0:
+            stderr = result.stderr.strip() if result.stderr else ""
             logger.error(f"mspaint /pt повернув код {result.returncode}, принтер: {printer_name}")
-            raise RuntimeError(
-                f"mspaint /pt повернув код {result.returncode}. "
-                f"Перевірте назву принтера: '{printer_name}'"
+            msg = (
+                f"Помилка друку: принтер '{printer_name}' недоступний або не знайдений.\n"
+                f"Перевірте назву принтера в Налаштуваннях.\n"
+                f"Технічна інформація: mspaint /pt повернув код {result.returncode}."
             )
+            if stderr:
+                msg += f"\n{stderr}"
+            raise RuntimeError(msg)
     else:
         # ShellExecute 'print' — Windows сам обирає програму
         ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
@@ -1099,6 +1131,7 @@ class MainWindow(QMainWindow):
         - Якщо minimize_to_tray == True — ховаємо в трей.
         - Інакше — завершуємо програму.
         """
+        image_utils.preview_cache_clear()  # очищуємо кеш прев'ю при закритті
         if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
             self._save_window_geometry()
             self.hide()
@@ -1389,10 +1422,16 @@ class MainWindow(QMainWindow):
         self._per_file[path] = self._controls.values()
 
     def _restore_file_settings(self, path: str):
-        """Відновлює слайдери для файлу path, або скидає до дефолту."""
+        """Відновлює слайдери для файлу path, або скидає до дефолту (без сигналів)."""
         vals = self._per_file.get(path)
         if vals is None:
-            self._controls.reset_all()
+            # Скидаємо всі слайдери в дефолтні значення silent — без сигналів
+            self._controls.set_shadow_highlight(0.0, silent=True)
+            self._controls.set_brightness(0.0, silent=True)
+            self._controls.set_contrast(0.0, silent=True)
+            self._controls.set_sharpen(0.4, silent=True)
+            self._controls.set_hdr(0.0, silent=True)
+            self._controls.set_grayscale(False, silent=True)
             return
         self._controls.set_shadow_highlight(vals.get("shadow_highlight", 0.0), silent=True)
         self._controls.set_brightness(vals.get("brightness", 0.0), silent=True)
@@ -1443,6 +1482,7 @@ class MainWindow(QMainWindow):
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
                     use_perspective=False,  # вимикаємо авто-перспективу в pipeline, бо застосовуємо вручну
+                    partial_perspective=s.get("partial_perspective", False),
                     bw_binary=s.get("bw_binary", False),
                     classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
                     classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
@@ -1450,8 +1490,8 @@ class MainWindow(QMainWindow):
                     shadow_highlight_strength=vals["shadow_highlight"],
                     output_color_mode=s.get("output_color_mode", "auto"),
                 )
-                # Оновлюємо базове зображення після автофіксу
-                self._base = result.copy()
+                # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
+                # щоб повторне натискання не накладало ефекти каскадно.
                 self._set_status(status_msg)
                 self._preview.set_autofix_applied(True)
             else:
@@ -1514,6 +1554,7 @@ class MainWindow(QMainWindow):
         # Оновлюємо базове зображення після авто-яскравості
         self._base = result.copy()
         self._processed = result
+        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-яскравість застосована")
 
@@ -1529,6 +1570,7 @@ class MainWindow(QMainWindow):
         # Оновлюємо базове зображення після авто-контрасту
         self._base = result.copy()
         self._processed = result
+        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
         self._preview.set_after(image_utils.make_preview(result))
         self._set_status("Авто-контраст застосований")
 
@@ -1644,6 +1686,7 @@ class MainWindow(QMainWindow):
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
         self._preview.set_autofix_applied(False)
+        self._perspective_corners = None  # скидаємо збережені кути перспективи
         self._set_status("Всі корекції скинуто")
         self._update_buttons()
         # Зберігаємо скинуті налаштування для поточного файлу
@@ -1664,7 +1707,7 @@ class MainWindow(QMainWindow):
                 [[p.x() * scale_x, p.y() * scale_y] for p in points],
                 dtype=np.float32
             )
-            result = pipeline.run_perspective_manual(self._orig, corners)
+            result = pipeline.run_perspective_manual(self._base, corners)
             # Оновлюємо базове зображення після ручної перспективи
             self._base = result.copy()
             self._processed = result
@@ -1768,6 +1811,8 @@ class MainWindow(QMainWindow):
         self._progress.setVisible(True)
         self._progress.setRange(0, self._processor.total)
         self._set_buttons_enabled(False)
+        self._radio_auto.setEnabled(False)
+        self._radio_manual.setEnabled(False)
 
         self._auto_thread = QThread()
         self._worker = AutoWorker(self._processor)
@@ -1791,6 +1836,8 @@ class MainWindow(QMainWindow):
     def _on_auto_done(self, count: int):
         self._progress.setVisible(False)
         self._set_buttons_enabled(True)
+        self._radio_auto.setEnabled(True)
+        self._radio_manual.setEnabled(True)
         self._set_status(f"Готово. Надруковано {count} з {self._processor.total}")
         # Позначаємо всі що не мають статусу
         for i in range(self._queue.count()):
@@ -1977,6 +2024,8 @@ class ImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
+        # Сірий фон замість білого — запобігає білому спалаху при зміні зображення
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
         # Залишаємо місце навколо для точок що на краю
         self.setContentsMargins(IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN)
         self._pixmap_orig: QPixmap | None = None
@@ -1999,7 +2048,7 @@ class ImageLabel(QLabel):
         self._points = []
         self.clear()
         self.setText(text)
-        self.setStyleSheet("color: #777777; font-size: 13px;")
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px; color: #777777; font-size: 13px;")
 
     def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None = None):
         self._edit_mode = enabled
@@ -2089,7 +2138,8 @@ class ImageLabel(QLabel):
             Qt.TransformationMode.SmoothTransformation
         )
         self.setPixmap(scaled)
-        self.setStyleSheet("")
+        # Залишаємо фон сірим, прибираємо тільки текстову стилізацію
+        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def _img_rect(self) -> QRect | None:
         if not self.pixmap() or self.pixmap().isNull():
@@ -3108,7 +3158,7 @@ import numpy as np
 HDR_THRESHOLD = 0.0  # мінімальна сила для застосування
 HDR_MAX_STRENGTH = 1.0  # максимальна сила
 HDR_CLIP_LIMIT_BASE = 1.0  # базовий clip limit
-HDR_CLIP_LIMIT_MULTIPLIER = 3.0  # clip_limit = 1.0 + strength * 3.0
+HDR_CLIP_LIMIT_MULTIPLIER = 1.5  # clip_limit = 1.0 + strength * 1.5 (менша плямистість)
 HDR_TILE_SIZE = 8  # розмір тайлу для CLAHE
 
 # Константи для адаптивного HDR
