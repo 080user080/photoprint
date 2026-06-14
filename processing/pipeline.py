@@ -320,8 +320,8 @@ def run_full_auto(
             diag.brightness_mean_l = updated.get("brightness_mean_l", diag.brightness_mean_l)
             diag.brightness_correction = updated.get("brightness_correction", diag.brightness_correction)
 
-    # Крок 2 — Корекція перспективи
-    if diag.perspective_has:
+    # Крок 2 — Корекція перспективи (опціонально, керується full_auto_perspective)
+    if settings.get("full_auto_perspective", False) and diag.perspective_has:
         result = perspective.apply_correction(result, diag.perspective_corners)
         applied_steps["perspective"] = diag.perspective_skew_ratio
         status_parts.append("перспектива")

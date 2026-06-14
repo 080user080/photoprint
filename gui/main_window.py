@@ -543,6 +543,8 @@ class MainWindow(QMainWindow):
                 settings=self._settings,
             )
             self._processed = result
+            # Оновлюємо _base, щоб подальші слайдери працювали з результатом Full Auto
+            self._base = result.copy()
             self._preview.set_after(image_utils.make_preview(result))
             self._preview.set_autofix_applied(True)
             self._set_status(status_msg)

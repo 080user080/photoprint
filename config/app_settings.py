@@ -31,6 +31,7 @@ DEFAULT_AUTOFIX_CONTRAST = 0.15
 DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
 DEFAULT_FULL_AUTO_MODE = False
 DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
+DEFAULT_FULL_AUTO_PERSPECTIVE = False
 
 
 def _get_path(path=None):
@@ -76,6 +77,7 @@ def load(path=None) -> dict:
         "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
         "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
         "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
+        "full_auto_perspective": cfg.getboolean("processing", "full_auto_perspective", fallback=DEFAULT_FULL_AUTO_PERSPECTIVE),
     }
 
 
@@ -122,6 +124,7 @@ def save(settings: dict, path=None):
     cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
     cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
     cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
+    cfg["processing"]["full_auto_perspective"] = str(settings.get("full_auto_perspective", DEFAULT_FULL_AUTO_PERSPECTIVE)).lower()
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)

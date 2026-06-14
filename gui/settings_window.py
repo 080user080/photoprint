@@ -300,6 +300,8 @@ class SettingsWindow(QWidget):
         fa_form = QFormLayout(fa_box)
         self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
         fa_form.addRow(self._cb_full_auto_mode)
+        self._cb_full_auto_perspective = QCheckBox("Застосовувати перспективу в Full Auto")
+        fa_form.addRow(self._cb_full_auto_perspective)
         fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
                          "лише потрібні корекції з адаптивною силою.")
         fa_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -377,6 +379,7 @@ class SettingsWindow(QWidget):
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
         self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
+        self._cb_full_auto_perspective.setChecked(s.get("full_auto_perspective", False))
 
     def _collect_settings(self) -> dict:
         return {
@@ -410,6 +413,7 @@ class SettingsWindow(QWidget):
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
+            "full_auto_perspective": self._cb_full_auto_perspective.isChecked(),
         }
 
     def _save(self):
