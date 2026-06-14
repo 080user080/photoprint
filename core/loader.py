@@ -14,6 +14,13 @@ from utils.logger import get_logger
 RAW_EXTENSIONS = {".cr2", ".nef", ".arw", ".dng", ".orf", ".rw2", ".srw",
                   ".raf", ".pef", ".x3f", ".3fr", ".raw"}
 
+# Прапорець доступності rawpy — перевіряється при імпорті
+try:
+    import rawpy  # noqa: F401
+    RAW_SUPPORTED = True
+except ImportError:
+    RAW_SUPPORTED = False
+
 
 def _load_heic(path: str) -> np.ndarray:
     """Завантаження HEIC через pillow-heif → BGR numpy."""
@@ -71,6 +78,11 @@ def load(path: str) -> np.ndarray:
     if ext in (".heic", ".heif"):
         image = _load_heic(path)
     elif ext in RAW_EXTENSIONS:
+        if not RAW_SUPPORTED:
+            raise RuntimeError(
+                "rawpy не встановлено. Неможливо завантажити RAW-файл.\n"
+                "Встановіть rawpy: pip install rawpy"
+            )
         image = _load_raw(path)
     else:
         # cv2.imread не підтримує unicode paths на Windows — використовуємо np.fromfile

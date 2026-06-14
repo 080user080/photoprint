@@ -85,14 +85,19 @@ def _print_windows(path: str, printer_name: str) -> None:
         # mspaint /pt <file> <printer> — тихий друк без діалогу
         result = subprocess.run(
             ["mspaint", "/pt", path, printer_name],
-            capture_output=True
+            capture_output=True, text=True
         )
         if result.returncode != 0:
+            stderr = result.stderr.strip() if result.stderr else ""
             logger.error(f"mspaint /pt повернув код {result.returncode}, принтер: {printer_name}")
-            raise RuntimeError(
-                f"mspaint /pt повернув код {result.returncode}. "
-                f"Перевірте назву принтера: '{printer_name}'"
+            msg = (
+                f"Помилка друку: принтер '{printer_name}' недоступний або не знайдений.\n"
+                f"Перевірте назву принтера в Налаштуваннях.\n"
+                f"Технічна інформація: mspaint /pt повернув код {result.returncode}."
             )
+            if stderr:
+                msg += f"\n{stderr}"
+            raise RuntimeError(msg)
     else:
         # ShellExecute 'print' — Windows сам обирає програму
         ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
