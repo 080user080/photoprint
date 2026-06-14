@@ -294,10 +294,22 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
         mode_form.addRow(self._cb_minimize_to_tray)
 
+        # === Адаптивний режим (Full Auto) ===
+        fa_box = QGroupBox("Адаптивний режим (Full Auto)")
+        fa_box.setStyleSheet(GROUPBOX_STYLE)
+        fa_form = QFormLayout(fa_box)
+        self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
+        fa_form.addRow(self._cb_full_auto_mode)
+        fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
+                         "лише потрібні корекції з адаптивною силою.")
+        fa_desc.setStyleSheet("color: gray; font-size: 10px;")
+        fa_form.addRow(fa_desc)
+
         right.addWidget(out_box)
         right.addWidget(save_box)
         right.addWidget(print_box)
         right.addWidget(mode_box)
+        right.addWidget(fa_box)
         right.addStretch()
 
         # === Збираємо колонки ===
@@ -364,6 +376,7 @@ class SettingsWindow(QWidget):
         self._edit_printer.setText(s.get("printer_name", "priPrinter"))
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
+        self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
 
     def _collect_settings(self) -> dict:
         return {
@@ -396,6 +409,7 @@ class SettingsWindow(QWidget):
             "printer_name":      self._edit_printer.text().strip(),
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
+            "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
         }
 
     def _save(self):

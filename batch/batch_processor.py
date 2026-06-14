@@ -95,19 +95,25 @@ class BatchProcessor:
             try:
                 image = loader.load(path)
                 if s.get("autofix_enabled", True):
-                    processed, _ = pipeline.run_autofix(
-                        image,
-                        sharpen_strength=s.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH),
-                        hdr_strength=s.get("hdr_strength", DEFAULT_HDR_STRENGTH),
-                        use_hdr=s.get("hdr_in_autofix", True),
-                        use_perspective=s.get("auto_perspective", True),
-                        bw_binary=s.get("bw_binary", False),
-                        classify_bw_std_thresh=s.get("classify_bw_std_thresh", DEFAULT_CLASSIFY_BW_STD_THRESH),
-                        classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
-                        classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
-                        shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
-                        autofix_contrast=s.get("autofix_contrast", 0.15),
-                    )
+                    if s.get("full_auto_mode", False):
+                        processed, _, _ = pipeline.run_full_auto(
+                            image,
+                            settings=s,
+                        )
+                    else:
+                        processed, _ = pipeline.run_autofix(
+                            image,
+                            sharpen_strength=s.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH),
+                            hdr_strength=s.get("hdr_strength", DEFAULT_HDR_STRENGTH),
+                            use_hdr=s.get("hdr_in_autofix", True),
+                            use_perspective=s.get("auto_perspective", True),
+                            bw_binary=s.get("bw_binary", False),
+                            classify_bw_std_thresh=s.get("classify_bw_std_thresh", DEFAULT_CLASSIFY_BW_STD_THRESH),
+                            classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
+                            classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
+                            shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
+                            autofix_contrast=s.get("autofix_contrast", 0.15),
+                        )
                 else:
                     processed = image
                 self._maybe_save(processed, path)

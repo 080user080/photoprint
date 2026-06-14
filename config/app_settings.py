@@ -29,6 +29,8 @@ DEFAULT_PARTIAL_PERSPECTIVE = False  # PRIO 2: часткова перспект
 DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
 DEFAULT_AUTOFIX_CONTRAST = 0.15
 DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
+DEFAULT_FULL_AUTO_MODE = False
+DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
 
 
 def _get_path(path=None):
@@ -72,6 +74,8 @@ def load(path=None) -> dict:
         "autofix_contrast":  cfg.getfloat("processing",  "autofix_contrast",    fallback=DEFAULT_AUTOFIX_CONTRAST),
         "minimize_to_tray":  cfg.getboolean("general",   "minimize_to_tray",    fallback=DEFAULT_MINIMIZE_TO_TRAY),
         "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
+        "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
+        "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
     }
 
 
@@ -116,6 +120,8 @@ def save(settings: dict, path=None):
     }
     cfg["processing"]["autofix_contrast"] = str(settings.get("autofix_contrast", DEFAULT_AUTOFIX_CONTRAST))
     cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
+    cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
+    cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)

@@ -378,6 +378,11 @@ class MainWindow(QMainWindow):
         self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
+        # Встановлюємо текст кнопки Auto Fix при старті
+        if self._settings.get("full_auto_mode", False):
+            self._btn_autofix.setText("⚡ Full Auto")
+        else:
+            self._btn_autofix.setText("⚡ Auto Fix")
 
     def _load_window_geometry(self):
         """Завантажує розмір вікна та ширину черги з налаштувань."""
@@ -404,6 +409,11 @@ class MainWindow(QMainWindow):
         self._processor = BatchProcessor(self._settings)
         self._processor.set_files(self._queue.get_all_paths())
         self._apply_default_mode()
+        # Оновлюємо текст кнопки Auto Fix
+        if s.get("full_auto_mode", False):
+            self._btn_autofix.setText("⚡ Full Auto")
+        else:
+            self._btn_autofix.setText("⚡ Auto Fix")
 
     def _open_settings(self):
         self._settings_win.load_from_file()
@@ -518,6 +528,31 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _do_autofix(self):
+        if self._settings.get("full_auto_mode", False):
+            self._do_full_auto()
+        else:
+            self._do_autofix_classic()
+
+    def _do_full_auto(self):
+        if self._orig is None:
+            self._set_status("Спочатку оберіть файл")
+            return
+        try:
+            result, status_msg, applied_steps = pipeline.run_full_auto(
+                self._base,
+                settings=self._settings,
+            )
+            self._processed = result
+            self._preview.set_after(image_utils.make_preview(result))
+            self._preview.set_autofix_applied(True)
+            self._set_status(status_msg)
+            self._logger.debug(f"Full Auto applied_steps: {applied_steps}")
+            self._update_buttons()
+        except Exception as e:
+            self._logger.error(f"Помилка Full Auto: {e}", exc_info=True)
+            self._set_status(f"Помилка Full Auto: {e}")
+
+    def _do_autofix_classic(self):
         if self._orig is None:
             self._set_status("Спочатку оберіть файл")
             return
