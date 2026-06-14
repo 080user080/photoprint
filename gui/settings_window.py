@@ -272,6 +272,8 @@ class SettingsWindow(QWidget):
         mode_form = QFormLayout(mode_box)
         self._cb_default_auto = QCheckBox("Авто (інакше — Ручний)")
         mode_form.addRow(self._cb_default_auto)
+        self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
+        mode_form.addRow(self._cb_minimize_to_tray)
 
         right.addWidget(out_box)
         right.addWidget(save_box)
@@ -335,6 +337,7 @@ class SettingsWindow(QWidget):
         self._edit_folder.setText(s.get("save_folder", ""))
         self._edit_printer.setText(s.get("printer_name", "priPrinter"))
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
+        self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
 
     def _collect_settings(self) -> dict:
         return {
@@ -363,6 +366,7 @@ class SettingsWindow(QWidget):
             "save_folder":       self._edit_folder.text().strip(),
             "printer_name":      self._edit_printer.text().strip(),
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
+            "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
         }
 
     def _save(self):

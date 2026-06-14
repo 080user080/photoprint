@@ -25,6 +25,8 @@ DEFAULT_AUTO_PERCENTILE_HIGH = 95.0
 DEFAULT_JPG_QUALITY = 95
 DEFAULT_OUTPUT_COLOR_MODE = "auto"  # auto / color / grayscale / binary
 DEFAULT_PRINTER_NAME = "priPrinter"
+DEFAULT_PARTIAL_PERSPECTIVE = False  # PRIO 2: часткова перспектива
+DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
 
 
 def _get_path(path=None):
@@ -45,6 +47,7 @@ def load(path=None) -> dict:
         "auto_apply_autofix": cfg.getboolean("processing", "auto_apply_autofix", fallback=True),
         "hdr_in_autofix":    cfg.getboolean("processing", "hdr_in_autofix",    fallback=True),
         "auto_perspective":  cfg.getboolean("processing", "auto_perspective",  fallback=False),
+        "partial_perspective": cfg.getboolean("processing", "partial_perspective", fallback=DEFAULT_PARTIAL_PERSPECTIVE),
         "shadow_highlight_strength": cfg.getfloat("processing", "shadow_highlight_strength", fallback=DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
         "sharpen_strength":  cfg.getfloat("processing",  "sharpen_strength",   fallback=DEFAULT_SHARPEN_STRENGTH),
         "hdr_strength":      cfg.getfloat("processing",  "hdr_strength",       fallback=DEFAULT_HDR_STRENGTH),
@@ -64,6 +67,7 @@ def load(path=None) -> dict:
         "jpg_quality":       cfg.getint("output",        "jpg_quality",         fallback=DEFAULT_JPG_QUALITY),
         "save_folder":       cfg.get("output",           "save_folder",         fallback=""),
         "printer_name":      cfg.get("printer",          "printer_name",        fallback=DEFAULT_PRINTER_NAME),
+        "minimize_to_tray":  cfg.getboolean("general",   "minimize_to_tray",    fallback=DEFAULT_MINIMIZE_TO_TRAY),
     }
 
 
@@ -77,13 +81,14 @@ def save(settings: dict, path=None):
         "queue_width": str(settings.get("queue_width", DEFAULT_QUEUE_WIDTH)),
     }
     cfg["processing"] = {
-        "autofix_enabled":   str(settings.get("autofix_enabled",   True)).lower(),
-        "auto_apply_autofix": str(settings.get("auto_apply_autofix", True)).lower(),
-        "hdr_in_autofix":    str(settings.get("hdr_in_autofix",    True)).lower(),
-        "auto_perspective":  str(settings.get("auto_perspective", True)).lower(),
+        "autofix_enabled":     str(settings.get("autofix_enabled",   True)).lower(),
+        "auto_apply_autofix":  str(settings.get("auto_apply_autofix", True)).lower(),
+        "hdr_in_autofix":      str(settings.get("hdr_in_autofix",    True)).lower(),
+        "auto_perspective":    str(settings.get("auto_perspective", True)).lower(),
+        "partial_perspective": str(settings.get("partial_perspective", DEFAULT_PARTIAL_PERSPECTIVE)).lower(),
         "shadow_highlight_strength": str(settings.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH)),
-        "sharpen_strength":  str(settings.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH)),
-        "hdr_strength":      str(settings.get("hdr_strength",     DEFAULT_HDR_STRENGTH)),
+        "sharpen_strength":    str(settings.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH)),
+        "hdr_strength":        str(settings.get("hdr_strength",     DEFAULT_HDR_STRENGTH)),
         # Авто-різкість
         "autosharp_threshold":    str(settings.get("autosharp_threshold",    DEFAULT_AUTOSHARP_THRESHOLD)),
         "autosharp_max_strength": str(settings.get("autosharp_max_strength", DEFAULT_AUTOSHARP_MAX_STRENGTH)),
@@ -105,6 +110,7 @@ def save(settings: dict, path=None):
     cfg["printer"] = {
         "printer_name": settings.get("printer_name", DEFAULT_PRINTER_NAME),
     }
+    cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)
     os.makedirs(os.path.dirname(target), exist_ok=True)

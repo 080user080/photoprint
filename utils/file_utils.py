@@ -5,7 +5,23 @@
 
 import os
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".heic", ".heif"}
+# Основні формати (завжди доступні через OpenCV/PIL)
+SUPPORTED_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".heic", ".heif",
+}
+
+# RAW-формати (потребують rawpy, опціонально)
+# Додаємо до SUPPORTED_EXTENSIONS тільки якщо rawpy доступний,
+# щоб filter_supported не показував файли, які loader.load не зможе прочитати
+_RAW_EXTENSIONS = {
+    ".cr2", ".nef", ".arw", ".dng", ".orf", ".rw2", ".srw",
+    ".raf", ".pef", ".x3f", ".3fr", ".raw",
+}
+try:
+    import rawpy  # noqa: F401
+    SUPPORTED_EXTENSIONS.update(_RAW_EXTENSIONS)
+except ImportError:
+    pass
 
 
 def is_supported_image(path: str) -> bool:

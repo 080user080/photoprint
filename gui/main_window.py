@@ -8,15 +8,18 @@ Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено
 
 import os
 import sys
+from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QButtonGroup, QRadioButton,
-    QFileDialog, QProgressBar, QScrollArea, QApplication
+    QFileDialog, QProgressBar, QScrollArea, QApplication,
+    QSystemTrayIcon, QMenu,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
+from PyQt6.QtGui import QIcon
 
 # WM_DROPFILES — єдиний надійний механізм Drag&Drop на Windows 10/11 з PyQt6
 if sys.platform == "win32":
@@ -112,6 +115,14 @@ class MainWindow(QMainWindow):
         # Завантажуємо розмір вікна та ширину черги
         self._load_window_geometry()
 
+        # Трей-іконка (PRIO 9)
+        self._tray_icon: Optional[QSystemTrayIcon] = None
+        self._setup_tray()
+
+        # Debug dump widget geometries for GUI tester
+        if os.environ.get("PHOTOPRINT_DEBUG_WIDGETS") == "1":
+            QTimer.singleShot(1500, self._dump_widget_geometries)
+
         # Drag & Drop реєструємо після показу вікна
         if sys.platform == "win32":
             QTimer.singleShot(DROP_SETUP_DELAY_MS, self._setup_win_drop)
@@ -121,6 +132,67 @@ class MainWindow(QMainWindow):
         register_drop_window(hwnd)
         self._drop_filter = DropEventFilter(self._on_win_drop)
         QApplication.instance().installNativeEventFilter(self._drop_filter)
+
+    def _setup_tray(self):
+        """Ініціалізація QSystemTrayIcon (PRIO 9)."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._logger.debug("Трей недоступний на цій системі")
+            return
+        icon = self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+        self._tray_icon = QSystemTrayIcon(icon, self)
+        self._tray_icon.setToolTip("PhotoPrint")
+
+        menu = QMenu()
+        act_show = menu.addAction("Відкрити")
+        act_show.triggered.connect(self._show_from_tray)
+        menu.addSeparator()
+        act_quit = menu.addAction("Вихід")
+        act_quit.triggered.connect(self._quit_app)
+
+        self._tray_icon.setContextMenu(menu)
+        self._tray_icon.activated.connect(self._on_tray_activated)
+        self._tray_icon.show()
+        self._logger.debug("Трей-іконка створена")
+
+    def _show_from_tray(self):
+        """Показує вікно з трею."""
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason):
+        """Клік по іконці трею — показує/ховає вікно."""
+        if reason in (QSystemTrayIcon.ActivationReason.DoubleClick,
+                      QSystemTrayIcon.ActivationReason.Trigger):
+            if self.isVisible():
+                self.hide()
+            else:
+                self._show_from_tray()
+
+    def _quit_app(self):
+        """Повне завершення програми."""
+        self._save_window_geometry()
+        QApplication.quit()
+
+    def closeEvent(self, event):
+        """
+        Перевизначення closeEvent:
+        - Якщо minimize_to_tray == True — ховаємо в трей.
+        - Інакше — завершуємо програму.
+        """
+        if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
+            self._save_window_geometry()
+            self.hide()
+            self._tray_icon.showMessage(
+                "PhotoPrint",
+                "Програму згорнуто в трей. Натисніть на іконку, щоб відкрити.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000,
+            )
+            event.ignore()
+        else:
+            self._save_window_geometry()
+            event.accept()
 
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
@@ -152,15 +224,20 @@ class MainWindow(QMainWindow):
 
         lbl_q = QLabel("Черга файлів")
         lbl_q.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
+        lbl_q.setObjectName("lbl_queue_title")
 
         self._queue = QueueView()
+        self._queue.setObjectName("queue_view")
         # QueueView.files_dropped — резервний (якщо Qt DnD раптом спрацює)
         self._queue.files_dropped.connect(self._on_win_drop)
         self._queue.selection_changed.connect(self._on_queue_selection)
 
         btn_add    = QPushButton("Додати файли…")
+        btn_add.setObjectName("btn_add_files")
         btn_folder = QPushButton("Додати папку…")
+        btn_folder.setObjectName("btn_add_folder")
         btn_clear  = QPushButton("Очистити чергу")
+        btn_clear.setObjectName("btn_clear_queue")
         for b in (btn_add, btn_folder, btn_clear):
             b.setStyleSheet(self._btn_style())
         btn_add.clicked.connect(self._browse_files)
@@ -204,7 +281,9 @@ class MainWindow(QMainWindow):
         lbl_mode = QLabel("Режим:")
         lbl_mode.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
         self._radio_auto   = QRadioButton("Авто")
+        self._radio_auto.setObjectName("radio_auto")
         self._radio_manual = QRadioButton("Ручний")
+        self._radio_manual.setObjectName("radio_manual")
         self._radio_auto.setStyleSheet("color:#111111;")
         self._radio_manual.setStyleSheet("color:#111111;")
         self._mode_group = QButtonGroup()
@@ -224,6 +303,11 @@ class MainWindow(QMainWindow):
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
         self._btn_save_img  = QPushButton("💾  Зберегти")
+        self._btn_autofix.setObjectName("btn_autofix")
+        self._btn_print.setObjectName("btn_print")
+        self._btn_skip.setObjectName("btn_skip")
+        self._btn_print_all.setObjectName("btn_print_all")
+        self._btn_save_img.setObjectName("btn_save_image")
 
         for b in (self._btn_autofix, self._btn_print,
                   self._btn_skip, self._btn_print_all, self._btn_save_img):
@@ -245,6 +329,7 @@ class MainWindow(QMainWindow):
 
         # Налаштування
         btn_settings = QPushButton("⚙  Налаштування")
+        btn_settings.setObjectName("btn_settings")
         btn_settings.setStyleSheet(self._btn_style("#555555"))
         btn_settings.clicked.connect(self._open_settings)
         buttons_row.addWidget(btn_settings)
@@ -855,3 +940,54 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str):
         self._status.setText(text)
+
+    # ------------------------------------------------------------------
+    # Debug dump для GUI-тестувальника
+    # ------------------------------------------------------------------
+
+    def _dump_widget_geometries(self) -> None:
+        """Записує геометрію всіх віджетів з objectName у JSON для GUITester."""
+        import json
+        from PyQt6.QtCore import QRect
+
+        results_dir = Path("tests/results")
+        results_dir.mkdir(parents=True, exist_ok=True)
+        out_path = results_dir / "widgets_debug.json"
+
+        def _rect_to_dict(r: QRect) -> dict:
+            return {"x": r.x(), "y": r.y(), "width": r.width(), "height": r.height()}
+
+        widgets = {}
+
+        def _collect(widget, depth: int = 0) -> None:
+            name = widget.objectName()
+            if name:
+                gr = widget.geometry()
+                # Convert to global coordinates
+                global_pos = widget.mapToGlobal(widget.rect().topLeft())
+                widgets[name] = {
+                    "x": global_pos.x(),
+                    "y": global_pos.y(),
+                    "width": gr.width(),
+                    "height": gr.height(),
+                    "class": type(widget).__name__,
+                }
+            for child in widget.findChildren(QWidget):
+                child_name = child.objectName()
+                if child_name and child_name not in widgets:
+                    global_pos = child.mapToGlobal(child.rect().topLeft())
+                    child_geom = child.geometry()
+                    widgets[child_name] = {
+                        "x": global_pos.x(),
+                        "y": global_pos.y(),
+                        "width": child_geom.width(),
+                        "height": child_geom.height(),
+                        "class": type(child).__name__,
+                    }
+
+        _collect(self)
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(widgets, f, indent=2, ensure_ascii=False)
+
+        self._logger.debug(f"Widget geometries dumped to {out_path} ({len(widgets)} widgets)")

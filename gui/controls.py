@@ -133,17 +133,20 @@ class ControlsPanel(QWidget):
 
         # Висвітлення тіней
         self._shadow_highlight = _SliderRow("Тіні", SHADOW_HIGHLIGHT_MIN, SHADOW_HIGHLIGHT_MAX, SHADOW_HIGHLIGHT_DEFAULT)
+        self._shadow_highlight.setObjectName("slider_shadow_highlight")
         self._shadow_highlight.changed.connect(self._emit)
         row1.addWidget(self._shadow_highlight)
 
         # Яскравість
         self._brightness = _SliderRow("Яскравість", BRIGHTNESS_MIN, BRIGHTNESS_MAX, BRIGHTNESS_DEFAULT, show_auto=True)
+        self._brightness.setObjectName("slider_brightness")
         self._brightness.changed.connect(self._emit)
         self._brightness.auto_clicked.connect(self.auto_brightness_clicked)
         row1.addWidget(self._brightness)
 
         # Контраст
         self._contrast = _SliderRow("Контраст", CONTRAST_MIN, CONTRAST_MAX, CONTRAST_DEFAULT, show_auto=True)
+        self._contrast.setObjectName("slider_contrast")
         self._contrast.changed.connect(self._emit)
         self._contrast.auto_clicked.connect(self.auto_contrast_clicked)
         row1.addWidget(self._contrast)
@@ -154,12 +157,14 @@ class ControlsPanel(QWidget):
 
         # Різкість
         self._sharpen = _SliderRow("Різкість", SHARPEN_MIN, SHARPEN_MAX, SHARPEN_DEFAULT, show_auto=True)
+        self._sharpen.setObjectName("slider_sharpen")
         self._sharpen.changed.connect(self._emit)
         self._sharpen.auto_clicked.connect(self.auto_sharpen_clicked)
         row2.addWidget(self._sharpen)
 
         # HDR
         self._hdr = _SliderRow("HDR", HDR_MIN, HDR_MAX, HDR_DEFAULT)
+        self._hdr.setObjectName("slider_hdr")
         self._hdr.changed.connect(self._emit)
         row2.addWidget(self._hdr)
 
@@ -168,27 +173,32 @@ class ControlsPanel(QWidget):
         misc_row.setSpacing(8)
 
         self._cb_bw = QCheckBox("Чорно-білий")
+        self._cb_bw.setObjectName("chk_grayscale")
         self._cb_bw.setStyleSheet("color:#111111; font-size:13px;")
         self._cb_bw.toggled.connect(self._emit)
         misc_row.addWidget(self._cb_bw)
 
         btn_pa = QPushButton("Авто-перспектива")
+        btn_pa.setObjectName("btn_persp_auto")
         btn_pa.setStyleSheet("background:#6B8E23; color:white; border:none; border-radius:3px; padding:5px 10px; font-size:12px;")
         btn_pa.clicked.connect(self.perspective_auto_clicked)
         misc_row.addWidget(btn_pa)
 
         btn_pm = QPushButton("Ручна перспектива")
+        btn_pm.setObjectName("btn_persp_manual")
         btn_pm.setStyleSheet("background:#6B8E23; color:white; border:none; border-radius:3px; padding:5px 10px; font-size:12px;")
         btn_pm.clicked.connect(self.perspective_manual_clicked)
         misc_row.addWidget(btn_pm)
 
         btn_persp_reset = QPushButton("Скинути перспективу")
+        btn_persp_reset.setObjectName("btn_persp_reset")
         btn_persp_reset.setStyleSheet("background:#CD853F; color:white; border:none; border-radius:3px; padding:5px 10px; font-size:12px;")
         btn_persp_reset.clicked.connect(self.perspective_reset_clicked)
         misc_row.addWidget(btn_persp_reset)
 
         # Скинути слайдери
         btn_reset = QPushButton("Скинути слайдери")
+        btn_reset.setObjectName("btn_reset_sliders")
         btn_reset.setStyleSheet(
             "background:#888888; color:white; border:none; border-radius:3px; padding:5px 10px; font-size:12px;"
         )

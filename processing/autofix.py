@@ -9,6 +9,7 @@ import numpy as np
 from processing import hdr as hdr_module
 from processing import sharpen as sharpen_module
 from processing import brightness_contrast as bc
+from processing import text_mask as text_mask_module
 
 # Константи для CLAHE
 CLAHE_CLIP_LIMIT = 2.0
@@ -25,14 +26,22 @@ def apply(
     sharpen_strength: float = 0.4,
     hdr_strength: float = 0.5,
     use_hdr: bool = True,
+    adaptive_hdr: bool = False,
 ) -> np.ndarray:
     """
     Повний Auto Fix pipeline для фотографій.
+    adaptive_hdr: якщо True — використовує hdr.apply_adaptive з text_mask
+                  для зменшення ефекту HDR у текстових областях.
     Повертає оброблений uint8 BGR.
     """
     result = _step_lab_clahe_normalize(image, aggressive=False)  # Не агресивний для фото
     if use_hdr:
-        result = hdr_module.apply(result, strength=hdr_strength)
+        if adaptive_hdr:
+            gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+            mask = text_mask_module.text_region_mask(gray)
+            result = hdr_module.apply_adaptive(result, strength=hdr_strength, text_mask=mask)
+        else:
+            result = hdr_module.apply(result, strength=hdr_strength)
     result = sharpen_module.apply(result, strength=sharpen_strength)
     return result
 

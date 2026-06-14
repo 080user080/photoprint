@@ -27,6 +27,7 @@ def run_autofix(
     hdr_strength: float = 0.5,
     use_hdr: bool = True,
     use_perspective: bool = True,
+    partial_perspective: bool = False,
     doc_type: Optional[str] = None,
     bw_binary: bool = False,
     classify_bw_std_thresh: float = 20.0,
@@ -34,6 +35,7 @@ def run_autofix(
     classify_line_count_min: int = 3,
     shadow_highlight_strength: float = 0.0,
     output_color_mode: str = "auto",
+    adaptive_hdr: bool = False,
 ) -> tuple[np.ndarray, str]:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
@@ -49,8 +51,9 @@ def run_autofix(
     bw_binary — чи застосовувати адаптивну бінаризацію для bw_document.
     shadow_highlight_strength — сила висвітлення тіней (0-2.0).
     output_color_mode — формат виходу: "auto" (за типом), "color", "grayscale", "binary".
+    adaptive_hdr — якщо True, використовує hdr.apply_adaptive для фото-документів.
     """
-    result = image
+    result = image.copy()
     status_parts = []
 
     # Спочатку визначаємо тип документа (до будь-якої обробки!)
@@ -74,7 +77,7 @@ def run_autofix(
         status_parts.append(f"підсвічування {shadow_highlight_strength:.2f}")
 
     if use_perspective:
-        corrected, found = perspective.auto_correct(result)
+        corrected, found = perspective.auto_correct(result) if not partial_perspective else perspective.auto_correct_partial(result)
         if found:
             result = corrected
             status_parts.append("перспектива виправлена")
@@ -94,10 +97,14 @@ def run_autofix(
             sharpen_strength=sharpen_strength,
             hdr_strength=hdr_strength,
             use_hdr=use_hdr,
+            adaptive_hdr=adaptive_hdr,
         )
         status_parts.append("фото")
         if use_hdr:
-            status_parts.append("HDR")
+            if adaptive_hdr:
+                status_parts.append("адаптивний HDR")
+            else:
+                status_parts.append("HDR")
 
     status_parts.append(f"різкість {sharpen_strength:.2f}")
 
@@ -157,24 +164,37 @@ def run_classify(
     )
 
 
-def run_hdr(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
-    """Тільки HDR tone mapping."""
+def run_hdr(image: np.ndarray, strength: float = 0.5, adaptive: bool = False) -> np.ndarray:
+    """Тільки HDR tone mapping.
+    adaptive: якщо True — використовує hdr.apply_adaptive з text_mask.
+    """
+    if adaptive:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        from processing import text_mask as text_mask_module
+        mask = text_mask_module.text_region_mask(gray)
+        return hdr.apply_adaptive(image, strength=strength, text_mask=mask)
     return hdr.apply(image, strength=strength)
 
 
-def run_perspective_auto(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def run_perspective_auto(image: np.ndarray, partial: bool = False) -> tuple[np.ndarray, bool]:
     """
     Тільки авто-перспектива.
     Повертає (результат, знайдено).
+    partial: якщо True — використовує apply_partial_correction.
     """
+    if partial:
+        return perspective.auto_correct_partial(image)
     return perspective.auto_correct(image)
 
 
-def run_perspective_manual(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool = False) -> np.ndarray:
     """
     Перспектива за ручними точками.
     corners: float32 array shape (4,2).
+    partial: якщо True — використовує apply_partial_correction.
     """
+    if partial:
+        return perspective.apply_partial_correction(image, corners)
     return perspective.apply_correction(image, corners)
 
 
@@ -232,6 +252,7 @@ def run_manual_adjustments(
     hdr_strength: float = 0.0,
     grayscale: bool = False,
     shadow_highlight_strength: float = 0.0,
+    adaptive_hdr: bool = False,
 ) -> np.ndarray:
     """Застосовує всі ручні корекції в правильному порядку.
 
@@ -250,7 +271,13 @@ def run_manual_adjustments(
     if abs(contrast) > EPSILON:
         result = bc.apply_contrast(result, contrast)
     if hdr_strength > EPSILON:
-        result = hdr.apply(result, strength=hdr_strength)
+        if adaptive_hdr:
+            gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+            from processing import text_mask as text_mask_module
+            mask = text_mask_module.text_region_mask(gray)
+            result = hdr.apply_adaptive(result, strength=hdr_strength, text_mask=mask)
+        else:
+            result = hdr.apply(result, strength=hdr_strength)
     if sharpen_strength > EPSILON:
         result = sharpen.apply(result, strength=sharpen_strength)
     return result

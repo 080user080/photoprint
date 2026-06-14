@@ -1,4 +1,5 @@
 """Автоматизований тестувальник GUI для PhotoPrint"""
+import json
 import subprocess
 import time
 import sys
@@ -6,13 +7,17 @@ import os
 import ctypes
 import threading
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 
 
 class GUITester:
     """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
 
-    def __init__(self, app_path: str, venv_python: Optional[str] = None):
+    # Файли для зберігання геометрії віджетів
+    WIDGETS_DEBUG_JSON = Path("tests/results/widgets_debug.json")
+
+    def __init__(self, app_path: str, venv_python: Optional[str] = None,
+                 debug_mode: bool = False):
         self.app_path = app_path  # шлях до скрипта запуску GUI
         self.venv_python = venv_python  # шлях до python у venv (опціонально)
         self.process: Optional[subprocess.Popen] = None  # subprocess process
@@ -22,11 +27,16 @@ class GUITester:
         self.results_dir = Path("tests/results")
         self.logs_dir = Path("tests/logs")
         self._hwnd: Optional[int] = None  # дескриптор вікна
+        self.debug_mode = debug_mode
+        self._widget_cache: Optional[Dict[str, dict]] = None  # кеш геометрії віджетів
 
     def launch_app(self) -> bool:
         """Запускає GUI додаток через subprocess"""
         python = self.venv_python or sys.executable
         try:
+            env = os.environ.copy()
+            if self.debug_mode:
+                env["PHOTOPRINT_DEBUG_WIDGETS"] = "1"
             self.process = subprocess.Popen(
                 [python, self.app_path],
                 stdout=subprocess.PIPE,
@@ -34,7 +44,8 @@ class GUITester:
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                cwd=str(Path(self.app_path).parent)
+                cwd=str(Path(self.app_path).parent),
+                env=env,
             )
 
             # Читання виводу в окремому потоці
@@ -197,6 +208,78 @@ class GUITester:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        self._widget_cache = None
+
+    # ------------------------------------------------------------------
+    # Методи для роботи з objectName віджетів
+    # ------------------------------------------------------------------
+
+    def load_widget_geometries(self) -> Dict[str, dict]:
+        """Завантажує геометрію віджетів з JSON-файлу (debug dump)."""
+        if self._widget_cache is not None:
+            return self._widget_cache
+        json_path = self.WIDGETS_DEBUG_JSON
+        if not json_path.exists():
+            print(f"[WARN] Файл геометрії віджетів не знайдено: {json_path}")
+            print("[INFO] Запустіть додаток з PHOTOPRINT_DEBUG_WIDGETS=1")
+            self._widget_cache = {}
+            return self._widget_cache
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                self._widget_cache = json.load(f)
+            print(f"[OK] Завантажено геометрію {len(self._widget_cache)} віджетів")
+            return self._widget_cache
+        except Exception as e:
+            print(f"[ERROR] Помилка читання JSON віджетів: {e}")
+            self._widget_cache = {}
+            return self._widget_cache
+
+    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
+        """Повертає глобальну геометрію віджета за objectName."""
+        widgets = self.load_widget_geometries()
+        if object_name not in widgets:
+            print(f"[WARN] Віджет з objectName='{object_name}' не знайдено")
+            print(f"[INFO] Доступні: {', '.join(sorted(widgets.keys()))}")
+            return None
+        return widgets[object_name]
+
+    def click_widget(self, object_name: str) -> bool:
+        """Клікає по центру віджета, знайденого за objectName."""
+        geom = self.get_widget_geometry(object_name)
+        if geom is None:
+            return False
+        cx = geom["x"] + geom["width"] // 2
+        cy = geom["y"] + geom["height"] // 2
+        try:
+            import pyautogui
+            pyautogui.click(cx, cy)
+            print(f"[OK] Клік по віджету '{object_name}': ({cx}, {cy})")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка кліку по віджету '{object_name}': {e}")
+            return False
+
+    def get_status_text(self) -> Optional[str]:
+        """Повертає текст статусного рядка (objectName='status_label')."""
+        # Не використовуємо get_widget_geometry бо текст не зберігається в JSON
+        # Використовуємо win32gui для пошуку тексту вікна
+        return None
+
+    def wait_for_widget(self, object_name: str, timeout: float = 10.0,
+                        poll_interval: float = 0.5) -> Optional[Dict[str, int]]:
+        """Чекає поки віджет з'явиться у debug dump."""
+        start = time.time()
+        self._widget_cache = None  # скидаємо кеш щоб перечитати
+        while time.time() - start < timeout:
+            geom = self.get_widget_geometry(object_name)
+            if geom is not None:
+                return geom
+            time.sleep(poll_interval)
+        print(f"[WARN] Віджет '{object_name}' не з'явився за {timeout}с")
+        return None
 
     def setup_directories(self) -> None:
         """Створює необхідні директорії"""
