@@ -36,4 +36,4 @@ git push origin main
 echo.
 echo === Sync complete! ===
 echo.
-timeout /t 5
+timeout /t 3
