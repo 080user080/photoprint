@@ -17,7 +17,7 @@ DEFAULT_HDR_STRENGTH = 0.5
 DEFAULT_SHADOW_HIGHLIGHT_STRENGTH = 0.0
 DEFAULT_AUTOSHARP_THRESHOLD = 80.0
 DEFAULT_AUTOSHARP_MAX_STRENGTH = 0.7
-DEFAULT_CLASSIFY_BW_STD_THRESH = 20.0
+DEFAULT_CLASSIFY_BW_STD_THRESH = 10.0
 DEFAULT_CLASSIFY_EDGE_RATIO_MIN = 0.03
 DEFAULT_CLASSIFY_LINE_COUNT_MIN = 3
 DEFAULT_AUTO_PERCENTILE_LOW = 5.0
@@ -27,6 +27,8 @@ DEFAULT_OUTPUT_COLOR_MODE = "auto"  # auto / color / grayscale / binary
 DEFAULT_PRINTER_NAME = "priPrinter"
 DEFAULT_PARTIAL_PERSPECTIVE = False  # PRIO 2: часткова перспектива
 DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
+DEFAULT_AUTOFIX_CONTRAST = 0.15
+DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
 
 
 def _get_path(path=None):
@@ -67,7 +69,9 @@ def load(path=None) -> dict:
         "jpg_quality":       cfg.getint("output",        "jpg_quality",         fallback=DEFAULT_JPG_QUALITY),
         "save_folder":       cfg.get("output",           "save_folder",         fallback=""),
         "printer_name":      cfg.get("printer",          "printer_name",        fallback=DEFAULT_PRINTER_NAME),
+        "autofix_contrast":  cfg.getfloat("processing",  "autofix_contrast",    fallback=DEFAULT_AUTOFIX_CONTRAST),
         "minimize_to_tray":  cfg.getboolean("general",   "minimize_to_tray",    fallback=DEFAULT_MINIMIZE_TO_TRAY),
+        "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
     }
 
 
@@ -110,6 +114,8 @@ def save(settings: dict, path=None):
     cfg["printer"] = {
         "printer_name": settings.get("printer_name", DEFAULT_PRINTER_NAME),
     }
+    cfg["processing"]["autofix_contrast"] = str(settings.get("autofix_contrast", DEFAULT_AUTOFIX_CONTRAST))
+    cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)

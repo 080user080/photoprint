@@ -21,6 +21,30 @@ class DocType(str, Enum):
 EPSILON = 0.001  # Поріг для ігнорування дуже малих значень
 
 
+def run_contrast_advanced(image: np.ndarray, value: float, mode: str = "linear") -> np.ndarray:
+    """
+    Застосовує контраст вибраним методом.
+    mode: "linear", "percentile", "s_curve", "adaptive".
+    Для нелінійних методів використовується тільки додатна сила (0..1).
+    """
+    if abs(value) < EPSILON:
+        return image.copy()
+    if mode == "linear":
+        return bc.apply_contrast(image, value)
+    # Для нелінійних методів — тільки додатна сила
+    strength = max(0.0, value)
+    if strength < EPSILON:
+        return image.copy()
+    if mode == "percentile":
+        return bc.smart_contrast_percentile(image, strength=strength)
+    elif mode == "s_curve":
+        return bc.contrast_s_curve(image, strength=strength)
+    elif mode == "adaptive":
+        return bc.local_contrast_adaptive(image, strength=strength)
+    else:
+        return bc.apply_contrast(image, value)
+
+
 def run_autofix(
     image: np.ndarray,
     sharpen_strength: float = 0.4,
@@ -36,6 +60,8 @@ def run_autofix(
     shadow_highlight_strength: float = 0.0,
     output_color_mode: str = "auto",
     adaptive_hdr: bool = False,
+    autofix_contrast: float = 0.15,
+    contrast_mode: str = "linear",
 ) -> tuple[np.ndarray, str]:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
@@ -52,6 +78,7 @@ def run_autofix(
     shadow_highlight_strength — сила висвітлення тіней (0-2.0).
     output_color_mode — формат виходу: "auto" (за типом), "color", "grayscale", "binary".
     adaptive_hdr — якщо True, використовує hdr.apply_adaptive для фото-документів.
+    contrast_mode — метод контрасту ("linear", "percentile", "s_curve", "adaptive").
     """
     result = image.copy()
     status_parts = []
@@ -108,8 +135,8 @@ def run_autofix(
 
     status_parts.append(f"різкість {sharpen_strength:.2f}")
 
-    # Трохи додаткового контрасту в кінці циклу
-    result = bc.apply_contrast(result, 0.15)
+    # Додатковий контраст в кінці циклу (налаштовується)
+    result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
 
     # Формат виходу: якщо не "auto" — примусово конвертуємо
     if output_color_mode == "grayscale":
@@ -253,6 +280,7 @@ def run_manual_adjustments(
     grayscale: bool = False,
     shadow_highlight_strength: float = 0.0,
     adaptive_hdr: bool = False,
+    contrast_mode: str = "linear",
 ) -> np.ndarray:
     """Застосовує всі ручні корекції в правильному порядку.
 
@@ -269,7 +297,7 @@ def run_manual_adjustments(
     if abs(brightness) > EPSILON:
         result = bc.apply_brightness(result, brightness)
     if abs(contrast) > EPSILON:
-        result = bc.apply_contrast(result, contrast)
+        result = run_contrast_advanced(result, contrast, contrast_mode)
     if hdr_strength > EPSILON:
         if adaptive_hdr:
             gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)

@@ -1,540 +1,559 @@
-# PhotoPrint — детальний план робіт для агента кодування
+# Фінальний план реалізації адаптивного Full Auto pipeline для PhotoPrint
 
-Документ складено на основі повного зрізу коду проєкту (`status.md`, `processing/perspective.py`,
-`processing/pipeline.py`, `gui/main_window.py`, `config/app_settings.py` та ін.).
-Завдання впорядковані за пріоритетом. Кожне завдання містить: мету, файли, кроки реалізації,
-зміни в налаштуваннях/GUI (якщо потрібні) та критерії приймання.
+## Принципи реалізації
 
----
+Перед деталями — кілька незмінних правил для агента:
 
-## 0. Загальні правила для агента (читати перед будь-якою зміною)
+Ніколи не видаляти і не змінювати існуючий `run_autofix` — він залишається стабільним режимом. `run_full_auto` — це окремий оркестратор поверх вже наявних примітивів.
 
-1. **Архітектура не змінюється без потреби**: `gui/*` звертається тільки до `processing/pipeline.py`
-   та `batch/batch_processor.py`. Жодна функція в `processing/*`, `core/*`, `utils/*` не повинна
-   імпортувати щось з `gui/*`.
-2. **Immutability вхідних зображень**: будь-яка функція обробки повертає **новий** масив
-   (`.copy()` або операція, що створює новий буфер). Вхідний `image: np.ndarray` ніколи не
-   модифікується in-place.
-3. **Стиль коду**: type hints у сигнатурах, docstring українською для кожної публічної функції,
-   константи (магічні числа) — на початку файлу великими літерами, логування через
-   `utils.logger.get_logger(__name__)` рівнем `debug` для деталей алгоритму та `error` для винятків.
-4. **Налаштування** йдуть по ланцюжку: `config/app_settings.py` (default-константа + `load`/`save`)
-   → `dict settings` у `main_window` / `BatchProcessor` → елемент GUI (`controls.py` або
-   `settings_window.py`) → kwargs у `processing/pipeline.py`. Будь-яка нова "ручка" має пройти
-   весь ланцюжок, інакше вона буде "мертвою".
-5. **Тестування**: перед і після кожної задачі запускати наявні сценарії
-   `tests/scenarios/*.py` (там, де вони вже функціональні), а для нової логіки — додавати
-   юніт-тест у `tests/` (директорія `tests/unit/` — створити, якщо немає) для `processing/*`
-   без залежності від GUI.
-6. Кожне завдання нижче — окремий комміт/PR з описом і (за можливості) скриншотом
-   до/після з `tests/test_images`.
+Діагностичні метрики повертають не тільки `bool` але й числове значення сили — це множник, а не перемикач. Умова "застосувати чи ні" замінюється на "застосувати з силою X", де X може бути дуже малим числом що практично еквівалентно "не застосовувати".
+
+Після кожного кроку що суттєво змінює гістограму або геометрію — частково перераховувати діагностику перед наступним кроком.
+
+Реалізовувати поетапно: спочатку тільки діагностика і логування, потім поступово додавати корекції в порядку зростання ризику артефактів.
 
 ---
 
-## ПРІОРИТЕТ 1 (КРИТИЧНО) — Захист оригіналу від змін (immutability)
+## Фаза А — Модуль діагностики (нульовий ризик)
 
-**Мета**: гарантувати, що `self._orig` у `gui/main_window.py` та вхідні масиви в усіх функціях
-`processing/*` ніколи не мутуються, а прев'ю "До" завжди показує справжній оригінал.
+### Файл `processing/diagnostics.py` — створити новий
 
-### Файли та кроки
-
-1. **Аудит `processing/*`** — перевірити кожну публічну функцію на наявність in-place операцій
-   (`img[...] = `, `cv2.LUT` без присвоєння в новий масив, `+=`, `cv2.divide`/`cv2.add` з
-   параметром `dst=`):
-   - `processing/autofix.py`: `apply`, `apply_bw_document`, `apply_color_document`,
-     `_step_lab_clahe_normalize`
-   - `processing/brightness_contrast.py`: `apply_brightness`, `auto_brightness`,
-     `apply_contrast`, `auto_contrast`, `to_grayscale`
-   - `processing/hdr.py`: `apply`
-   - `processing/sharpen.py`: `apply`, `auto_apply`
-   - `processing/shadow_remove.py`: `remove_shadow`, `auto_remove_shadow`
-   - `processing/shadow_highlight.py`: `apply_shadow_highlight`
-   - `processing/perspective.py`: `apply_correction` (warpPerspective повертає новий буфер —
-     перевірити лише, що `image` не передається в операції з `dst=image`)
-   - Там, де знайдено ризик — додати `.copy()` на вході функції або перед першою модифікуючою
-     операцією.
-
-2. **Аудит `gui/main_window.py`**:
-   - `_on_persp_pts` (рядок ~1497) передає `self._orig` напряму в
-     `pipeline.run_perspective_manual(self._orig, corners)`. Перевірити, що результат —
-     новий масив, і `self._orig` не змінено.
-   - Перевірити всі місця, де `self._orig` передається у `pipeline.*`
-     (`_do_autofix`, `_do_persp_manual`, `_show_perspective_points`) — жодного присвоєння
-     назад у `self._orig`.
-   - `_do_persp_reset`, `_do_reset_all`, завантаження нового файлу (`set_files`/відкриття) —
-     перевірити, що `self._base = self._orig.copy()` і `self._processed = self._orig.copy()`
-     завжди створюють копії (вже є — звірити, що жодне місце не присвоює без `.copy()`).
-
-3. **Тест immutability** — створити `tests/unit/test_immutability.py`:
-   ```python
-   import numpy as np
-   from processing import autofix, brightness_contrast as bc, hdr, sharpen, \
-       shadow_remove, shadow_highlight, perspective
-
-   def _check(fn, image, **kwargs):
-       before = image.copy()
-       fn(image, **kwargs)
-       assert np.array_equal(image, before), f"{fn.__name__} змінив вхідне зображення"
-   ```
-   Перевірити кожну функцію зі списку п.1 на тестовому зображенні
-   (`tests/test_images/sample.jpg`, BGR uint8, ~800x600).
-
-4. **Критерії приймання**:
-   - Тест `test_immutability.py` зелений для всіх перелічених функцій.
-   - Ручна перевірка в GUI: відкрити файл → застосувати Auto Fix → застосувати перспективу
-     (авто і ручну) → натиснути "Скинути перспективу" і "Скинути все" → прев'ю "До" у всіх
-     випадках показує саме оригінал, без артефактів попередньої обробки.
-
----
-
-## ПРІОРИТЕТ 2 (ВИСОКИЙ) — Часткова корекція перспективи
-
-**Мета**: коли одна сторона документа крива, а інші три прямі — виправляти тільки криву сторону,
-не деформуючи решту зображення.
-
-### 2.1 Нова логіка в `processing/perspective.py`
-
-Додати після `_order_points`:
+#### Константи на початку файлу
 
 ```python
-# Поріг "кривизни" сторони — у частках від відповідного розміру (не в пікселях!),
-# бо кути повертаються у координатах оригінального (повнорозмірного) зображення.
-PARTIAL_SKEW_THRESHOLD_RATIO = 0.01  # 1% від ширини/висоти документа
+DIAGNOSTICS_RESIZE_MAX = 600       # розмір для швидкої діагностики
 
-def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
-    """
-    pts: впорядковані [TL, TR, BR, BL].
-    Повертає {"top": bool, "bottom": bool, "left": bool, "right": bool} —
-    True, якщо відповідна пара кутів відхиляється від "прямої" сторони
-    більше ніж на PARTIAL_SKEW_THRESHOLD_RATIO від розміру документа.
-    """
-    tl, tr, br, bl = pts
-    width = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl), 1.0)
-    height = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr), 1.0)
-    thr_w = width * PARTIAL_SKEW_THRESHOLD_RATIO
-    thr_h = height * PARTIAL_SKEW_THRESHOLD_RATIO
-    return {
-        "top":    abs(tl[1] - tr[1]) > thr_h,
-        "bottom": abs(bl[1] - br[1]) > thr_h,
-        "left":   abs(tl[0] - bl[0]) > thr_w,
-        "right":  abs(tr[0] - br[0]) > thr_w,
-    }
+GRADIENT_L_DIFF_THRESHOLD = 30     # мінімальна різниця медіан для "є градієнт"
+GRADIENT_L_MAX_EXPECTED = 120      # "максимальний" очікуваний діапазон (для нормалізації)
 
+CONTRAST_RANGE_THRESHOLD = 160     # якщо p99-p1 < цього — контраст низький
+CONTRAST_RANGE_MAX = 254           # максимально можливий діапазон
 
-def apply_partial_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """
-    Виправляє перспективу лише для "кривих" сторін документа.
-    Якщо жодна сторона не крива — повертає копію без змін.
-    Якщо всі 4 сторони криві — делегує в apply_correction (повна корекція).
-    """
-    pts = _order_points(corners.astype(np.float32))
-    skew = detect_skewed_sides(pts)
+BLUR_THRESHOLD = 80.0              # збіг з autosharp_threshold в налаштуваннях
+BLUR_MAX_VARIANCE = 500.0          # вище цього — "достатньо різке"
 
-    if not any(skew.values()):
-        return image.copy()
-    if all(skew.values()):
-        return apply_correction(image, corners)
+DARK_MEAN_THRESHOLD = 80           # середнє L нижче цього — "занадто темне"
+BRIGHT_MEAN_THRESHOLD = 200        # середнє L вище цього — "занадто світле"
+OVEREXPOSED_L_THRESHOLD = 250      # пікселі вище цього вважаються пересвіченими
+UNDEREXPOSED_L_THRESHOLD = 5       # пікселі нижче цього вважаються недосвіченими
 
-    adjusted = pts.copy()
-    tl, tr, br, bl = 0, 1, 2, 3
-
-    if skew["top"]:
-        y = (pts[tl][1] + pts[tr][1]) / 2.0
-        adjusted[tl][1] = y
-        adjusted[tr][1] = y
-    if skew["bottom"]:
-        y = (pts[bl][1] + pts[br][1]) / 2.0
-        adjusted[bl][1] = y
-        adjusted[br][1] = y
-    if skew["left"]:
-        x = (pts[tl][0] + pts[bl][0]) / 2.0
-        adjusted[tl][0] = x
-        adjusted[bl][0] = x
-    if skew["right"]:
-        x = (pts[tr][0] + pts[br][0]) / 2.0
-        adjusted[tr][0] = x
-        adjusted[br][0] = x
-
-    # dst — той самий bounding rect, що й adjusted-точки (без розтягування на весь прямокутник,
-    # щоб не деформувати прямі сторони)
-    dst, width, height = _compute_destination(adjusted)
-    M = cv2.getPerspectiveTransform(pts, dst)
-    return cv2.warpPerspective(
-        image, M, (width, height),
-        borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255),
-    )
+PERSPECTIVE_SKEW_THRESHOLD = 0.03  # 3% від розміру зображення — мінімальне викривлення
 ```
 
-> Примітка: `_compute_destination` уже існує і додає `PADDING_RATIO`. Перевірити, що він
-> коректно працює і для "adjusted" точок (не лише для чотирикутника з реальної детекції).
+#### Клас `DiagnosticResult`
 
-### 2.2 Інтеграція в `processing/pipeline.py`
+Реалізувати як `@dataclass`. Поля:
 
-- Додати параметр `partial: bool = False` до:
-  - `run_perspective_auto(image, partial=False)` → викликає
-    `perspective.auto_correct(image, partial=partial)`
-  - `run_perspective_manual(image, corners, partial=False)` → викликає
-    `perspective.apply_partial_correction` якщо `partial=True`, інакше `apply_correction`
-- У `perspective.auto_correct` додати параметр `partial: bool = False`, який після
-  `auto_detect_corners` обирає `apply_partial_correction` або `apply_correction`.
-- У `run_autofix` додати параметр `partial_perspective: bool = False` і прокинути його у
-  `perspective.auto_correct(result, partial=partial_perspective)`.
+```
+doc_type: str                    # "bw_document" / "color_document" / "photo"
 
-### 2.3 Налаштування (`config/app_settings.py`)
+# Градієнт фону
+gradient_has: bool
+gradient_strength: float         # 0..1, нормалізована сила
+gradient_direction: str          # "horizontal" / "vertical" / "both" / "none"
 
-- Додати константу `DEFAULT_PARTIAL_PERSPECTIVE = False`.
-- У `load()`: `"partial_perspective": cfg.getboolean("processing", "partial_perspective", fallback=DEFAULT_PARTIAL_PERSPECTIVE)`.
-- У `save()`: відповідний запис у секцію `processing`.
+# Контраст
+contrast_range_l: float          # p99 - p1 каналу L
+contrast_strength_needed: float  # 0..1, наскільки потрібна корекція
+overexposed_ratio: float         # частка пікселів > 250
+underexposed_ratio: float        # частка пікселів < 5
 
-### 2.4 GUI
+# Яскравість
+brightness_mean_l: float         # середнє L
+brightness_correction: float     # -1..1, відхилення від нейтрального
 
-- `gui/controls.py`: додати чекбокс/перемикач "Часткова перспектива" поруч із кнопками
-  перспективи (`perspective_auto_clicked` тощо). Прокинути сигнал зміни так само, як інші
-  чекбокси (наприклад grayscale).
-- `gui/main_window.py`:
-  - `_do_persp_auto`: прочитати значення чекбокса (`self._controls.values()["partial_perspective"]`
-    або з `self._settings`) і передати `partial=...` у `pipeline.run_perspective_manual(self._base, corners, partial=...)`.
-  - `_on_persp_pts` (ручна корекція через 4 точки прев'ю): аналогічно передати `partial=...`
-    у `pipeline.run_perspective_manual(self._orig, corners, partial=...)`.
-  - `_do_autofix`: якщо `self._perspective_corners is not None`, прокинути `partial=...` у
-    повторне застосування перспективи після Auto Fix.
-- `gui/settings_window.py`: за потреби — дублюючий перемикач у глобальних налаштуваннях
-  (значення за замовчуванням для нових файлів), синхронізований із `app_settings`.
+# Розмиття
+blur_variance: float             # Laplacian variance
+blur_strength_needed: float      # 0..1, наскільки потрібна різкість
+blur_sharpen_strength: float     # конкретне значення сили різкості 0..1
 
-### 2.5 Тести
+# Перспектива
+perspective_has: bool
+perspective_corners: np.ndarray | None   # shape (4,2) або None
+perspective_skew_ratio: float    # відносне відхилення від прямокутника
+```
 
-- `tests/scenarios/test_partial_perspective_detection.py` — перевірити `detect_skewed_sides`
-  на синтетичних наборах точок (одна сторона крива, дві криві, всі рівні, всі криві).
-- `tests/scenarios/test_partial_perspective_warp.py` — на тестовому зображенні з кривою тільки
-  однією стороною: перевірити, що прямі сторони залишились на тих самих координатах
-  (порівняти кути результату з вхідними поза "кривою" зоною).
-- `tests/scenarios/test_full_vs_partial_perspective.py` — порівняти результати `apply_correction`
-  і `apply_partial_correction` на тому ж зображенні для документації різниці.
+#### Функція `_resize_for_analysis(image, max_dim) -> np.ndarray`
 
-### Критерії приймання
+Внутрішня (з підкресленням). Зменшує зображення до `max_dim` по більшій стороні якщо більше. Повертає копію або оригінал якщо вже менше. Використовується усіма діагностичними функціями крім `_measure_perspective`.
 
-- При перемиканні "Часткова перспектива" в GUI результат авто- та ручної перспективи змінюється
-  відповідно.
-- На зображенні з ідеально прямими 3 сторонами і кривою 1 — після часткової корекції 3 сторони
-  не змінили положення (з точністю до 1-2px).
-- На зображенні де всі 4 сторони рівні — `apply_partial_correction` повертає копію без
-  візуальних змін.
+#### Функція `_measure_gradient(image) -> tuple[bool, float, str]`
+
+Алгоритм:
+- Взяти L-канал (LAB).
+- Розбити на сітку 4×4 блоки (16 блоків).
+- Для кожного блоку обчислити медіану L.
+- Побудувати матрицю медіан 4×4.
+- `diff_total = max_медіана - min_медіана`.
+- `std_rows = np.std(np.mean(matrix, axis=1))` — варіація по рядках (горизонтальний градієнт).
+- `std_cols = np.std(np.mean(matrix, axis=0))` — варіація по стовпцях (вертикальний градієнт).
+- `has_gradient = diff_total > GRADIENT_L_DIFF_THRESHOLD`.
+- `strength = min(1.0, diff_total / GRADIENT_L_MAX_EXPECTED)`.
+- `direction`: якщо `std_cols > std_rows * 1.5` → `"horizontal"`, якщо `std_rows > std_cols * 1.5` → `"vertical"`, якщо обидва значні → `"both"`, інакше → `"none"`.
+- Повернути `(has_gradient, strength, direction)`.
+
+#### Функція `_measure_contrast(image) -> tuple[float, float, float, float]`
+
+Алгоритм:
+- Взяти L-канал.
+- `p1 = np.percentile(L, 1)`, `p99 = np.percentile(L, 99)`.
+- `range_l = p99 - p1`.
+- `strength_needed = max(0.0, (CONTRAST_RANGE_THRESHOLD - range_l) / CONTRAST_RANGE_THRESHOLD)` — якщо діапазон широкий то `strength_needed = 0`.
+- `overexposed_ratio = float(np.mean(L > OVEREXPOSED_L_THRESHOLD))`.
+- `underexposed_ratio = float(np.mean(L < UNDEREXPOSED_L_THRESHOLD))`.
+- Повернути `(range_l, strength_needed, overexposed_ratio, underexposed_ratio)`.
+
+#### Функція `_measure_brightness(image) -> tuple[float, float]`
+
+Алгоритм:
+- Взяти L-канал.
+- `mean_l = float(np.mean(L))`.
+- `correction = (127.0 - mean_l) / 127.0` — позитивне якщо темне, негативне якщо світле.
+- Обмежити `correction` в `[-1.0, 1.0]`.
+- Повернути `(mean_l, correction)`.
+
+#### Функція `_measure_blur(image, settings) -> tuple[float, float, float]`
+
+Алгоритм:
+- Викликати існуючий `sharpen.measure_sharpness(image)` → `variance`.
+- `max_sharpen = settings.get("autosharp_max_strength", 0.7)`.
+- `threshold = settings.get("autosharp_threshold", BLUR_THRESHOLD)`.
+- Якщо `variance >= threshold` → `strength_needed = 0.0`, `sharpen_strength = 0.0`.
+- Інакше: `strength_needed = max(0.0, 1.0 - variance / threshold)`, `sharpen_strength = max(0.15, strength_needed * max_sharpen)`.
+- Повернути `(variance, strength_needed, sharpen_strength)`.
+
+#### Функція `_measure_perspective(image) -> tuple[bool, np.ndarray | None, float]`
+
+Алгоритм:
+- Викликати `perspective.auto_detect_corners(image)` → `corners`.
+- Якщо `corners is None` → повернути `(False, None, 0.0)`.
+- `ordered = perspective._order_points(corners)`.
+- `tl, tr, br, bl = ordered`.
+- `top_skew = abs(tl[1] - tr[1])`, `bottom_skew = abs(bl[1] - br[1])`.
+- `left_skew = abs(tl[0] - bl[0])`, `right_skew = abs(tr[0] - br[0])`.
+- `max_skew = max(top_skew, bottom_skew, left_skew, right_skew)`.
+- `h, w = image.shape[:2]`.
+- `skew_ratio = max_skew / max(h, w)`.
+- `has_perspective = skew_ratio > PERSPECTIVE_SKEW_THRESHOLD`.
+- Повернути `(has_perspective, corners if has_perspective else None, skew_ratio)`.
+
+**Важливо:** ця функція не викликає `_resize_for_analysis` бо `auto_detect_corners` вже має власний `max_dim` параметр.
+
+#### Функція `_measure_doc_type(image, settings) -> str`
+
+Просто викликає існуючий `doc_classifier.classify(image, bw_std_thresh=settings.get(...), ...)`. Повертає рядок.
+
+#### Головна функція `diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult`
+
+Алгоритм:
+- `small = _resize_for_analysis(image, DIAGNOSTICS_RESIZE_MAX)`.
+- Послідовно викликати всі `_measure_*` функції на `small` (крім `_measure_perspective` — викликати на оригіналі `image`).
+- Зібрати `DiagnosticResult` з усіх результатів.
+- Повернути.
+
+**Вхідне зображення не змінювати ніде в цьому файлі.**
+
+#### Функція `partial_rediagnose(image: np.ndarray, settings: dict, fields: list[str]) -> dict`
+
+Для часткового перерахунку після проміжних кроків. Приймає список полів для перерахунку (`["contrast", "brightness", "blur"]`), повертає словник з оновленими значеннями. Не перераховує перспективу і тип документа (вони не змінюються після тональних корекцій).
 
 ---
 
-## ПРІОРИТЕТ 3 (ВИСОКИЙ) — Покращення авто-детекції кутів (`processing/perspective.py`)
+## Фаза Б — Низький ризик: різкість і яскравість
 
-Поточна реалізація вже має resize→800px, AdaptiveThreshold (обидва напрямки), Canny, fallback
-bounding box, перевірку площі/пропорцій, MORPH_CLOSE, padding 6%. Нижче — конкретні доопрацювання
-з попереднього аналізу багів.
+### Файл `processing/pipeline.py` — додати функцію `run_full_auto`
 
-### 3.1 Захист fallback від "рамки фото / столу" (solidity + border-touch)
-
-У `_try_largest_contour` та у блоці "більше 4 кутів" в `_find_quad_contour`:
-
-- Додати функцію:
-  ```python
-  BORDER_MARGIN_PX = 2
-  MAX_BORDER_AREA_RATIO = 0.92  # контур, що майже = всьому кадру — підозра на фон/стіл
-
-  def _touches_image_border(cnt: np.ndarray, shape: tuple, margin: int = BORDER_MARGIN_PX) -> bool:
-      h, w = shape[:2]
-      x, y, bw, bh = cv2.boundingRect(cnt)
-      return x <= margin or y <= margin or (x + bw) >= (w - margin) or (y + bh) >= (h - margin)
-  ```
-- Якщо контур торкається межі зображення **і** його площа > `MAX_BORDER_AREA_RATIO * image_area`
-  — пропускати цей контур (ймовірно це фон/стіл/рамка кадру, а не документ).
-- Додати solidity-перевірку (компактність форми):
-  ```python
-  MIN_SOLIDITY = 0.85
-
-  def _solidity(cnt: np.ndarray) -> float:
-      area = cv2.contourArea(cnt)
-      hull_area = cv2.contourArea(cv2.convexHull(cnt))
-      return area / hull_area if hull_area > 0 else 0.0
-  ```
-  Використовувати як додаткову умову у `_validate_document` (`solidity >= MIN_SOLIDITY`).
-
-### 3.2 Адаптивний epsilon для `approxPolyDP`
-
-Замінити одиничний `APPROX_POLY_EPSILON = 0.02` на список спроб:
+Повна сигнатура:
 
 ```python
-APPROX_POLY_EPSILONS = (0.01, 0.02, 0.03, 0.04)
+def run_full_auto(
+    image: np.ndarray,
+    settings: dict,
+    dry_run: bool = False,
+) -> tuple[np.ndarray, str, dict]
 ```
 
-У `_find_quad_contour` для кожного контуру з `contours[:CONTOURS_TO_CHECK]` пробувати кожен
-epsilon з `APPROX_POLY_EPSILONS` по черзі, поки не отримаємо `len(approx) == 4` і
-`_validate_document(...) == True`. Це знижує залежність результату від "магічного" одного
-значення.
+Параметр `dry_run=True` — тільки діагностика, нічого не застосовувати, повернути `(image.copy(), status, applied_steps)`. Це для Фази А логування.
 
-### 3.3 Sub-pixel уточнення кутів (cornerSubPix)
+Повертає: `(result, status_message, applied_steps)` де `applied_steps: dict[str, float | bool]` — що було застосовано і з якою силою.
 
-Після того, як 4 кути знайдено (у `_detect_corners_impl`, перед поверненням `corners_small`),
-застосувати `cv2.cornerSubPix` для уточнення позицій:
+#### Внутрішня структура `run_full_auto`
+
+**Ініціалізація:**
+```
+result = image.copy()
+applied_steps = {}
+status_parts = []
+```
+
+**Крок 0 — Діагностика:**
+```
+from processing import diagnostics
+diag = diagnostics.diagnose(image, settings)
+```
+Якщо `dry_run`: зібрати статус з діагностики і одразу повернути.
+
+**Крок 1 — Видалення градієнтного фону:**
+
+Умова застосування:
+- `diag.gradient_has is True`.
+- `diag.doc_type != "photo"` (для фото — пропустити повністю на старті).
+- `diag.gradient_strength > 0.3` (тільки якщо градієнт достатньо сильний).
+
+Якщо умова виконана:
+- `result, had_shadow = shadow_remove.auto_remove_shadow(result)`.
+- Якщо `had_shadow`: `applied_steps["shadow_remove"] = diag.gradient_strength`.
+
+Після цього кроку — частковий перерахунок:
+- `updated = diagnostics.partial_rediagnose(result, settings, ["contrast", "brightness"])`.
+- Оновити `diag.contrast_range_l`, `diag.contrast_strength_needed`, `diag.brightness_mean_l`, `diag.brightness_correction` з `updated`.
+
+**Крок 2 — Корекція перспективи:**
+
+Умова: `diag.perspective_has is True`.
+
+Якщо умова:
+- `result = perspective.apply_correction(result, diag.perspective_corners)`.
+- `applied_steps["perspective"] = diag.perspective_skew_ratio`.
+
+Після цього кроку — частковий перерахунок:
+- `updated = diagnostics.partial_rediagnose(result, settings, ["contrast", "brightness", "blur"])`.
+- Оновити відповідні поля `diag`.
+
+**Крок 3 — Яскравість:**
+
+Не бінарне рішення — завжди обчислювати силу:
+- `brightness_strength = abs(diag.brightness_correction)`.
+- Мінімальний поріг застосування: `if brightness_strength < 0.05: пропустити`.
+- Якщо `diag.brightness_correction > 0` (темне): `result = bc.auto_brightness(result, percentile_low=2.0, percentile_high=98.0)`.
+- Якщо `diag.brightness_correction < 0` (світле): `result = bc.auto_brightness(result, percentile_low=5.0, percentile_high=95.0)`.
+- `applied_steps["brightness"] = brightness_strength`.
+
+Після — частковий перерахунок контрасту:
+- `updated = diagnostics.partial_rediagnose(result, settings, ["contrast"])`.
+- Оновити `diag.contrast_strength_needed`.
+
+**Крок 4 — Контраст:**
+
+- `contrast_strength = diag.contrast_strength_needed`.
+- Мінімальний поріг: `if contrast_strength < 0.05: пропустити`.
+- Обмеження зверху: `contrast_strength = min(contrast_strength, 0.85)` — не перестаратись.
+- `contrast_mode = settings.get("contrast_mode", "linear")`.
+- `result = run_contrast_advanced(result, contrast_strength, contrast_mode)`.
+- `applied_steps["contrast"] = contrast_strength`.
+
+Після — частковий перерахунок розмиття:
+- `updated = diagnostics.partial_rediagnose(result, settings, ["blur"])`.
+- Оновити `diag.blur_sharpen_strength`.
+
+**Крок 5 — HDR (тільки для фото):**
+
+Умова: `diag.doc_type == "photo" AND settings.get("hdr_in_autofix", True)`.
+- `hdr_strength = settings.get("hdr_strength", 0.5)`.
+- `result = hdr.apply_adaptive(result, strength=hdr_strength)`.
+- `applied_steps["hdr"] = hdr_strength`.
+
+**Крок 6 — Специфічна обробка по типу документа:**
+
+- `sharpen_strength = diag.blur_sharpen_strength` (або `settings.get("sharpen_strength", 0.4)` якщо `blur_sharpen_strength == 0`).
+- `doc_type == "bw_document"`: `result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=settings.get("bw_binary", False))`.
+- `doc_type == "color_document"`: `result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)`.
+- `doc_type == "photo"`: тільки `result = sharpen.apply(result, strength=sharpen_strength)` якщо `diag.blur_strength_needed > 0.05`.
+- `applied_steps["doc_processing"] = diag.doc_type`.
+
+**Крок 7 — Shadow highlight:**
+
+- `sh_strength = settings.get("shadow_highlight_strength", 0.0)`.
+- Якщо `sh_strength > 0.001`: `result = shadow_highlight.apply_shadow_highlight(result, strength=sh_strength)`.
+
+**Крок 8 — Додатковий контраст Auto Fix:**
+
+- `autofix_contrast = settings.get("autofix_contrast", 0.15)`.
+- Якщо `autofix_contrast > 0.001`: `result = run_contrast_advanced(result, autofix_contrast, contrast_mode)`.
+
+**Крок 9 — Формат виходу:**
+
+Аналогічно існуючому `run_autofix`:
+- `output_color_mode = settings.get("output_color_mode", "auto")`.
+- Якщо `grayscale`: `result = bc.to_grayscale(result)`.
+- Якщо `binary`: конвертація через `adaptiveThreshold`.
+- `auto` — залишити як є (визначено типом документа).
+
+**Збирання статусу:**
+- Для кожного ключа в `applied_steps` додати рядок у `status_parts`.
+- `status_msg = "Full Auto: " + ", ".join(status_parts)`.
+- Повернути `(result, status_msg, applied_steps)`.
+
+---
+
+## Фаза В — Нові функції контрасту
+
+### Файл `processing/brightness_contrast.py` — додати три функції
+
+Додати в кінець файлу після існуючих функцій. Не змінювати існуючі.
+
+#### Нові константи
 
 ```python
-SUBPIX_WIN_SIZE = (5, 5)
-SUBPIX_ZERO_ZONE = (-1, -1)
-SUBPIX_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.01)
-
-def _refine_corners_subpix(gray: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    pts = corners.reshape(-1, 1, 2).astype(np.float32)
-    refined = cv2.cornerSubPix(gray, pts, SUBPIX_WIN_SIZE, SUBPIX_ZERO_ZONE, SUBPIX_CRITERIA)
-    return refined.reshape(-1, 2)
+PERCENTILE_CONTRAST_MIN_RANGE = 20   # якщо діапазон вже широкий — нічого не робити
+S_CURVE_GAMMA_BASE = 1.0
+S_CURVE_GAMMA_MULTIPLIER = 2.0       # gamma = 1.0 + strength * 2.0
 ```
 
-Викликати після кожного успішного методу (`_try_adaptive_threshold`, `_try_canny`,
-`_try_largest_contour`) перед поверненням з `_detect_corners_impl`. Обгорнути в `try/except`
-(на однотонних ділянках `cornerSubPix` може кидати помилку) — при помилці повертати
-неуточнені кути.
+#### Функція `smart_contrast_percentile(image, strength, low_perc=1.0, high_perc=99.0)`
 
-### 3.4 CLAHE перед бінаризацією (нерівне освітлення)
+Алгоритм:
+- Взяти L-канал (LAB).
+- `p_low = np.percentile(L, low_perc)`, `p_high = np.percentile(L, high_perc)`.
+- Якщо `p_high - p_low < PERCENTILE_CONTRAST_MIN_RANGE` → повернути `image.copy()`.
+- `l_float = L.astype(np.float32)`.
+- `l_stretched = np.clip((l_float - p_low) / (p_high - p_low) * 255.0, 0, 255)`.
+- `l_result = np.clip(l_float * (1.0 - strength) + l_stretched * strength, 0, 255).astype(np.uint8)`.
+- Зібрати LAB, конвертувати в BGR, повернути.
 
-У `_try_adaptive_threshold` перед `cv2.GaussianBlur` додати опціональний крок CLAHE:
+#### Функція `contrast_s_curve(image, strength)`
+
+Алгоритм:
+- Взяти L-канал (LAB).
+- `l_norm = L.astype(np.float32) / 255.0`.
+- `gamma = S_CURVE_GAMMA_BASE + strength * S_CURVE_GAMMA_MULTIPLIER`.
+- `x_g = np.power(np.clip(l_norm, 0, 1), gamma)`.
+- `inv_g = np.power(np.clip(1.0 - l_norm, 0, 1), gamma)`.
+- `s = x_g / (x_g + inv_g + 1e-6)`.
+- `l_result = np.clip(s * 255.0, 0, 255).astype(np.uint8)`.
+- Зібрати LAB, конвертувати в BGR, повернути.
+
+#### Функція `local_contrast_adaptive(image, strength)`
+
+Алгоритм:
+- Взяти L-канал (LAB).
+- `mask = detail_map.detail_mask(L)` — з `processing.detail_map` (вже існує).
+- Обчислити S-криву для всього L (та сама логіка що вище) → `l_contrasted`.
+- `l_orig = L.astype(np.float32)`.
+- `l_result = np.clip(l_orig * (1.0 - mask) + l_contrasted * mask, 0, 255).astype(np.uint8)`.
+- Зібрати LAB, конвертувати в BGR, повернути.
+
+**Важливо для всіх трьох функцій:** вхідне зображення не змінювати. Повертати новий масив.
+
+---
+
+## Фаза Г — Оновлення конфігурації
+
+### Файл `config/app_settings.py`
+
+**Нові константи:**
+```python
+DEFAULT_FULL_AUTO_MODE = False
+DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3   # мінімальна сила градієнту для shadow_remove
+```
+
+**У `load()`** додати:
+```python
+"full_auto_mode": cfg.getboolean("processing", "full_auto_mode", fallback=DEFAULT_FULL_AUTO_MODE),
+"full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
+```
+
+**У `save()`** додати відповідні записи в секцію `[processing]`.
+
+---
+
+## Фаза Д — Оновлення GUI
+
+### Файл `gui/settings_window.py`
+
+**Нова секція** "Адаптивний режим (Full Auto)". Розмістити в правій колонці після секції "Режим запуску".
+
+Елементи секції:
+- `QCheckBox("Використовувати Full Auto замість Auto Fix")` → `self._cb_full_auto_mode`.
+- `QLabel` з поясненням (дрібний шрифт, сірий): `"Full Auto аналізує кожне зображення окремо і застосовує лише потрібні корекції з адаптивною силою."`.
+
+**Оновити `_apply_settings`:**
+```python
+self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
+```
+
+**Оновити `_collect_settings`:**
+```python
+"full_auto_mode": self._cb_full_auto_mode.isChecked(),
+```
+
+**Вже наявний `_combo_contrast_mode`** — нічого не змінювати, він вже в коді.
+
+### Файл `gui/main_window.py`
+
+**Перейменувати** тіло існуючого `_do_autofix` на `_do_autofix_classic` (приватний метод).
+
+**Новий `_do_autofix`:**
 
 ```python
-CLAHE_CLIP_LIMIT = 2.0
-CLAHE_TILE_GRID_SIZE = (8, 8)
-
-def _apply_clahe(gray: np.ndarray) -> np.ndarray:
-    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=CLAHE_TILE_GRID_SIZE)
-    return clahe.apply(gray)
+def _do_autofix(self):
+    if self._settings.get("full_auto_mode", False):
+        self._do_full_auto()
+    else:
+        self._do_autofix_classic()
 ```
 
-Стратегія: спочатку пробувати без CLAHE (як зараз); якщо `_try_adaptive_threshold` і `_try_canny`
-не знайшли кутів — повторити обидва методи на `_apply_clahe(gray)` перед переходом до fallback
-(`_try_largest_contour`). Це додає "Спробу 1b/2b" у `_detect_corners_impl`.
+**Новий `_do_full_auto`:**
 
-### 3.5 (Опціонально, окремий under-задача) Hough-based fallback
-
-Якщо після п.3.1–3.4 fallback (`_try_largest_contour`) теж не дає результату — додати
-`_try_hough_lines(gray)`:
-- `cv2.HoughLinesP` на Canny-краях;
-- розділити лінії на ~горизонтальні/~вертикальні за кутом нахилу;
-- взяти по 2 найдовші лінії з кожної групи, знайти 4 точки перетину;
-- провалідувати через `_validate_document`.
-Це **четверта** спроба, після bounding-box fallback. Якщо складно реалізувати надійно —
-винести в окрему задачу низького пріоритету (Фаза 2.x), не блокувати інше.
-
-### 3.6 Тести
-
-Оновити/доповнити `tests/scenarios/test_perspective_auto.py` (зараз там лише каркас з TODO):
-- Підготувати у `tests/test_images/` мінімум 4 зразки:
-  1. ч-б документ на темному фоні (без інверсії)
-  2. кольоровий документ (грамота/паспорт) на рябому фоні
-  3. документ з нерівним освітленням/тінню (для CLAHE)
-  4. фото зі столом/рамкою навколо документа (для border/solidity перевірки)
-- Для кожного — викликати `perspective.auto_detect_corners` напряму (юніт-рівень, без GUI) і
-  перевіряти: кути не None, площа знайденого чотирикутника в межах очікуваного діапазону,
-  жодна сторона не торкається межі вхідного зображення (за виключенням випадків, коли документ
-  справді займає весь кадр).
-
-### Критерії приймання
-
-- На всіх 4 тестових зображеннях `auto_detect_corners` повертає валідні 4 кути.
-- На зображенні №4 (стіл/рамка) кути відповідають документу, а не зовнішньому контуру столу.
-- Регресія: попередні тестові зображення (якщо є в `tests/test_images`) продовжують працювати
-  не гірше, ніж до змін.
-
----
-
-## ПРІОРИТЕТ 4 — Завершення авто-тестувальника GUI (`tests/gui_tester.py`)
-
-`status.md` фіксує це як найвищий пріоритет (п.0), частково реалізовано.
-
-### Кроки
-
-1. **Drag & drop завантаження файлів**:
-   - Використати існуючий `utils/win_drop.py` (WM_DROPFILES) як референс для емуляції drop-події
-     у `GUITester`. Додати метод `GUITester.drop_files(window_title: str, file_paths: list[str])`,
-     що знаходить handle вікна (через `pywin32`) і надсилає `WM_DROPFILES`.
-2. **Кліки по елементах через об'єктні імена, а не "магічні" координати**:
-   - Замінити заглушки типу `# tester.click_at(x=300, y=400)` на пошук позиції елемента через
-     `objectName` (PyQt6: кожен віджет має `setObjectName`). Додати у `gui/*` (controls.py,
-     main_window.py) `setObjectName(...)` для ключових кнопок/чекбоксів (`btn_autofix`,
-     `btn_persp_auto`, `chk_partial_perspective`, `chk_grayscale`, слайдери `slider_brightness`
-     тощо), якщо їх ще немає.
-   - У `GUITester` додати метод `get_widget_geometry(object_name)` через окремий debug-хук
-     (наприклад, тимчасовий QtTest/локальний сервер або файл-дамп геометрії при старті в
-     debug-режимі) — або, простіше, прокинути через існуючий `tests/scenarios/debug_widgets.py`
-     (вже є в проєкті — переглянути й розширити для виводу координат усіх ключових віджетів у
-     `tests/results/widgets_debug.txt`).
-3. **Нові сценарії** (за списком зі `status.md`):
-   - `tests/scenarios/test_perspective_manual.py`
-   - `tests/scenarios/test_slider_adjustment.py` (довести до робочого стану — зараз TODO)
-   - `tests/scenarios/test_grayscale_toggle.py`
-   - `tests/scenarios/test_reset_buttons.py`
-   - `tests/scenarios/test_partial_perspective_*` (див. Пріоритет 2.5)
-   - `tests/scenarios/test_original_immutability.py`,
-     `tests/scenarios/test_before_preview_unchanged.py`,
-     `tests/scenarios/test_all_functions_no_modify_orig.py` (див. Пріоритет 1)
-4. **pytest інтеграція**:
-   - Кожен сценарій повинен мати функцію `test_<name>(tester)` що повертає `True`/`False` або
-     використовує `assert`. Створити `tests/conftest.py` з фікстурою `tester`, що створює
-     `GUITester(app_path=".../main.py", venv_python=...)`.
-   - `pytest.ini` / `pyproject.toml` з `testpaths = tests/scenarios`.
-5. **CI/CD**:
-   - GitHub Actions workflow `.github/workflows/tests.yml`: встановлення залежностей з
-     `requirements.txt` + `tests/requirements.txt`, запуск `pytest tests/unit` (юніт-тести без
-     GUI — обов'язково в CI). GUI-сценарії (`tests/scenarios`), що потребують Windows-десктопу
-     з реальним дисплеєм, позначити `@pytest.mark.gui` і виключити з обов'язкового CI-кроку
-     (запускати окремо, наself-hosted Windows runner, якщо буде доступний).
-
-### Критерії приймання
-
-- `pytest tests/unit` проходить локально без GUI.
-- Принаймні 3 нові сценарії з п.3 виконуються через `GUITester` без падінь (можуть бути
-  позначені `xfail`, якщо координати ще не стабілізовані — але інфраструктура працює).
-
----
-
-## ПРІОРИТЕТ 5 — Адаптивний HDR для фото-документів (Фаза 2.1)
-
-**Проблема**: поточний `processing/hdr.py` добре працює для звичайних фото, але для
-"документ-фото" (текст на світлому фоні) додає чорний відтінок у світлих ділянках —
-шкідливо для друку.
-
-### Кроки
-
-1. **Детектор текстових/однотонних областей** — новий модуль `processing/text_mask.py`:
-   ```python
-   def text_region_mask(gray: np.ndarray) -> np.ndarray:
-       """
-       Повертає бінарну маску (uint8, 0/255) ділянок, схожих на текст:
-       висока локальна щільність контрастних дрібних деталей.
-       Підхід: адаптивна бінаризація + морфологічна фільтрація дрібних компонент.
-       """
-   ```
-2. **Адаптивний HDR** у `processing/hdr.py` — нова функція
-   `apply_adaptive(image, strength, text_mask=None)`:
-   - Обчислює звичайний HDR-результат (як зараз).
-   - У зонах, де `text_mask == 255`, зменшує ефект HDR (наприклад,
-     `result = cv2.addWeighted(hdr_result, alpha, image, 1-alpha, 0)` з `alpha` меншим там,
-     де є текст — реалізувати через поелементне змішування за маскою:
-     `np.where(mask_3ch, blended_low, hdr_result)`).
-3. **Pipeline**: у `run_autofix`, для `DocType.PHOTO`, якщо документ класифіковано як
-   "фото документа" (потрібен додатковий прапорець від `doc_classifier`, наприклад
-   `is_document_like: bool`, що вже частково реалізований через edge density/Hough lines —
-   перевірити `processing/doc_classifier.py`), використовувати `hdr.apply_adaptive` замість
-   `hdr.apply`.
-4. **Налаштування**: `adaptive_hdr_enabled: bool` (за замовчуванням `True` для PHOTO+document-like),
-   додати в `app_settings.py` і у `settings_window.py`.
-
-### Критерії приймання
-
-- На фото документа (текст на світлому папері, знято при поганому світлі) після Auto Fix
-  світлі ділянки навколо тексту не темніють (порівняти середню яскравість фону до/після —
-  різниця не повинна перевищувати X% від еталону, визначити X емпірично на тестовому наборі).
-- На звичайному фото (без тексту) результат `apply_adaptive` практично не відрізняється від
-  поточного `apply`.
-
----
-
-## ПРІОРИТЕТ 6 — Юніт-тести для critical модулів (Фаза 2.2)
-
-Створити `tests/unit/` (окремо від `tests/scenarios`, без GUI-залежностей):
-
-| Файл тесту | Що перевіряти |
-|---|---|
-| `test_pipeline.py` | `run_autofix` для кожного `DocType` (BW/COLOR/PHOTO) повертає коректну форму/тип; `run_manual_adjustments` — порядок застосування корекцій |
-| `test_doc_classifier.py` | `classify()` на синтетичних зображеннях (рівномірний ч-б текст vs кольорове фото vs кольоровий документ) повертає очікуваний `DocType` |
-| `test_brightness_contrast.py` | `auto_brightness`/`auto_contrast` зміщують 5/95 перцентилі гістограми у задані межі; `apply_brightness(image, 0.0)` повертає копію без змін |
-| `test_sharpen.py` | `measure_sharpness` корелює з відомим рівнем blur (Gaussian blur з різним sigma → монотонне зменшення значення); `auto_apply` не застосовує різкість до вже різкого зображення |
-| `test_loader.py` | `core.loader.load` коректно читає JPG/PNG/WEBP/TIFF/HEIC (за наявності тестових файлів), повертає BGR uint8 |
-| `test_saver.py` | `core.saver.save` записує файл із заданою якістю JPG, не змінює вхідний масив |
-| `test_file_utils.py` | `filter_supported` відкидає непідтримувані розширення; `collect_images_from_folder` рекурсивно/нерекурсивно (звірити з поточною поведінкою) збирає файли |
-| `test_perspective.py` | `_order_points` сортує довільні 4 точки в TL/TR/BR/BL; `apply_correction` на відомому прямокутнику з відомими кутами дає вихід очікуваного розміру; `auto_detect_corners` — див. Пріоритет 3.6 |
-
-Налаштувати `pytest` (root `pyproject.toml` або `pytest.ini`) з маркером, що відрізняє
-`unit` від `gui` тестів (див. Пріоритет 4, п.5).
-
----
-
-## ПРІОРИТЕТ 7 — Оптимізація пам'яті (Фаза 2.3)
-
-1. **Профілювання** — написати скрипт `tools/profile_memory.py`, що прогонює
-   `BatchProcessor.run_auto` на черзі з N тестових зображень (N=10, 50, 100) з
-   `tracemalloc`/`memory_profiler`, виводить пік пам'яті.
-2. **Кешування прев'ю** — у `gui/preview.py` / `utils/image_utils.make_preview`: додати
-   простий LRU-кеш (`functools.lru_cache` не підходить для np.ndarray — реалізувати власний
-   словник `{path_or_id: preview_array}` з обмеженням розміру, наприклад 20 елементів).
-3. **Обмеження черги завантажених зображень**: `BatchProcessor` зараз тримає лише шляхи
-   (`_files: list[str]`), завантаження відбувається по одному файлу — перевірити, що жодне
-   місце не тримає всі зображення черги одночасно в пам'яті (особливо в `gui/queue_view.py` —
-   там, ймовірно, лише thumbnails). Якщо знайдено — додати explicit `del`/звільнення після
-   обробки кожного файлу в `run_auto`.
-4. **Streaming для дуже великих зображень** — окрема дослідницька задача (низький пріоритет
-   у межах Фази 2): для зображень понад заданий розмір (наприклад > 4000px по довшій стороні)
-   розглянути tile-based обробку для важких кроків (CLAHE, HDR). Це ризикована зміна — реалізувати
-   в окремій гілці з benchmark "до/після" по якості та швидкості, не зливати без явного
-   підтвердження користувача.
-
----
-
-## ПРІОРИТЕТ 8 — Підтримка RAW-форматів (Фаза 2.4)
-
-1. Додати `rawpy` до `requirements.txt` (опціональна залежність — обернути імпорт у
-   `try/except ImportError` в `core/loader.py`, щоб додаток не падав, якщо `rawpy` не
-   встановлено, а просто не показував RAW-файли у `file_utils.filter_supported`).
-2. `core/loader.py`:
-   - Розширити список підтримуваних розширень (`.cr2`, `.nef`, `.arw`, ...) у
-     `utils/file_utils.py` (`SUPPORTED_EXTENSIONS`).
-   - У `load()`: якщо розширення RAW і `rawpy` доступний — `rawpy.imread(path).postprocess(...)`
-     → конвертація в BGR uint8 (rawpy повертає RGB → `cv2.cvtColor(..., cv2.COLOR_RGB2BGR)`).
-3. **Налаштування якості конвертації**: `raw_brightness`, `raw_use_camera_wb` (bool) —
-   параметри `postprocess()`, додати в `app_settings.py` за потреби (мінімально: один параметр
-   "auto white balance" увімкнено за замовчуванням).
-4. **Тестування**: якщо реальних RAW-файлів немає в репозиторії — задокументувати у
-   `tests/README.md`, що тест `test_loader.py::test_raw` пропускається (`pytest.mark.skipif`),
-   якщо немає тестового файлу/бібліотеки, і додати інструкцію, як його запустити локально з
-   власним RAW-файлом.
-
----
-
-## ПРІОРИТЕТ 9 — Трей-режим (Фаза 2.5)
-
-1. `gui/main_window.py`: додати `QSystemTrayIcon` з іконкою застосунку, контекстне меню
-   "Відкрити" / "Вихід".
-2. Перевизначити `closeEvent`: якщо налаштування `minimize_to_tray=True` — `event.ignore()`
-   + `self.hide()` замість закриття; показ через клік по іконці трею або пункт меню "Відкрити".
-3. `config/app_settings.py`: `minimize_to_tray: bool = False`, перемикач у
-   `gui/settings_window.py`.
-4. Фонова обробка без GUI — окрема дослідницька задача (залежить від Фази 3, не блокувати
-   зараз; зафіксувати лише UI-перемикач "Запускати в трей" і мінімізацію, без headless-режиму).
-
----
-
-## Рекомендований порядок виконання (залежності)
-
-```
-1. Захист оригіналу (immutability)         ──┐
-2. Часткова корекція перспективи            │  можна паралельно,
-3. Покращення авто-детекції кутів           │  але 1 бажано зробити
-                                             │  першим — інакше тести
-                                             │  для 2/3 можуть "плавати"
-4. Тестувальник GUI (інфраструктура)        ◄─┘  спирається на сценарії з 1-3
-
-5. Адаптивний HDR (Фаза 2.1)   ── незалежний, можна в будь-який момент після 1
-6. Юніт-тести (Фаза 2.2)        ── бажано робити паралельно з 1-5 (тест на кожен модуль одразу)
-7. Оптимізація пам'яті (Фаза 2.3) ── після 6 (потрібен baseline для порівняння)
-8. RAW (Фаза 2.4)               ── незалежний
-9. Трей-режим (Фаза 2.5)        ── незалежний, найнижчий пріоритет
+```python
+def _do_full_auto(self):
+    if self._orig is None:
+        self._set_status("Спочатку оберіть файл")
+        return
+    try:
+        result, status_msg, applied_steps = pipeline.run_full_auto(
+            self._base,
+            settings=self._settings,
+        )
+        self._processed = result
+        self._preview.set_after(image_utils.make_preview(result))
+        self._preview.set_autofix_applied(True)
+        self._set_status(status_msg)
+        self._logger.debug(f"Full Auto applied_steps: {applied_steps}")
+        self._update_buttons()
+    except Exception as e:
+        self._logger.error(f"Помилка Full Auto: {e}", exc_info=True)
+        self._set_status(f"Помилка Full Auto: {e}")
 ```
 
+**Оновити `_on_settings_saved`** — після збереження оновити текст кнопки `btn_autofix`:
+- Якщо `s.get("full_auto_mode", False)` → `self._btn_autofix.setText("⚡ Full Auto")`.
+- Інакше → `self._btn_autofix.setText("⚡ Auto Fix")`.
+
+**Оновити `_apply_default_mode`** — аналогічно встановити текст кнопки при старті.
+
+### Файл `batch/batch_processor.py`
+
+**У методі `run_auto`** всередині циклу замінити блок автофікс:
+
+```python
+if s.get("autofix_enabled", True):
+    if s.get("full_auto_mode", False):
+        processed, _, _ = pipeline.run_full_auto(image, settings=s)
+    else:
+        processed, _ = pipeline.run_autofix(image, ...)
+else:
+    processed = image
+```
+
+Параметри для `run_autofix` залишити точно такими як є зараз.
+
 ---
 
-## Чек-лист перед завершенням кожної задачі
+## Фаза Е — Тести
 
-- [ ] Немає нових залежностей `processing/*` → `gui/*`.
-- [ ] Усі нові публічні функції мають type hints і docstring.
-- [ ] Магічні числа винесені в константи на початку файлу.
-- [ ] Нові параметри pipeline мають значення за замовчуванням, що **зберігають поточну
-      поведінку** (backward compatible — старий код, який не передає новий kwarg, працює як
-      раніше).
-- [ ] Якщо додано нове налаштування — пройдено весь ланцюжок
-      `app_settings.py` → `settings dict` → GUI → `pipeline`.
-- [ ] Додано/оновлено тест (юніт або сценарій) для нової логіки.
-- [ ] Лог-повідомлення (`logger.debug`) додані для нових кроків алгоритму, як це зроблено в
-      `processing/perspective.py`.
-- [ ] `status.md` оновлено: позначити виконані пункти `[x]`/`✅` з датою.
+### Файл `tests/unit/test_diagnostics.py` — новий файл
+
+#### Клас `TestMeasureGradient`
+
+- `test_flat_image_no_gradient` — однотонне L=128 → `gradient_has = False`, `strength ≈ 0`.
+- `test_strong_horizontal_gradient` — L від 50 (ліво) до 220 (право) → `gradient_has = True`, `direction = "horizontal"`, `strength > 0.7`.
+- `test_strong_vertical_gradient` — L від 50 (верх) до 220 (низ) → `direction = "vertical"`.
+- `test_weak_gradient_below_threshold` — різниця медіан 20 (< 30) → `gradient_has = False`.
+- `test_gradient_immutable` — вхідне зображення не змінюється.
+
+#### Клас `TestMeasureContrast`
+
+- `test_narrow_histogram` — всі пікселі L в [100, 130] → `strength_needed > 0.7`.
+- `test_wide_histogram` — L від 0 до 255 → `strength_needed = 0.0`.
+- `test_overexposed_ratio` — 40% пікселів L > 250 → `overexposed_ratio ≈ 0.4`.
+- `test_underexposed_ratio` — 30% пікселів L < 5 → `underexposed_ratio ≈ 0.3`.
+- `test_strength_proportional_to_narrowness` — вужча гістограма → більший `strength_needed`.
+
+#### Клас `TestMeasureBlur`
+
+- `test_sharp_noise_image` — випадковий шум → `blur_strength_needed = 0.0`.
+- `test_gaussian_blurred` — після `GaussianBlur(21,21)` → `blur_strength_needed > 0.5`.
+- `test_sharpen_strength_bounded` — `blur_sharpen_strength <= max_sharpen`.
+- `test_blur_immutable` — вхідне зображення не змінюється.
+
+#### Клас `TestMeasureBrightness`
+
+- `test_dark_image` — L ≈ 50 → `brightness_correction > 0.5`.
+- `test_bright_image` — L ≈ 220 → `brightness_correction < -0.3`.
+- `test_neutral_image` — L ≈ 127 → `abs(brightness_correction) < 0.05`.
+
+#### Клас `TestMeasurePerspective`
+
+- `test_straight_document` — синтетичний прямий прямокутник → `has_perspective = False`.
+- `test_skewed_document` — прямокутник зі зміщеними кутами → `has_perspective = True`, `corners is not None`.
+- `test_skew_ratio_proportional` — більший перекіс → більший `skew_ratio`.
+- `test_perspective_immutable` — вхідне зображення не змінюється.
+
+#### Клас `TestDiagnose`
+
+- `test_returns_all_fields` — `DiagnosticResult` містить усі поля, жодне не є `None` крім `perspective_corners`.
+- `test_diagnose_immutable` — вхідне зображення не змінюється.
+- `test_diagnose_consistent` — два виклики на одному зображенні → однаковий результат.
+
+#### Клас `TestRunFullAuto`
+
+- `test_returns_correct_types` — повертає `(np.ndarray, str, dict)`.
+- `test_immutable` — вхідне зображення не змінюється.
+- `test_dry_run_returns_original` — `dry_run=True` → результат побайтово рівний `image.copy()`.
+- `test_improves_contrast_on_narrow_histogram` — зображення з вузькою гістограмою → після Full Auto `p99-p1` більший.
+- `test_improves_sharpness_on_blurry` — після `GaussianBlur` → після Full Auto `measure_sharpness` більший.
+- `test_no_crash_on_plain_white` — повністю білий квадрат → не падає.
+- `test_no_crash_on_plain_black` — повністю чорний квадрат → не падає.
+- `test_applied_steps_logged` — якщо корекція застосована → відповідний ключ присутній в `applied_steps`.
+- `test_status_message_not_empty` — `status_msg` є непорожній рядок.
+
+### Файл `tests/unit/test_brightness_contrast.py` — додати до існуючого
+
+**Клас `TestSmartContrastPercentile`:**
+- `test_narrow_histogram_stretches` — вузька гістограма → після функції `p99-p1` більший.
+- `test_wide_histogram_unchanged` — широка гістограма → результат близький до оригіналу.
+- `test_strength_zero_returns_copy` — `strength=0` → рівний оригіналу.
+- `test_immutable` — вхідне зображення не змінюється.
+
+**Клас `TestContrastSCurve`:**
+- `test_midtones_enhanced` — після функції дисперсія L збільшується.
+- `test_shadows_not_crushed` — мінімальне L після функції вище ніж при лінійному контрасті.
+- `test_highlights_not_blown` — максимальне L після функції нижче 255 якщо до цього було нижче 250.
+- `test_strength_zero_minimal_effect` — `strength=0` → `gamma=1` → результат близький до оригіналу.
+- `test_immutable` — вхідне зображення не змінюється.
+
+**Клас `TestLocalContrastAdaptive`:**
+- `test_detail_areas_enhanced` — в текстурованій зоні контраст зростає.
+- `test_flat_areas_unchanged` — в однотонній зоні зміна мінімальна.
+- `test_immutable` — вхідне зображення не змінюється.
+
+---
+
+## Зведена таблиця файлів і змін
+
+| Файл | Тип | Що змінюється |
+|---|---|---|
+| `processing/diagnostics.py` | **Новий** | Повний діагностичний модуль |
+| `processing/brightness_contrast.py` | Доповнення | 3 нові функції + 2 константи |
+| `processing/pipeline.py` | Доповнення | `run_full_auto` + оновлення `run_contrast_advanced` |
+| `config/app_settings.py` | Доповнення | 2 нові параметри |
+| `gui/settings_window.py` | Доповнення | Нова секція Full Auto |
+| `gui/main_window.py` | Модифікація | `_do_full_auto`, оновлення `_do_autofix`, текст кнопки |
+| `batch/batch_processor.py` | Модифікація | Підтримка `full_auto_mode` |
+| `tests/unit/test_diagnostics.py` | **Новий** | 25+ тестів |
+| `tests/unit/test_brightness_contrast.py` | Доповнення | 12 нових тестів |
+
+---
+
+## Порядок реалізації для агента
+
+**Крок 1** — `processing/brightness_contrast.py`: три нові функції. Незалежні, легко перевіряються.
+
+**Крок 2** — `tests/unit/test_brightness_contrast.py`: тести для нових функцій. Переконатись що проходять.
+
+**Крок 3** — `processing/diagnostics.py`: повний модуль без будь-яких змін в інших файлах. Функція `diagnose` повинна працювати але не застосовуватись ніде.
+
+**Крок 4** — `tests/unit/test_diagnostics.py`: тести для діагностики. Переконатись що всі проходять.
+
+**Крок 5** — `processing/pipeline.py`: додати `run_full_auto` з `dry_run=True` за замовчуванням спочатку. Тест `test_dry_run_returns_original` має проходити.
+
+**Крок 6** — `config/app_settings.py` і `gui/settings_window.py`: нові параметри і UI. Перевірити що зберігається і завантажується.
+
+**Крок 7** — `gui/main_window.py` і `batch/batch_processor.py`: інтеграція. Перевірити що старий Auto Fix працює без змін.
+
+**Крок 8** — `processing/pipeline.py`: поступово вмикати кроки в `run_full_auto` (зняти `dry_run=True`), починаючи з різкості і яскравості (Крок 3 і 4 пайплайну), тестувати на реальних зображеннях.
+
+**Крок 9** — Додати контраст, HDR, специфічну обробку по типу (Кроки 4-6 пайплайну).
+
+**Крок 10** — Перспективу і shadow_remove додати останніми (Кроки 1-2 пайплайну), тільки після перевірки попередніх кроків.

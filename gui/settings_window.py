@@ -76,6 +76,12 @@ PCT_HIGH_MAX = 100.0
 PCT_HIGH_STEP = 1.0
 PCT_HIGH_DECIMALS = 1
 
+# Константи для Auto Fix контрасту
+AUTOFIX_CONTRAST_MIN = 0.0
+AUTOFIX_CONTRAST_MAX = 1.0
+AUTOFIX_CONTRAST_STEP = 0.05
+AUTOFIX_CONTRAST_DECIMALS = 2
+
 # Константи для якості JPG
 QUALITY_MIN = 50
 QUALITY_MAX = 100
@@ -148,6 +154,19 @@ class SettingsWindow(QWidget):
         self._spin_hdr.setSingleStep(HDR_STEP)
         self._spin_hdr.setDecimals(HDR_DECIMALS)
 
+        self._spin_autofix_contrast = QDoubleSpinBox()
+        self._spin_autofix_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
+        self._spin_autofix_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
+        self._spin_autofix_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
+
+        self._combo_contrast_mode = QComboBox()
+        self._combo_contrast_mode.addItem("Лінійний (класичний)", "linear")
+        self._combo_contrast_mode.addItem("Перцентильне розтягнення", "percentile")
+        self._combo_contrast_mode.addItem("S-подібна крива", "s_curve")
+        self._combo_contrast_mode.addItem("Локальний адаптивний", "adaptive")
+
+        proc_form.addRow("Метод контрасту:", self._combo_contrast_mode)
+        proc_form.addRow("Контраст Auto Fix (0–1):", self._spin_autofix_contrast)
         proc_form.addRow("Висвітлення тіней (0–2):", self._spin_shadow)
         proc_form.addRow("Сила різкості (0–1):", self._spin_sharpen)
         proc_form.addRow("Сила HDR (0–1):",      self._spin_hdr)
@@ -207,8 +226,8 @@ class SettingsWindow(QWidget):
         self._spin_pct_high.setSingleStep(PCT_HIGH_STEP)
         self._spin_pct_high.setDecimals(PCT_HIGH_DECIMALS)
 
-        pct_form.addRow("Нижній процентиль (%):",  self._spin_pct_low)
-        pct_form.addRow("Верхній процентиль (%):", self._spin_pct_high)
+        pct_form.addRow("Відсікання тіней (%):",   self._spin_pct_low)
+        pct_form.addRow("Відсікання світла (%):",  self._spin_pct_high)
 
         left.addWidget(proc_box)
         left.addWidget(cls_box)
@@ -311,6 +330,7 @@ class SettingsWindow(QWidget):
         self._cb_auto_apply.setChecked(s.get("auto_apply_autofix", True))
         self._cb_hdr.setChecked(s.get("hdr_in_autofix", True))
         self._cb_perspective.setChecked(s.get("auto_perspective", False))
+        self._spin_autofix_contrast.setValue(s.get("autofix_contrast", 0.15))
         self._spin_shadow.setValue(s.get("shadow_highlight_strength", 0.0))
         self._spin_sharpen.setValue(s.get("sharpen_strength", 0.4))
         self._spin_hdr.setValue(s.get("hdr_strength", 0.5))
@@ -326,6 +346,12 @@ class SettingsWindow(QWidget):
         self._spin_pct_high.setValue(s.get("auto_percentile_high", 95.0))
 
         self._cb_bw_binary.setChecked(s.get("bw_binary", False))
+
+        # Метод контрасту
+        contrast_mode = s.get("contrast_mode", "linear")
+        idx = self._combo_contrast_mode.findData(contrast_mode)
+        if idx >= 0:
+            self._combo_contrast_mode.setCurrentIndex(idx)
 
         # Формат виходу
         color_mode = s.get("output_color_mode", "auto")
@@ -345,6 +371,7 @@ class SettingsWindow(QWidget):
             "auto_apply_autofix": self._cb_auto_apply.isChecked(),
             "hdr_in_autofix":     self._cb_hdr.isChecked(),
             "auto_perspective":   self._cb_perspective.isChecked(),
+            "autofix_contrast":   self._spin_autofix_contrast.value(),
             "shadow_highlight_strength": self._spin_shadow.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
@@ -360,6 +387,8 @@ class SettingsWindow(QWidget):
             "auto_percentile_high": self._spin_pct_high.value(),
 
             "bw_binary": self._cb_bw_binary.isChecked(),
+
+            "contrast_mode": self._combo_contrast_mode.currentData(),
 
             "output_color_mode": self._combo_color_mode.currentData(),
             "jpg_quality":       self._spin_quality.value(),

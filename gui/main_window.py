@@ -538,6 +538,8 @@ class MainWindow(QMainWindow):
                     classify_line_count_min=s.get("classify_line_count_min", 3),
                     shadow_highlight_strength=vals["shadow_highlight"],
                     output_color_mode=s.get("output_color_mode", "auto"),
+                    autofix_contrast=s.get("autofix_contrast", 0.15),
+                    contrast_mode=s.get("contrast_mode", "linear"),
                 )
                 # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
                 # щоб повторне натискання не накладало ефекти каскадно.
@@ -553,6 +555,7 @@ class MainWindow(QMainWindow):
                     hdr_strength=vals["hdr_strength"],
                     grayscale=vals["grayscale"],
                     shadow_highlight_strength=vals["shadow_highlight"],
+                    contrast_mode=s.get("contrast_mode", "linear"),
                 )
                 self._set_status("Ручні налаштування")
                 self._preview.set_autofix_applied(False)
@@ -579,6 +582,7 @@ class MainWindow(QMainWindow):
                 hdr_strength=vals["hdr_strength"],
                 grayscale=vals["grayscale"],
                 shadow_highlight_strength=vals["shadow_highlight"],
+                contrast_mode=self._settings.get("contrast_mode", "linear"),
             )
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -674,22 +678,24 @@ class MainWindow(QMainWindow):
         self._update_buttons()
 
     def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
-        """Показує 4 точки перспективи на прев'ю."""
-        orig_h, orig_w = self._orig.shape[:2]
-        prev = image_utils.make_preview(self._orig)
+        """Показує 4 точки перспективи на прев'ю (на базовому зображенні _base)."""
+        if self._base is None:
+            return
+        base_h, base_w = self._base.shape[:2]
+        prev = image_utils.make_preview(self._base)
         prev_h, prev_w = prev.shape[:2]
-        sx = prev_w / max(orig_w, 1)
-        sy = prev_h / max(orig_h, 1)
+        sx = prev_w / max(base_w, 1)
+        sy = prev_h / max(base_h, 1)
         pts = [QPoint(int(p[0] * sx), int(p[1] * sy)) for p in corners]
         self._preview.enable_perspective_edit(pts)
         self._set_status(status_msg)
 
     def _do_persp_manual_fallback(self):
-        """Ручний режим з дефолтними точками по кутах прев'ю."""
-        if self._orig is None:
+        """Ручний режим з дефолтними точками по кутах базового зображення _base."""
+        if self._base is None:
             return
-        orig_h, orig_w = self._orig.shape[:2]
-        prev = image_utils.make_preview(self._orig)
+        base_h, base_w = self._base.shape[:2]
+        prev = image_utils.make_preview(self._base)
         prev_h, prev_w = prev.shape[:2]
         m = 2
         pts = [
@@ -702,10 +708,10 @@ class MainWindow(QMainWindow):
         self._set_status("Документ не знайдено — встановіть точки вручну")
 
     def _do_persp_manual(self):
-        """Ручна корекція: спочатку пробуємо знайти точки авто, інакше дефолтні."""
-        if self._orig is None:
+        """Ручна корекція: пробуємо знайти точки авто на _base, інакше дефолтні."""
+        if self._orig is None or self._base is None:
             return
-        corners = pipeline.detect_corners(self._orig)
+        corners = pipeline.detect_corners(self._base)
         if corners is not None:
             self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
         else:
@@ -742,16 +748,17 @@ class MainWindow(QMainWindow):
         self._store_current_settings()
 
     def _on_persp_pts(self, points: list):
-        if self._orig is None or len(points) != 4:
+        """Користувач змінив точки перспективи — застосовуємо до _base."""
+        if self._base is None or len(points) != 4:
             return
         try:
-            orig_h, orig_w = self._orig.shape[:2]
-            prev = image_utils.make_preview(self._orig)
+            base_h, base_w = self._base.shape[:2]
+            prev = image_utils.make_preview(self._base)
             prev_h, prev_w = prev.shape[:2]
             # Координати точок — у системі прев'ю (≤900px).
-            # Масштабуємо назад в оригінальний розмір.
-            scale_x = orig_w / max(prev_w, 1)
-            scale_y = orig_h / max(prev_h, 1)
+            # Масштабуємо назад в розмір базового зображення _base
+            scale_x = base_w / max(prev_w, 1)
+            scale_y = base_h / max(prev_h, 1)
             corners = np.array(
                 [[p.x() * scale_x, p.y() * scale_y] for p in points],
                 dtype=np.float32

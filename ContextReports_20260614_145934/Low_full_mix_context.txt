@@ -19,6 +19,7 @@ logs
 processing\__init__.py
 processing\autofix.py
 processing\brightness_contrast.py
+processing\detail_map.py
 processing\doc_classifier.py
 processing\hdr.py
 processing\perspective.py
@@ -39,7 +40,11 @@ tests\scenarios\test_reset_buttons.py
 tests\scenarios\test_slider_adjustment.py
 tests\scenarios\test_sliders.py
 tests\test_images
+tests\unit\test_autofix.py
 tests\unit\test_brightness_contrast.py
+tests\unit\test_detail_map.py
+tests\unit\test_doc_classifier.py
+tests\unit\test_hdr.py
 tests\unit\test_image_utils.py
 tests\unit\test_immutability.py
 tests\unit\test_loader.py
@@ -382,6 +387,7 @@ class SettingsWindow(QWidget):
 Імпорти:
   import cv2
   import numpy
+  from processing import detail_map
   from processing import hdr
   from processing import sharpen
   from processing import brightness_contrast
@@ -403,11 +409,27 @@ def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool) -> np.ndarray
 Сутності:
 def apply_brightness(image: np.ndarray, value: float) -> np.ndarray:
 def auto_brightness(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def _lab_l_channel(image: np.ndarray) -> tuple:
+def _assemble_lab(l: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def smart_contrast_percentile(image: np.ndarray, strength: float, low_perc: float, high_perc: float) -> np.ndarray:
+def contrast_s_curve(image: np.ndarray, strength: float) -> np.ndarray:
+def local_contrast_adaptive(image: np.ndarray, strength: float) -> np.ndarray:
 def apply_contrast(image: np.ndarray, value: float) -> np.ndarray:
 def auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
 def to_grayscale(image: np.ndarray) -> np.ndarray:
 def _make_brightness_lut(shift: float) -> np.ndarray:
 def _make_contrast_lut(alpha: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def detail_mask(gray: np.ndarray) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\doc_classifier.py
@@ -416,8 +438,11 @@ def _make_contrast_lut(alpha: float) -> np.ndarray:
   from typing import Literal
   import cv2
   import numpy
+  import logging
 
 Сутності:
+def _has_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> tuple[float, bool]:
+def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
 def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
 
 ============================================================
@@ -428,9 +453,12 @@ def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, lin
   import numpy
 
 Сутності:
-def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def adaptive_tile_grid(h: int, w: int, target_px: int) -> tuple[int, int]:
+def _apply_coring(diff: np.ndarray, noise_floor: float) -> np.ndarray:
+def _auto_strength_factor(l_ch: np.ndarray) -> float:
 def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
-def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None) -> np.ndarray:
+def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py
@@ -472,7 +500,8 @@ def _apply_clahe(gray: np.ndarray) -> np.ndarray:
 
 Сутності:
 class DocType(str, Enum):
-def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool) -> tuple[np.ndarray, str]:
+def run_contrast_advanced(image: np.ndarray, value: float, mode: str) -> np.ndarray:
+def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str) -> tuple[np.ndarray, str]:
 def run_sharpen(image: np.ndarray, strength: float) -> np.ndarray:
 def run_auto_sharpen(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
 def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> str:
@@ -486,7 +515,7 @@ def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
 def run_auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
 def run_grayscale(image: np.ndarray) -> np.ndarray:
 def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
-def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool) -> np.ndarray:
+def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool, contrast_mode: str) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_highlight.py
@@ -722,6 +751,27 @@ def test_sliders():
 
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_autofix.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+  import pytest
+  from processing import autofix
+
+Сутності:
+def _make_flat_lab(h: int, w: int, l_val: float, noise_sigma: float) -> np.ndarray:
+def _make_rect_on_flat(h: int, w: int, flat_l: float, rect_l: float, rect_size: int) -> np.ndarray:
+class TestClaheNormalizeFlatPhoto:
+    def test_flat_photo_unchanged(self):
+class TestClaheNormalizeDetailPreserved:
+    def test_detail_preserved(self):
+class TestClaheNormalizeAggressive:
+    def _old_implementation(self, image: np.ndarray) -> np.ndarray:
+    def test_aggressive_statistics_similar(self):
+    def test_aggressive_output_range(self):
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_brightness_contrast.py
 ============================================================
 Імпорти:
@@ -746,6 +796,80 @@ class TestApplyContrast:
 class TestToGrayscale:
     def test_returns_3_channel(self):
     def test_all_channels_equal(self):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_detail_map.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import pytest
+  from processing import detail_map
+
+Сутності:
+class TestLocalStdMap:
+    def test_output_shape_and_dtype(self):
+    def test_flat_image_returns_zero_std(self):
+    def test_high_contrast_edge(self):
+class TestDetailMask:
+    def test_flat_image_with_weak_noise_returns_low_mask(self):
+    def test_textured_region_returns_high_mask(self):
+    def test_output_shape_and_dtype(self):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_doc_classifier.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+  import pytest
+  from processing.doc_classifier import classify, _has_color_content, _has_histogram_color_content, CHROMA_PIXEL_THRESHOLD, COLOR_PIXEL_RATIO_MIN
+
+Сутності:
+class TestHasColorContent:
+    def test_all_neutral(self):
+    def test_all_pale_red(self):
+    def test_all_neutral_light(self):
+    def test_mixed_2pct_color(self):
+    def test_mixed_0_5pct_color(self):
+    def test_dtype_preserved(self):
+class TestColorSubjectOnWhiteBg:
+    def test_not_bw_document(self):
+class TestTrueGrayscaleScan:
+    def test_still_bw_document(self):
+class TestLowSaturationPhoto:
+    def test_not_bw_document(self):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_hdr.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import pytest
+  from processing import hdr
+
+Сутності:
+class TestAdaptiveTileGrid:
+    def test_small_image_min_grid(self):
+    def test_large_image_max_grid(self):
+    def test_resolution_independence(self):
+class TestAutoStrengthFactor:
+    def test_low_range(self):
+    def test_full_range(self):
+    def test_min_factor_clamp(self):
+class TestApplyCoring:
+    def test_zeroes_small_diffs(self):
+    def test_large_diff_positive(self):
+    def test_large_diff_negative(self):
+    def test_soft_threshold_continuity(self):
+class TestApplyHDR:
+    def test_apply_flat_white_no_artifacts(self):
+    def test_apply_preserves_detail_effect(self):
+    def test_apply_equals_apply_adaptive_without_mask(self):
+    def test_coring_in_apply_flat_image(self):
+    def test_resolution_independence(self):
+    def test_apply_adaptive_with_text_mask_unchanged_behavior(self):
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_image_utils.py

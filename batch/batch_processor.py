@@ -106,6 +106,7 @@ class BatchProcessor:
                         classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
                         classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
                         shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
+                        autofix_contrast=s.get("autofix_contrast", 0.15),
                     )
                 else:
                     processed = image

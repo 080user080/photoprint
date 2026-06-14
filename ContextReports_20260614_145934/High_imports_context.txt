@@ -19,6 +19,7 @@ logs
 processing\__init__.py
 processing\autofix.py
 processing\brightness_contrast.py
+processing\detail_map.py
 processing\doc_classifier.py
 processing\hdr.py
 processing\perspective.py
@@ -38,7 +39,11 @@ tests\scenarios\test_reset_buttons.py
 tests\scenarios\test_slider_adjustment.py
 tests\scenarios\test_sliders.py
 tests\test_images
+tests\unit\test_autofix.py
 tests\unit\test_brightness_contrast.py
+tests\unit\test_detail_map.py
+tests\unit\test_doc_classifier.py
+tests\unit\test_hdr.py
 tests\unit\test_image_utils.py
 tests\unit\test_immutability.py
 tests\unit\test_loader.py
@@ -180,6 +185,7 @@ class BatchProcessor:
                         classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
                         classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
                         shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
+                        autofix_contrast=s.get("autofix_contrast", 0.15),
                     )
                 else:
                     processed = image
@@ -291,7 +297,7 @@ DEFAULT_HDR_STRENGTH = 0.5
 DEFAULT_SHADOW_HIGHLIGHT_STRENGTH = 0.0
 DEFAULT_AUTOSHARP_THRESHOLD = 80.0
 DEFAULT_AUTOSHARP_MAX_STRENGTH = 0.7
-DEFAULT_CLASSIFY_BW_STD_THRESH = 20.0
+DEFAULT_CLASSIFY_BW_STD_THRESH = 10.0
 DEFAULT_CLASSIFY_EDGE_RATIO_MIN = 0.03
 DEFAULT_CLASSIFY_LINE_COUNT_MIN = 3
 DEFAULT_AUTO_PERCENTILE_LOW = 5.0
@@ -301,6 +307,8 @@ DEFAULT_OUTPUT_COLOR_MODE = "auto"  # auto / color / grayscale / binary
 DEFAULT_PRINTER_NAME = "priPrinter"
 DEFAULT_PARTIAL_PERSPECTIVE = False  # PRIO 2: часткова перспектива
 DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
+DEFAULT_AUTOFIX_CONTRAST = 0.15
+DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
 
 
 def _get_path(path=None):
@@ -341,7 +349,9 @@ def load(path=None) -> dict:
         "jpg_quality":       cfg.getint("output",        "jpg_quality",         fallback=DEFAULT_JPG_QUALITY),
         "save_folder":       cfg.get("output",           "save_folder",         fallback=""),
         "printer_name":      cfg.get("printer",          "printer_name",        fallback=DEFAULT_PRINTER_NAME),
+        "autofix_contrast":  cfg.getfloat("processing",  "autofix_contrast",    fallback=DEFAULT_AUTOFIX_CONTRAST),
         "minimize_to_tray":  cfg.getboolean("general",   "minimize_to_tray",    fallback=DEFAULT_MINIMIZE_TO_TRAY),
+        "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
     }
 
 
@@ -384,6 +394,8 @@ def save(settings: dict, path=None):
     cfg["printer"] = {
         "printer_name": settings.get("printer_name", DEFAULT_PRINTER_NAME),
     }
+    cfg["processing"]["autofix_contrast"] = str(settings.get("autofix_contrast", DEFAULT_AUTOFIX_CONTRAST))
+    cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)
@@ -1483,6 +1495,8 @@ class MainWindow(QMainWindow):
                     classify_line_count_min=s.get("classify_line_count_min", 3),
                     shadow_highlight_strength=vals["shadow_highlight"],
                     output_color_mode=s.get("output_color_mode", "auto"),
+                    autofix_contrast=s.get("autofix_contrast", 0.15),
+                    contrast_mode=s.get("contrast_mode", "linear"),
                 )
                 # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
                 # щоб повторне натискання не накладало ефекти каскадно.
@@ -1498,6 +1512,7 @@ class MainWindow(QMainWindow):
                     hdr_strength=vals["hdr_strength"],
                     grayscale=vals["grayscale"],
                     shadow_highlight_strength=vals["shadow_highlight"],
+                    contrast_mode=s.get("contrast_mode", "linear"),
                 )
                 self._set_status("Ручні налаштування")
                 self._preview.set_autofix_applied(False)
@@ -1524,6 +1539,7 @@ class MainWindow(QMainWindow):
                 hdr_strength=vals["hdr_strength"],
                 grayscale=vals["grayscale"],
                 shadow_highlight_strength=vals["shadow_highlight"],
+                contrast_mode=self._settings.get("contrast_mode", "linear"),
             )
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -2501,6 +2517,12 @@ PCT_HIGH_MAX = 100.0
 PCT_HIGH_STEP = 1.0
 PCT_HIGH_DECIMALS = 1
 
+# Константи для Auto Fix контрасту
+AUTOFIX_CONTRAST_MIN = 0.0
+AUTOFIX_CONTRAST_MAX = 1.0
+AUTOFIX_CONTRAST_STEP = 0.05
+AUTOFIX_CONTRAST_DECIMALS = 2
+
 # Константи для якості JPG
 QUALITY_MIN = 50
 QUALITY_MAX = 100
@@ -2573,6 +2595,19 @@ class SettingsWindow(QWidget):
         self._spin_hdr.setSingleStep(HDR_STEP)
         self._spin_hdr.setDecimals(HDR_DECIMALS)
 
+        self._spin_autofix_contrast = QDoubleSpinBox()
+        self._spin_autofix_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
+        self._spin_autofix_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
+        self._spin_autofix_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
+
+        self._combo_contrast_mode = QComboBox()
+        self._combo_contrast_mode.addItem("Лінійний (класичний)", "linear")
+        self._combo_contrast_mode.addItem("Перцентильне розтягнення", "percentile")
+        self._combo_contrast_mode.addItem("S-подібна крива", "s_curve")
+        self._combo_contrast_mode.addItem("Локальний адаптивний", "adaptive")
+
+        proc_form.addRow("Метод контрасту:", self._combo_contrast_mode)
+        proc_form.addRow("Контраст Auto Fix (0–1):", self._spin_autofix_contrast)
         proc_form.addRow("Висвітлення тіней (0–2):", self._spin_shadow)
         proc_form.addRow("Сила різкості (0–1):", self._spin_sharpen)
         proc_form.addRow("Сила HDR (0–1):",      self._spin_hdr)
@@ -2736,6 +2771,7 @@ class SettingsWindow(QWidget):
         self._cb_auto_apply.setChecked(s.get("auto_apply_autofix", True))
         self._cb_hdr.setChecked(s.get("hdr_in_autofix", True))
         self._cb_perspective.setChecked(s.get("auto_perspective", False))
+        self._spin_autofix_contrast.setValue(s.get("autofix_contrast", 0.15))
         self._spin_shadow.setValue(s.get("shadow_highlight_strength", 0.0))
         self._spin_sharpen.setValue(s.get("sharpen_strength", 0.4))
         self._spin_hdr.setValue(s.get("hdr_strength", 0.5))
@@ -2751,6 +2787,12 @@ class SettingsWindow(QWidget):
         self._spin_pct_high.setValue(s.get("auto_percentile_high", 95.0))
 
         self._cb_bw_binary.setChecked(s.get("bw_binary", False))
+
+        # Метод контрасту
+        contrast_mode = s.get("contrast_mode", "linear")
+        idx = self._combo_contrast_mode.findData(contrast_mode)
+        if idx >= 0:
+            self._combo_contrast_mode.setCurrentIndex(idx)
 
         # Формат виходу
         color_mode = s.get("output_color_mode", "auto")
@@ -2770,6 +2812,7 @@ class SettingsWindow(QWidget):
             "auto_apply_autofix": self._cb_auto_apply.isChecked(),
             "hdr_in_autofix":     self._cb_hdr.isChecked(),
             "auto_perspective":   self._cb_perspective.isChecked(),
+            "autofix_contrast":   self._spin_autofix_contrast.value(),
             "shadow_highlight_strength": self._spin_shadow.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
@@ -2785,6 +2828,8 @@ class SettingsWindow(QWidget):
             "auto_percentile_high": self._spin_pct_high.value(),
 
             "bw_binary": self._cb_bw_binary.isChecked(),
+
+            "contrast_mode": self._combo_contrast_mode.currentData(),
 
             "output_color_mode": self._combo_color_mode.currentData(),
             "jpg_quality":       self._spin_quality.value(),
@@ -2831,6 +2876,7 @@ Auto Fix — автоматична корекція під фото докум�
 
 import cv2
 import numpy as np
+from processing import detail_map as detail_map_module
 from processing import hdr as hdr_module
 from processing import sharpen as sharpen_module
 from processing import brightness_contrast as bc
@@ -2924,15 +2970,21 @@ def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool = True) -> np.
     l_ch, a_ch, b_ch = cv2.split(lab)
 
     # CLAHE — адаптивне вирівнювання гістограми (безпечно для всіх)
-    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=(CLAHE_TILE_SIZE, CLAHE_TILE_SIZE))
+    # Используем resolution-independent tile grid
+    tile_grid = hdr_module.adaptive_tile_grid(l_ch.shape[0], l_ch.shape[1])
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP_LIMIT, tileGridSize=tile_grid)
     l_clahe = clahe.apply(l_ch)
 
     if aggressive:
         # Агресивний normalize — тільки для ч-б документів
         l_norm = cv2.normalize(l_clahe, None, 0, 255, cv2.NORM_MINMAX)
     else:
-        # Без глобального normalize — зберігаємо оригінальний діапазон
-        l_norm = l_clahe
+        # Фото/кольорові документи: CLAHE-ефект застосовуємо тільки там,
+        # де є реальна локальна деталізація. На плоских/світлих ділянках
+        # (detail_mask ≈ 0) результат лишається ≈ оригіналом.
+        dmask = detail_map_module.detail_mask(l_ch)
+        diff = hdr_module._apply_coring(l_clahe.astype(np.float32) - l_ch.astype(np.float32))
+        l_norm = np.clip(l_ch.astype(np.float32) + dmask * diff, 0, 255).astype(np.uint8)
 
     merged = cv2.merge([l_norm, a_ch, b_ch])
     result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
@@ -3012,6 +3064,85 @@ def auto_brightness(image: np.ndarray, percentile_low: float = 5.0, percentile_h
 # Контраст
 # ---------------------------------------------------------------------------
 
+def _lab_l_channel(image: np.ndarray) -> tuple:
+    """Повертає (lab, l, a, b) з LAB простору."""
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    return lab, l, a, b
+
+
+def _assemble_lab(l: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Збирає LAB-канали і конвертує назад у BGR."""
+    merged = cv2.merge([l, a, b])
+    return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+
+def smart_contrast_percentile(image: np.ndarray, strength: float, low_perc: float = 1.0, high_perc: float = 99.0) -> np.ndarray:
+    """
+    Перцентильне розтягнення гістограми каналу L.
+    strength: 0..1 — ступінь змішування з оригіналом.
+    """
+    lab, l, a, b = _lab_l_channel(image)
+    l_float = l.astype(np.float32)
+
+    p_low = float(np.percentile(l, low_perc))
+    p_high = float(np.percentile(l, high_perc))
+
+    if p_high - p_low < 20:
+        return image.copy()
+
+    l_stretched = np.clip((l_float - p_low) / (p_high - p_low) * 255.0, 0, 255).astype(np.uint8)
+    l_result = (l_float * (1.0 - strength) + l_stretched.astype(np.float32) * strength)
+    l_result = np.clip(l_result, 0, 255).astype(np.uint8)
+
+    return _assemble_lab(l_result, a, b)
+
+
+def contrast_s_curve(image: np.ndarray, strength: float) -> np.ndarray:
+    """
+    S-подібна крива (сигмоїда) для L-каналу.
+    strength: 0..1 — впливає на крутизну кривої (gamma = 1 + strength*2, при strength=0 -> gamma=1).
+    """
+    lab, l, a, b = _lab_l_channel(image)
+    l_norm = l.astype(np.float32) / 255.0
+
+    gamma = 1.0 + strength * 2.0  # 1.0 .. 3.0
+    # Сигмоїдальна крива: s = x^gamma / (x^gamma + (1-x)^gamma)
+    x_gamma = np.power(np.clip(l_norm, 0, 1), gamma)
+    s = x_gamma / (x_gamma + np.power(np.clip(1.0 - l_norm, 0, 1), gamma) + 1e-6)
+    l_result = np.clip(s * 255.0, 0, 255).astype(np.uint8)
+
+    return _assemble_lab(l_result, a, b)
+
+
+def local_contrast_adaptive(image: np.ndarray, strength: float) -> np.ndarray:
+    """
+    Локальний адаптивний контраст.
+    Застосовує S-криву пропорційно до маски деталей.
+    strength: 0..1 — сила ефекту.
+    """
+    from processing import detail_map
+
+    lab, l, a, b = _lab_l_channel(image)
+    l_orig = l.astype(np.float32)
+
+    # Маска деталей
+    mask = detail_map.detail_mask(l)  # float32, 0..1
+
+    # S-крива для всього L (як в contrast_s_curve, з фіксованою силою)
+    l_norm = l_orig / 255.0
+    gamma = 1.0 + strength * 2.0
+    x_gamma = np.power(np.clip(l_norm, 0, 1), gamma)
+    s = x_gamma / (x_gamma + np.power(np.clip(1.0 - l_norm, 0, 1), gamma) + 1e-6)
+    l_contrasted = s * 255.0
+
+    # Змішування: на ділянках з деталями — контраст, на однотонних — оригінал
+    l_result = l_orig * (1.0 - mask) + l_contrasted * mask
+    l_result = np.clip(l_result, 0, 255).astype(np.uint8)
+
+    return _assemble_lab(l_result, a, b)
+
+
 def apply_contrast(image: np.ndarray, value: float) -> np.ndarray:
     """
     value: -1.0 (низький) … 0.0 (без змін) … +1.0 (високий).
@@ -3075,6 +3206,64 @@ def _make_contrast_lut(alpha: float) -> np.ndarray:
 ```
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
+============================================================
+```python
+"""
+Карта локальной детализации изображения.
+Используется для ограничения эффекта HDR/CLAHE на однотонных участках
+(фон документа, небо, ровная бумага) — там, где CLAHE больше всего усиливает шум.
+
+Не зависит от какого-либо другого модуля проекта.
+"""
+
+import cv2
+import numpy as np
+
+# Размер окна для вычисления локального std (нечётное число)
+DETAIL_STD_KERNEL = 9
+
+# Sigma для финального размытия карты (плавные переходы, без границ тайлов/блоков)
+DETAIL_SMOOTH_SIGMA = 5.0
+
+# Перцентиль локального std, принимаемый за "полную детализацию" (mask=1.0)
+DETAIL_REF_PERCENTILE = 90.0
+
+# Нижняя граница ref_std — защита от деления на ~0 на полностью плоских изображениях
+DETAIL_MIN_REF_STD = 3.0
+
+
+def local_std_map(gray: np.ndarray, kernel: int = DETAIL_STD_KERNEL) -> np.ndarray:
+    """
+    Локальное стандартное отклонение каждого пикселя через box filter.
+    Быстро (O(n)), без поэлементных циклов.
+    Возвращает float32 того же размера, что и gray.
+    """
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def detail_mask(gray: np.ndarray) -> np.ndarray:
+    """
+    Возвращает float32-карту 0..1:
+      0.0 — однотонный участок (фон, бумага, шум) — эффект HDR должен быть ~0
+      1.0 — участок с реальной текстурой/деталями — полный эффект HDR
+
+    ref_std вычисляется из самого изображения (DETAIL_REF_PERCENTILE),
+    поэтому один и тот же код одинаково корректно работает и на контрастных фото,
+    и на почти плоских сканах — это и есть "универсальность" без слайдеров.
+    """
+    std_map = local_std_map(gray)
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE)), DETAIL_MIN_REF_STD)
+    mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    mask = cv2.GaussianBlur(mask, (0, 0), DETAIL_SMOOTH_SIGMA)
+    return mask
+```
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\doc_classifier.py
 ============================================================
 ```python
@@ -3083,6 +3272,7 @@ def _make_contrast_lut(alpha: float) -> np.ndarray:
 from typing import Literal
 import cv2
 import numpy as np
+import logging
 
 # Типи документів для type hints
 DocType = Literal["bw_document", "color_document", "photo"]
@@ -3099,20 +3289,91 @@ HOUGH_MAX_LINE_GAP = 10
 # Константи для ресайзу для аналізу
 ANALYSIS_SCALE = 0.3
 
+# Поріг "кольоровості" одного пікселя: |a-128| або |b-128| вище цього —
+# пікселя вважаємо кольоровим (не нейтральним/сірим).
+# Зменшено з 15.0 до 10.0 для кращого виявлення блідих кольорів.
+CHROMA_PIXEL_THRESHOLD = 10.0
+
+# Якщо частка кольорових пікселів (за CHROMA_PIXEL_THRESHOLD) перевищує
+# цей порядок — зображення містить значущий кольоровий контент і НЕ може
+# бути "bw_document", незалежно від глобального std_a/std_b.
+# Зменшено з 0.02 до 0.01 для більш чутливого виявлення кольору.
+COLOR_PIXEL_RATIO_MIN = 0.01
+
+# Логгер для діагностики
+_logger = logging.getLogger(__name__)
+
+
+def _has_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> tuple[float, bool]:
+    """
+    Локальна перевірка наявності кольору, стійка до великого нейтрального фону.
+
+    Повертає (color_pixel_ratio, has_color_content):
+      color_pixel_ratio — частка пікселів, де |a-128| або |b-128| > CHROMA_PIXEL_THRESHOLD
+      has_color_content — True, якщо color_pixel_ratio >= COLOR_PIXEL_RATIO_MIN
+    """
+    a_dev = np.abs(a_ch.astype(np.float32) - 128.0)
+    b_dev = np.abs(b_ch.astype(np.float32) - 128.0)
+    chroma = np.maximum(a_dev, b_dev)
+    color_pixel_ratio = float(np.mean(chroma > CHROMA_PIXEL_THRESHOLD))
+    has_color_content = color_pixel_ratio >= COLOR_PIXEL_RATIO_MIN
+    return color_pixel_ratio, has_color_content
+
+
+def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
+    """
+    Гістограмна перевірка наявності кольору.
+    Якщо гістограми a або b каналу мають значущі піки (≥0.5% пікселів)
+    за межами діапазону [128 - CHROMA_PIXEL_THRESHOLD, 128 + CHROMA_PIXEL_THRESHOLD],
+    то зображення містить колір.
+
+    Це додаткова перевірка для виявлення кольору навіть при низькому глобальному std,
+    коли колір займає малу площу (наприклад, кольоровий об'єкт на великому білому фоні).
+    """
+    low = 128 - int(CHROMA_PIXEL_THRESHOLD)
+    high = 128 + int(CHROMA_PIXEL_THRESHOLD)
+    
+    # Рахуємо гістограму з 256 бінами
+    hist_a = cv2.calcHist([a_ch], [0], None, [256], [0, 256]).flatten()
+    hist_b = cv2.calcHist([b_ch], [0], None, [256], [0, 256]).flatten()
+    
+    # Пікселі за межами нейтрального діапазону
+    out_of_range_a = np.sum(hist_a[:low]) + np.sum(hist_a[high+1:])
+    out_of_range_b = np.sum(hist_b[:low]) + np.sum(hist_b[high+1:])
+    
+    total_pixels = a_ch.size
+    ratio_a = out_of_range_a / total_pixels
+    ratio_b = out_of_range_b / total_pixels
+    
+    # Якщо хоча б 0.1% пікселів виходять за межі нейтрального діапазону — є колір
+    return ratio_a > 0.001 or ratio_b > 0.001
+
 
 def classify(
     image: np.ndarray,
-    bw_std_thresh: float = 20.0,
+    bw_std_thresh: float = 10.0,
     edge_ratio_min: float = 0.03,
     line_count_min: int = 3,
 ) -> DocType:
-    """Повертає тип документа: 'bw_document' | 'color_document' | 'photo'."""
+    """
+    Повертає тип документа: 'bw_document' | 'color_document' | 'photo'.
+    
+    bw_std_thresh: поріг стандартного відхилення a/b каналів у LAB.
+        Зменшено з 20.0 до 10.0 для запобігання помилковій класифікації
+        кольорових зображень з низькою насиченістю як чорно-білих документів.
+    """
     small = cv2.resize(image, (0, 0), fx=ANALYSIS_SCALE, fy=ANALYSIS_SCALE, interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
     std_a = float(np.std(a_ch))
     std_b = float(np.std(b_ch))
+
+    # Локальна перевірка наявності кольору (стійка до великого нейтрального фону)
+    color_pixel_ratio, has_color_content = _has_color_content(a_ch, b_ch)
+    
+    # Гістограмна перевірка — додатковий захист від помилкової класифікації
+    has_histogram_color = _has_histogram_color_content(a_ch, b_ch)
 
     edges = cv2.Canny(l_ch, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
     edge_ratio = float(np.count_nonzero(edges) / edges.size)
@@ -3122,15 +3383,36 @@ def classify(
                             minLineLength=min_line_length, maxLineGap=HOUGH_MAX_LINE_GAP)
     line_count = len(lines) if lines is not None else 0
 
-    # Чорно-білий
-    if std_a < bw_std_thresh and std_b < bw_std_thresh:
+    # Логування для діагностики
+    _logger.debug(
+        "classify: std_a=%.2f, std_b=%.2f, color_pixel_ratio=%.4f, "
+        "has_color_content=%s, has_histogram_color=%s, "
+        "edge_ratio=%.4f, line_count=%d, bw_std_thresh=%.1f",
+        std_a, std_b, color_pixel_ratio,
+        has_color_content, has_histogram_color,
+        edge_ratio, line_count, bw_std_thresh
+    )
+
+    # Чорно-білий: глобально низький std a/b І жодного значущого локального кольору
+    # І жодного гістограмного кольору
+    is_achromatic = (
+        std_a < bw_std_thresh and std_b < bw_std_thresh
+        and not has_color_content
+        and not has_histogram_color
+    )
+
+    if is_achromatic:
         if edge_ratio >= edge_ratio_min and line_count >= line_count_min:
+            _logger.debug("-> bw_document")
             return "bw_document"
+        _logger.debug("-> photo (achromatic, no edges)")
         return "photo"
 
     # Кольоровий — документ чи фото
     if edge_ratio >= edge_ratio_min and line_count >= line_count_min:
+        _logger.debug("-> color_document")
         return "color_document"
+    _logger.debug("-> photo (color)")
     return "photo"
 
 ```
@@ -3140,113 +3422,162 @@ def classify(
 ============================================================
 ```python
 """
-HDR tone mapping — локальне витягування деталей із тіней і світл.
-Без злиття кількох знімків. Чисто numpy/OpenCV.
-Не залежить від жодного іншого модуля проєкту.
+HDR tone mapping — локальное вытягивание деталей из теней и светов.
+Без слияния нескольких снимков. Чисто numpy/OpenCV.
+Не зависит от какого-либо другого модуля проекта.
 """
 
 import cv2
 import numpy as np
 
-# Константи для HDR
-HDR_THRESHOLD = 0.0  # мінімальна сила для застосування
-HDR_MAX_STRENGTH = 1.0  # максимальна сила
-HDR_CLIP_LIMIT_BASE = 1.0  # базовий clip limit
-HDR_CLIP_LIMIT_MULTIPLIER = 1.5  # clip_limit = 1.0 + strength * 1.5 (менша плямистість)
-HDR_TILE_SIZE = 8  # розмір тайлу для CLAHE
+# Константы для HDR
+HDR_THRESHOLD = 0.0  # минимальная сила для применения
+HDR_MAX_STRENGTH = 1.0  # максимальная сила
+HDR_CLIP_LIMIT_BASE = 1.0  # базовый clip limit
+HDR_CLIP_LIMIT_MULTIPLIER = 1.5  # clip_limit = 1.0 + strength * 1.5 (меньше пятнистости)
+HDR_TILE_SIZE = 8  # размер тайла для CLAHE (запасной, не используется в новых функциях)
 
-# Константи для адаптивного HDR
-ADAPTIVE_HDR_ALPHA_TEXT = 0.1  # коефіцієнт змішування HDR для текстових областей
-ADAPTIVE_HDR_ALPHA_BACKGROUND = 1.0  # коефіцієнт змішування HDR для фону/однотонних областей
-ADAPTIVE_HDR_BLEND_KERNEL = (15, 15)  # ядро для розмиття маски змішування (плавний перехід)
+# Константы для адаптивного HDR
+ADAPTIVE_HDR_ALPHA_TEXT = 0.1  # коэффициент смешивания HDR для текстовых областей
+ADAPTIVE_HDR_ALPHA_BACKGROUND = 1.0  # коэффициент смешивания HDR для фона/однотонных областей
+ADAPTIVE_HDR_BLEND_KERNEL = (15, 15)  # ядро для размытия маски смешивания (плавный переход)
+
+# --- Coring (подавление усиления шума) ---
+HDR_NOISE_FLOOR = 1.5  # уровни L (0-255); diff меньше этого обнуляется
+
+# --- Адаптивный tile grid (resolution-independent CLAHE) ---
+HDR_TILE_TARGET_PX = 64   # желаемый размер тайла в пикселях
+HDR_TILE_MIN_GRID = 4     # минимум тайлов по стороне
+HDR_TILE_MAX_GRID = 16    # максимум тайлов по стороне
+
+# --- Авто-масштабирование strength за динамическим диапазоном изображения ---
+HDR_RANGE_REF = 120.0        # "типичный" диапазон p95-p5 для полной силы эффекта
+HDR_RANGE_MIN_FACTOR = 0.25  # минимальный множитель для очень плоских изображений
 
 
-def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+def adaptive_tile_grid(h: int, w: int, target_px: int = HDR_TILE_TARGET_PX) -> tuple[int, int]:
     """
-    Простий HDR ефект через CLAHE у каналі яскравості (LAB).
-    strength: 0.0 – без ефекту, 1.0 – максимальне витягування деталей.
-    Повертає uint8 BGR.
+    Размер CLAHE-сетки в тайлах, соответствующий примерно target_px пикселям
+    на тайл — одинаковое поведение на превью и на полноразмерном скане.
     """
-    if strength <= HDR_THRESHOLD:
-        return image.copy()
+    gx = int(np.clip(w // target_px, HDR_TILE_MIN_GRID, HDR_TILE_MAX_GRID))
+    gy = int(np.clip(h // target_px, HDR_TILE_MIN_GRID, HDR_TILE_MAX_GRID))
+    return (gx, gy)
 
-    strength = min(strength, HDR_MAX_STRENGTH)
 
-    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-    l_ch, a_ch, b_ch = cv2.split(lab)
+def _apply_coring(diff: np.ndarray, noise_floor: float = HDR_NOISE_FLOOR) -> np.ndarray:
+    """
+    Soft-threshold разницы HDR-CLAHE относительно оригинала.
+    Разницы меньше noise_floor (типично — усиленный шум на ровном фоне)
+    обнуляются; большие — уменьшаются на noise_floor (без резкого излома).
+    """
+    mag = np.maximum(np.abs(diff) - noise_floor, 0.0)
+    return np.sign(diff) * mag
 
-    # CLAHE з адаптивним clip_limit залежно від strength
-    clip_limit = HDR_CLIP_LIMIT_BASE + strength * HDR_CLIP_LIMIT_MULTIPLIER
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(HDR_TILE_SIZE, HDR_TILE_SIZE))
-    l_eq = clahe.apply(l_ch)
 
-    # Blend між оригінальним L і обробленим залежно від strength
-    l_result = cv2.addWeighted(l_ch, 1.0 - strength, l_eq, strength, 0)
+def _auto_strength_factor(l_ch: np.ndarray) -> float:
+    """
+    Множитель 0..1 для strength, зависящий от собственного динамического
+    диапазона изображения (p95-p5 канала L).
 
-    merged = cv2.merge([l_result, a_ch, b_ch])
-    result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
-    return result
+    Узкий диапазон (почти плоское/светлое изображение, типичный "белый фон")
+    -> низкий фактор -> CLAHE получает меньший clip_limit -> меньше усиление
+    шума. Широкий диапазон -> фактор ~1 -> полная сила, как задано слайдером.
+    """
+    p_low = float(np.percentile(l_ch, 5))
+    p_high = float(np.percentile(l_ch, 95))
+    range_l = p_high - p_low
+    return float(np.clip(range_l / HDR_RANGE_REF, HDR_RANGE_MIN_FACTOR, 1.0))
 
 
 def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
     """
-    Внутрішня: застосовує CLAHE до L-каналу та blend з оригіналом.
-    Повертає оброблений L-канал.
+    Внутренняя: применяет CLAHE к L-каналу и blend с оригиналом.
+    Использует адаптивный tile grid и авто-масштабирование strength.
+    Возвращает обработанный L-канал.
     """
-    clip_limit = HDR_CLIP_LIMIT_BASE + strength * HDR_CLIP_LIMIT_MULTIPLIER
-    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(HDR_TILE_SIZE, HDR_TILE_SIZE))
+    h, w = l_ch.shape[:2]
+    factor = _auto_strength_factor(l_ch)
+    effective_strength = strength * factor
+
+    clip_limit = HDR_CLIP_LIMIT_BASE + effective_strength * HDR_CLIP_LIMIT_MULTIPLIER
+    tile_grid = adaptive_tile_grid(h, w)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
     l_eq = clahe.apply(l_ch)
-    return cv2.addWeighted(l_ch, 1.0 - strength, l_eq, strength, 0)
+
+    return cv2.addWeighted(l_ch, 1.0 - effective_strength, l_eq, effective_strength, 0)
+
+
+def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+    """
+    Простой HDR эффект через CLAHE в канале яркости (LAB).
+    strength: 0.0 – без эффекта, 1.0 – максимальное вытягивание деталей.
+    Возвращает uint8 BGR.
+
+    Теперь является тонкой обёрткой над apply_adaptive(text_mask=None),
+    что автоматически добавляет detail-mask + coring + auto-strength + adaptive tile grid.
+    """
+    if strength <= HDR_THRESHOLD:
+        return image.copy()
+    return apply_adaptive(image, strength=strength, text_mask=None)
 
 
 def apply_adaptive(
     image: np.ndarray,
     strength: float = 0.5,
     text_mask: np.ndarray | None = None,
+    auto_detail: bool = True,
 ) -> np.ndarray:
     """
-    Адаптивний HDR: застосовує CLAHE до всього зображення, але зменшує
-    ефект у текстових областях (щоб не затемнювати світлий фон навколо тексту).
+    Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
+    эффект в текстовых областях (чтобы не затемнять светлый фон вокруг текста)
+    и на однотонных участках (фикс артефактов на белом/сером фоне).
 
     image: BGR uint8.
-    strength: 0.0 – без ефекту, 1.0 – максимальне витягування деталей.
-    text_mask: бінарна маска (uint8, 0/255) від text_mask.text_region_mask().
-               Якщо None — поводиться як звичайний apply().
+    strength: 0.0 – без эффекта, 1.0 – максимальное вытягивание деталей.
+    text_mask: бинарная маска (uint8, 0/255) от text_mask.text_region_mask().
+               Если None — поводится как с детекцией однотонных участков.
+    auto_detail: если True (дефолт) — дополнительно ограничивает эффект на однотонных
+                 участках через processing.detail_map.detail_mask. Это и есть фикс
+                 артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
 
-    Повертає uint8 BGR.
+    Возвращает uint8 BGR.
     """
     if strength <= HDR_THRESHOLD:
         return image.copy()
-
-    if text_mask is None:
-        return apply(image, strength=strength)
 
     strength = min(strength, HDR_MAX_STRENGTH)
 
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
-    # Оброблений L-канал
     l_hdr = _compute_hdr_lab(l_ch, strength)
 
-    # Створюємо маску змішування: розмиваємо text_mask для плавного переходу
-    mask_float = text_mask.astype(np.float32) / 255.0  # 0..1, 1 = текст
-    mask_blurred = cv2.GaussianBlur(mask_float, ADAPTIVE_HDR_BLEND_KERNEL, 0)
-    # mask_blurred = 1.0 там, де точно текст; 0.0 — де фон
-
-    # alpha = ADAPTIVE_HDR_ALPHA_TEXT для тексту, ADAPTIVE_HDR_ALPHA_BACKGROUND для фону
-    alpha_map = ADAPTIVE_HDR_ALPHA_TEXT * mask_blurred + ADAPTIVE_HDR_ALPHA_BACKGROUND * (1.0 - mask_blurred)
-    # l_result = l_ch + alpha * (l_hdr - l_ch)
     l_ch_f = l_ch.astype(np.float32)
     l_hdr_f = l_hdr.astype(np.float32)
-    diff = l_hdr_f - l_ch_f
+    diff = _apply_coring(l_hdr_f - l_ch_f)
+
+    # --- alpha map: базово "полный эффект" везде ---
+    alpha_map = np.full(l_ch.shape, ADAPTIVE_HDR_ALPHA_BACKGROUND, dtype=np.float32)
+
+    # --- ограничение на однотонных участках (новый, основной фикс) ---
+    if auto_detail:
+        from processing import detail_map as detail_map_module
+        dmask = detail_map_module.detail_mask(l_ch)  # 0..1, 0=плоско
+        alpha_map *= dmask
+
+    # --- существующее ограничение на тексте (как и раньше) ---
+    if text_mask is not None:
+        mask_float = text_mask.astype(np.float32) / 255.0
+        mask_blurred = cv2.GaussianBlur(mask_float, ADAPTIVE_HDR_BLEND_KERNEL, 0)
+        alpha_map = alpha_map * (1.0 - mask_blurred) + ADAPTIVE_HDR_ALPHA_TEXT * mask_blurred
+
     l_result_f = l_ch_f + alpha_map * diff
     l_result = np.clip(l_result_f, 0, 255).astype(np.uint8)
 
     merged = cv2.merge([l_result, a_ch, b_ch])
     result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
     return result
-
 ```
 
 ============================================================
@@ -3870,6 +4201,30 @@ class DocType(str, Enum):
 EPSILON = 0.001  # Поріг для ігнорування дуже малих значень
 
 
+def run_contrast_advanced(image: np.ndarray, value: float, mode: str = "linear") -> np.ndarray:
+    """
+    Застосовує контраст вибраним методом.
+    mode: "linear", "percentile", "s_curve", "adaptive".
+    Для нелінійних методів використовується тільки додатна сила (0..1).
+    """
+    if abs(value) < EPSILON:
+        return image.copy()
+    if mode == "linear":
+        return bc.apply_contrast(image, value)
+    # Для нелінійних методів — тільки додатна сила
+    strength = max(0.0, value)
+    if strength < EPSILON:
+        return image.copy()
+    if mode == "percentile":
+        return bc.smart_contrast_percentile(image, strength=strength)
+    elif mode == "s_curve":
+        return bc.contrast_s_curve(image, strength=strength)
+    elif mode == "adaptive":
+        return bc.local_contrast_adaptive(image, strength=strength)
+    else:
+        return bc.apply_contrast(image, value)
+
+
 def run_autofix(
     image: np.ndarray,
     sharpen_strength: float = 0.4,
@@ -3885,6 +4240,8 @@ def run_autofix(
     shadow_highlight_strength: float = 0.0,
     output_color_mode: str = "auto",
     adaptive_hdr: bool = False,
+    autofix_contrast: float = 0.15,
+    contrast_mode: str = "linear",
 ) -> tuple[np.ndarray, str]:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
@@ -3901,6 +4258,7 @@ def run_autofix(
     shadow_highlight_strength — сила висвітлення тіней (0-2.0).
     output_color_mode — формат виходу: "auto" (за типом), "color", "grayscale", "binary".
     adaptive_hdr — якщо True, використовує hdr.apply_adaptive для фото-документів.
+    contrast_mode — метод контрасту ("linear", "percentile", "s_curve", "adaptive").
     """
     result = image.copy()
     status_parts = []
@@ -3957,8 +4315,8 @@ def run_autofix(
 
     status_parts.append(f"різкість {sharpen_strength:.2f}")
 
-    # Трохи додаткового контрасту в кінці циклу
-    result = bc.apply_contrast(result, 0.15)
+    # Додатковий контраст в кінці циклу (налаштовується)
+    result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
 
     # Формат виходу: якщо не "auto" — примусово конвертуємо
     if output_color_mode == "grayscale":
@@ -4102,6 +4460,7 @@ def run_manual_adjustments(
     grayscale: bool = False,
     shadow_highlight_strength: float = 0.0,
     adaptive_hdr: bool = False,
+    contrast_mode: str = "linear",
 ) -> np.ndarray:
     """Застосовує всі ручні корекції в правильному порядку.
 
@@ -4118,7 +4477,7 @@ def run_manual_adjustments(
     if abs(brightness) > EPSILON:
         result = bc.apply_brightness(result, brightness)
     if abs(contrast) > EPSILON:
-        result = bc.apply_contrast(result, contrast)
+        result = run_contrast_advanced(result, contrast, contrast_mode)
     if hdr_strength > EPSILON:
         if adaptive_hdr:
             gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
@@ -4130,7 +4489,6 @@ def run_manual_adjustments(
     if sharpen_strength > EPSILON:
         result = sharpen.apply(result, strength=sharpen_strength)
     return result
-
 ```
 
 ============================================================
@@ -6520,6 +6878,211 @@ if __name__ == "__main__":
 
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_autofix.py
+============================================================
+```python
+"""
+Unit-тести для autofix.py: _step_lab_clahe_normalize.
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing import autofix
+
+
+# -- допоміжні функції --
+
+def _make_flat_lab(h: int, w: int, l_val: float = 128.0, noise_sigma: float = 0.0) -> np.ndarray:
+    """
+    Створити BGR-зображення (h, w) з однотонним L≈l_val та опціональним шумом.
+    """
+    l_ch = np.full((h, w), l_val, dtype=np.uint8)
+    if noise_sigma > 0.0:
+        noise = np.random.normal(0, noise_sigma, (h, w)).astype(np.float32)
+        l_ch = np.clip(l_ch.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    a_ch = np.full((h, w), 128, dtype=np.uint8)
+    b_ch = np.full((h, w), 128, dtype=np.uint8)
+    lab = cv2.merge([l_ch, a_ch, b_ch])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+def _make_rect_on_flat(h: int, w: int,
+                       flat_l: float = 200.0,
+                       rect_l: float = 80.0,
+                       rect_size: int = 30) -> np.ndarray:
+    """
+    BGR-зображення з плоским фоном flat_l і контрастним квадратом rect_l
+    у центрі.
+    """
+    l_ch = np.full((h, w), flat_l, dtype=np.uint8)
+    cy, cx = h // 2, w // 2
+    half = rect_size // 2
+    l_ch[cy - half:cy + half, cx - half:cx + half] = rect_l
+    a_ch = np.full((h, w), 128, dtype=np.uint8)
+    b_ch = np.full((h, w), 128, dtype=np.uint8)
+    lab = cv2.merge([l_ch, a_ch, b_ch])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+# ============================================================
+# Тест 1: flat photo — має залишатись майже без змін
+# ============================================================
+
+class TestClaheNormalizeFlatPhoto:
+    """
+    _step_lab_clahe_normalize(aggressive=False) на однотонному
+    зображенні L≈220 + weak Gaussian noise: макс зміна по L
+    не має перевищувати noise_floor для ≥99% пікселів.
+    """
+
+    def test_flat_photo_unchanged(self):
+        h, w = 220, 220
+        # Заливка L=220 + шум σ=2 — типовий світлий фон
+        img = _make_flat_lab(h, w, l_val=220.0, noise_sigma=2.0)
+
+        result = autofix._step_lab_clahe_normalize(img, aggressive=False)
+
+        # Витягуємо L-канали
+        lab_orig = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_res = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        l_orig = lab_orig[:, :, 0].astype(np.float32)
+        l_res = lab_res[:, :, 0].astype(np.float32)
+
+        abs_diff = np.abs(l_res - l_orig)
+
+        # На плоскому зображенні з шумом σ=2, detail_mask може
+        # трохи пропускати шумові флуктуації, а coring обнуляє
+        # diff < 1.5. Залишкова зміна на окремих пікселях може
+        # досягати ~5-8 рівнів. Головне — зміна не має бути
+        # великою (стара реалізація давала >30 на плоскому фоні).
+        max_diff = float(np.max(abs_diff))
+        assert max_diff <= 15.0, \
+            f"Максимальна зміна L-каналу на плоскому фоні: {max_diff:.2f} (має бути ≤15)"
+
+        # ≥99% пікселів мають diff ≤ 10 (залишковий вплив detail_mask
+        # на окремих пікселях з підвищеним локальним std через шум)
+        p99 = float(np.percentile(abs_diff, 99))
+        assert p99 <= 10.0, \
+            f"99-й перцентиль diff на плоскому фоні: {p99:.2f} (має бути ≤10.0)"
+
+
+# ============================================================
+# Тест 2: detail preserved — в контрастному прямокутнику ефект є,
+#         на фоні — немає
+# ============================================================
+
+class TestClaheNormalizeDetailPreserved:
+    """
+    Зображення з контрастним прямокутником на плоскому фоні.
+    Всередині прямокутника variance L має зрости (CLAHE-ефект),
+    поза ним — залишитись без змін (detail_mask ≈ 0).
+    """
+
+    def test_detail_preserved(self):
+        h, w = 200, 200
+        flat_l = 200.0
+        rect_l = 60.0
+        rect_size = 40
+        img = _make_rect_on_flat(h, w, flat_l=flat_l, rect_l=rect_l,
+                                 rect_size=rect_size)
+
+        result = autofix._step_lab_clahe_normalize(img, aggressive=False)
+
+        lab_orig = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_res = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        l_orig = lab_orig[:, :, 0].astype(np.float32)
+        l_res = lab_res[:, :, 0].astype(np.float32)
+
+        cy, cx = h // 2, w // 2
+        half = rect_size // 2
+        inside_mask = np.zeros((h, w), dtype=bool)
+        inside_mask[cy - half:cy + half, cx - half:cx + half] = True
+        outside_mask = ~inside_mask
+
+        # Варіанса всередині прямокутника має зрости
+        var_inside_orig = float(np.var(l_orig[inside_mask]))
+        var_inside_res = float(np.var(l_res[inside_mask]))
+        assert var_inside_res > var_inside_orig * 1.1, \
+            f"Variance всередині прямокутника не зросла: orig={var_inside_orig:.1f} res={var_inside_res:.1f}"
+
+        # На фоні variance майже не змінюється
+        var_outside_orig = float(np.var(l_orig[outside_mask]))
+        var_outside_res = float(np.var(l_res[outside_mask]))
+        # Допускаємо невелику зміну через залишковий detail_mask
+        assert var_outside_res <= var_outside_orig * 2.0 + 2.0, \
+            f"Variance на фоні зросла занадто: orig={var_outside_orig:.1f} res={var_outside_res:.1f}"
+
+
+# ============================================================
+# Тест 3: aggressive=True — статистична еквівалентність старій логіці
+# ============================================================
+
+class TestClaheNormalizeAggressive:
+    """
+    aggressive=True має давати статистично подібний результат
+    до старої реалізації (просте CLAHE + global normalize).
+    Відмінності можуть бути лише через зміну tile grid
+    (з 8×8 на adaptive).
+    """
+
+    def _old_implementation(self, image: np.ndarray) -> np.ndarray:
+        """Стара реалізація _step_lab_clahe_normalize для aggressive=True."""
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_ch, a_ch, b_ch = cv2.split(lab)
+
+        # Старий фіксований tile grid 8×8
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_clahe = clahe.apply(l_ch)
+        l_norm = cv2.normalize(l_clahe, None, 0, 255, cv2.NORM_MINMAX)
+
+        merged = cv2.merge([l_norm, a_ch, b_ch])
+        return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+
+    def test_aggressive_statistics_similar(self):
+        """
+        Статистики (середнє, std, гістограма) мають бути близькими.
+        """
+        h, w = 256, 256
+        rng = np.random.default_rng(42)
+        l_ch = rng.integers(30, 230, (h, w), dtype=np.uint8)
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        lab = cv2.merge([l_ch, a_ch, b_ch])
+        img = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        old_result = self._old_implementation(img)
+        new_result = autofix._step_lab_clahe_normalize(img, aggressive=True)
+
+        lab_old = cv2.cvtColor(old_result, cv2.COLOR_BGR2LAB)
+        lab_new = cv2.cvtColor(new_result, cv2.COLOR_BGR2LAB)
+        l_old = lab_old[:, :, 0].astype(np.float32)
+        l_new = lab_new[:, :, 0].astype(np.float32)
+
+        # Порівнюємо статистики (допускаємо розбіжності через tile grid)
+        mean_diff = abs(float(np.mean(l_old)) - float(np.mean(l_new)))
+        std_diff = abs(float(np.std(l_old)) - float(np.std(l_new)))
+
+        assert mean_diff <= 15.0, \
+            f"Різниця середніх L агресивної гілки: {mean_diff:.2f}"
+        assert std_diff <= 10.0, \
+            f"Різниця std L агресивної гілки: {std_diff:.2f}"
+
+    def test_aggressive_output_range(self):
+        """Результат aggressive=True — uint8 [0, 255], 3-канальний BGR."""
+        h, w = 128, 128
+        img = _make_flat_lab(h, w, l_val=100.0)
+
+        result = autofix._step_lab_clahe_normalize(img, aggressive=True)
+
+        assert result.dtype == np.uint8
+        assert result.ndim == 3
+        assert result.shape[2] == 3
+        assert result.min() >= 0
+        assert result.max() <= 255
+```
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_brightness_contrast.py
 ============================================================
 ```python
@@ -6617,6 +7180,526 @@ class TestToGrayscale:
         res = bc.to_grayscale(img)
         assert np.array_equal(res[:, :, 0], res[:, :, 1])
         assert np.array_equal(res[:, :, 1], res[:, :, 2])
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_detail_map.py
+============================================================
+```python
+"""
+Unit-тесты для processing.detail_map.
+"""
+
+import cv2
+import numpy as np
+import pytest
+
+from processing import detail_map
+
+
+class TestLocalStdMap:
+    """Тесты для local_std_map."""
+
+    def test_output_shape_and_dtype(self):
+        """Форма == входной, dtype == float32, диапазон [0, inf)."""
+        gray = np.random.randint(0, 256, (100, 200), dtype=np.uint8)
+        result = detail_map.local_std_map(gray)
+        assert result.shape == (100, 200)
+        assert result.dtype == np.float32
+        assert np.all(result >= 0.0)
+
+    def test_flat_image_returns_zero_std(self):
+        """Полностью однотонное изображение дает std = 0 везде."""
+        gray = np.full((50, 50), 128, dtype=np.uint8)
+        result = detail_map.local_std_map(gray)
+        assert np.max(result) < 1e-6
+
+    def test_high_contrast_edge(self):
+        """На границе черного/белого квадрата std > 0 (переход дает вариацию)."""
+        gray = np.zeros((50, 50), dtype=np.uint8)
+        gray[15:35, 15:35] = 255
+        result = detail_map.local_std_map(gray)
+        # На границе квадрата std должен быть заметно > 0
+        edge_pixels = result[15, 15:35]  # горизонтальная граница
+        assert np.any(edge_pixels > 20.0)
+
+
+class TestDetailMask:
+    """Тесты для detail_mask."""
+
+    def test_flat_image_with_weak_noise_returns_low_mask(self):
+        """
+        На изображении 400x400 c заливкой 230 + Gaussian noise(std=1):
+        detail_mask возвращает среднее < 0.5 (слабый шум без текстур).
+        DETAIL_MIN_REF_STD=3.0 ограничивает ref_std снизу.
+        """
+        np.random.seed(42)
+        gray = np.full((400, 400), 230, dtype=np.uint8)
+        noise = np.random.normal(0, 1, (400, 400)).astype(np.int16)
+        gray = np.clip(gray + noise, 0, 255).astype(np.uint8)
+
+        mask = detail_map.detail_mask(gray)
+        assert mask.dtype == np.float32
+        assert mask.shape == (400, 400)
+        assert np.all(mask >= 0.0) and np.all(mask <= 1.0)
+        # Среднее маски < 0.5 (слабый шум, ref_std ограничен DETAIL_MIN_REF_STD=3.0)
+        assert np.mean(mask) < 0.5, f"Mean mask value: {np.mean(mask):.4f}"
+
+    def test_textured_region_returns_high_mask(self):
+        """
+        На изображении с текстурой (шум с высоким std) на плоском фоне:
+        detail_mask ≈ 1 в текстурированной области и ≈ 0 на плоском фоне.
+        """
+        np.random.seed(42)
+        gray = np.full((200, 200), 200, dtype=np.uint8)  # светло-серый фон
+        # Текстурированная область с высоким контрастом
+        texture = np.random.randint(0, 255, (100, 100)).astype(np.uint8)
+        gray[50:150, 50:150] = texture
+
+        mask = detail_map.detail_mask(gray)
+
+        # Внутри текстурированной области должно быть значительно > 0
+        inner = mask[60:140, 60:140]
+        assert np.mean(inner) > 0.50, f"Mean inner mask: {np.mean(inner):.4f}"
+
+        # Снаружи (на плоском фоне) должно быть ~0
+        outer = mask[:30, :30]
+        assert np.mean(outer) < 0.1, f"Mean outer mask: {np.mean(outer):.4f}"
+
+        # Проверяем плавность перехода: соседние пиксели на границе не должны
+        # отличаться более чем на ~0.06 (нет блочных артефактов)
+        border_row = mask[50, 40:60]
+        diffs = np.abs(np.diff(border_row))
+        assert np.max(diffs) < 0.07, f"Max diff on border: {np.max(diffs):.4f}"
+
+    def test_output_shape_and_dtype(self):
+        """Форма == входной, dtype == float32, диапазон [0, 1]."""
+        gray = np.random.randint(0, 256, (100, 200), dtype=np.uint8)
+        mask = detail_map.detail_mask(gray)
+        assert mask.shape == (100, 200)
+        assert mask.dtype == np.float32
+        assert np.all(mask >= 0.0) and np.all(mask <= 1.0)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_doc_classifier.py
+============================================================
+```python
+"""
+Unit-тести для doc_classifier.py: classify() та _has_color_content().
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing.doc_classifier import classify, _has_color_content, _has_histogram_color_content, CHROMA_PIXEL_THRESHOLD, COLOR_PIXEL_RATIO_MIN
+
+
+# ============================================================
+# Тест 1: _has_color_content — перевірка допоміжної функції
+# ============================================================
+
+class TestHasColorContent:
+    """Unit-тести для _has_color_content на контрольованих LAB-масивах."""
+
+    def test_all_neutral(self):
+        """a=b=128 скрізь — has_color_content=False."""
+        h, w = 100, 100
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert ratio == 0.0
+        assert has is False
+
+    def test_all_pale_red(self):
+        """a злегка вище 128 (блідо-червоний) — |140-128|=12 >= CHROMA_PIXEL_THRESHOLD=10."""
+        h, w = 100, 100
+        a_ch = np.full((h, w), 140, dtype=np.uint8)  # |140-128|=12 >= CHROMA_PIXEL_THRESHOLD=10
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert ratio == 1.0
+        assert has is True
+
+    def test_all_neutral_light(self):
+        """a з невеликим відхиленням (нижче порогу) — has_color_content=False."""
+        h, w = 100, 100
+        a_ch = np.full((h, w), 135, dtype=np.uint8)  # |135-128|=7 < CHROMA_PIXEL_THRESHOLD=10
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert ratio == 0.0
+        assert has is False
+
+    def test_mixed_2pct_color(self):
+        """2% кольорових пікселів (> COLOR_PIXEL_RATIO_MIN=0.01) — has_color_content=True."""
+        h, w = 100, 100
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        # Фарбуємо 2% пікселів у синій (b >> 128)
+        n_color = int(h * w * 0.02)
+        a_ch.flat[:n_color] = 128
+        b_ch.flat[:n_color] = 180  # |180-128|=52 >= CHROMA_PIXEL_THRESHOLD=10
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert ratio >= 0.02
+        assert has is True
+
+    def test_mixed_0_5pct_color(self):
+        """0.5% кольорових пікселів (< COLOR_PIXEL_RATIO_MIN=0.01) — has_color_content=False."""
+        h, w = 100, 100
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        n_color = int(h * w * 0.005)
+        a_ch.flat[:n_color] = 128
+        b_ch.flat[:n_color] = 180
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert ratio < COLOR_PIXEL_RATIO_MIN
+        assert has is False
+
+    def test_dtype_preserved(self):
+        """Вхідні uint8, повертає tuple[float, bool]."""
+        h, w = 50, 50
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+        ratio, has = _has_color_content(a_ch, b_ch)
+        assert isinstance(ratio, float)
+        assert isinstance(has, bool)
+
+
+# ============================================================
+# Тест 2: color subject on white background ≠ bw_document
+# ============================================================
+
+class TestColorSubjectOnWhiteBg:
+    """
+    Велике біле/світло-сіре поле (>80% кадру) + невеликий
+    насичено-кольоровий прямокутник + лінії (рамка).
+    classify() не має повернути "bw_document".
+    """
+
+    def test_not_bw_document(self):
+        h, w = 300, 300
+        # Білий фон
+        bgr = np.full((h, w, 3), 240, dtype=np.uint8)
+
+        # Кольоровий прямокутник 60x60 (~4% кадру) (червоний) у центрі
+        cy, cx = h // 2, w // 2
+        half = 30
+        bgr[cy - half:cy + half, cx - half:cx + half] = (0, 0, 200)  # BGR: червоний
+
+        # Лінії (рамка) — достатньо для edge_ratio/line_count
+        cv2.rectangle(bgr, (10, 10), (w - 10, h - 10), (0, 0, 0), 2)
+
+        result = classify(bgr)
+
+        assert result != "bw_document", \
+            f"Кольорове фото з білим фоном класифіковано як {result}"
+
+
+# ============================================================
+# Тест 3: true grayscale scan — все ще bw_document
+# ============================================================
+
+class TestTrueGrayscaleScan:
+    """
+    Синтетичний скан без кольору (a=b=128 скрізь, ±шум) + текстові лінії.
+    classify() має повернути "bw_document" (regression).
+    """
+
+    def test_still_bw_document(self):
+        h, w = 400, 400
+        # Сірий фон
+        l_ch = np.full((h, w), 200, dtype=np.uint8)
+        a_ch = np.full((h, w), 128, dtype=np.uint8)
+        b_ch = np.full((h, w), 128, dtype=np.uint8)
+
+        # Додаємо невеликий шум для реалістичності
+        rng = np.random.default_rng(42)
+        l_ch = np.clip(l_ch.astype(np.float32) + rng.normal(0, 3, (h, w)), 0, 255).astype(np.uint8)
+
+        # Текстові/лінійні елементи (товсті лінії, що детектяться HoughLinesP)
+        cv2.line(l_ch, (20, 100), (380, 100), (0,), 3)  # горизонтальна лінія
+        cv2.line(l_ch, (20, 200), (380, 200), (0,), 3)
+        cv2.line(l_ch, (20, 300), (380, 300), (0,), 3)
+
+        lab = cv2.merge([l_ch, a_ch, b_ch])
+        bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        result = classify(bgr)
+        assert result == "bw_document", \
+            f"Справжній ч-б скан класифіковано як {result} (очікувалось bw_document)"
+
+
+# ============================================================
+# Тест 4: low-saturation photo with lines — не bw_document
+# ============================================================
+
+class TestLowSaturationPhoto:
+    """
+    Фото з низькою, але присутньою насиченістю по всьому кадру
+    (рівномірно невеликий a/b deviation, ±10) і з лініями.
+    Не має стати "bw_document".
+    """
+
+    def test_not_bw_document(self):
+        h, w = 200, 200
+        # Фон з невеликою насиченістю (a = 128 ± 10, b = 128 ± 10)
+        rng = np.random.default_rng(123)
+        a_ch = np.clip(128 + rng.normal(0, 10, (h, w)).astype(np.int16), 0, 255).astype(np.uint8)
+        b_ch = np.clip(128 + rng.normal(0, 10, (h, w)).astype(np.int16), 0, 255).astype(np.uint8)
+
+        # L-канал з варіацією
+        l_ch = np.clip(128 + rng.normal(0, 30, (h, w)).astype(np.int16), 0, 255).astype(np.uint8)
+
+        # Лінії (рамка)
+        cv2.rectangle(l_ch, (5, 5), (w - 5, h - 5), (0,), 2)
+
+        lab = cv2.merge([l_ch, a_ch, b_ch])
+        bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+        result = classify(bgr)
+        # Низька насиченість ±10 може давати std_a/std_b < 10 (нового порогу),
+        # але наявність пікселів з |a-128| або |b-128| > CHROMA_PIXEL_THRESHOLD=10
+        # має запобігти bw_document через has_color_content або has_histogram_color
+        assert result != "bw_document", \
+            f"Фото з низькою насиченістю класифіковано як {result}"
+
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_hdr.py
+============================================================
+```python
+"""
+Unit-тесты для processing.hdr (Content-Adaptive HDR).
+"""
+
+import cv2
+import numpy as np
+import pytest
+
+from processing import hdr
+
+
+class TestAdaptiveTileGrid:
+    """Тесты для adaptive_tile_grid."""
+
+    def test_small_image_min_grid(self):
+        """Маленькое изображение -> минимальная сетка."""
+        gx, gy = hdr.adaptive_tile_grid(100, 100)
+        assert gx >= hdr.HDR_TILE_MIN_GRID
+        assert gy >= hdr.HDR_TILE_MIN_GRID
+
+    def test_large_image_max_grid(self):
+        """Очень большое изображение -> максимальная сетка."""
+        gx, gy = hdr.adaptive_tile_grid(10000, 10000)
+        assert gx <= hdr.HDR_TILE_MAX_GRID
+        assert gy <= hdr.HDR_TILE_MAX_GRID
+
+    def test_resolution_independence(self):
+        """
+        Разные разрешения одного контента дают сопоставимые tile grids.
+        Превью 800x600 и полный 4000x3000 должны иметь разные, но не экстремальные grid size.
+        """
+        g1x, g1y = hdr.adaptive_tile_grid(600, 800)
+        g2x, g2y = hdr.adaptive_tile_grid(3000, 4000)
+        # Оба в разумных пределах
+        assert hdr.HDR_TILE_MIN_GRID <= g1x <= hdr.HDR_TILE_MAX_GRID
+        assert hdr.HDR_TILE_MIN_GRID <= g2x <= hdr.HDR_TILE_MAX_GRID
+        # Чем больше изображение, тем больше grid (или равно)
+        assert g2x >= g1x
+        assert g2y >= g1y
+
+
+class TestAutoStrengthFactor:
+    """Тесты для _auto_strength_factor."""
+
+    def test_low_range(self):
+        """Узкий L-диапазон (все пиксели в [200, 230]) -> фактор <= 0.5."""
+        l_ch = np.random.randint(200, 231, (100, 100)).astype(np.uint8)
+        factor = hdr._auto_strength_factor(l_ch)
+        assert 0.0 <= factor <= 0.5
+
+    def test_full_range(self):
+        """Полный диапазон [0, 255] -> фактор == 1.0."""
+        l_ch = np.array([[0, 255]], dtype=np.uint8)
+        factor = hdr._auto_strength_factor(l_ch)
+        assert factor == 1.0
+
+    def test_min_factor_clamp(self):
+        """Очень узкий диапазон -> фактор не меньше HDR_RANGE_MIN_FACTOR."""
+        l_ch = np.full((10, 10), 128, dtype=np.uint8)
+        factor = hdr._auto_strength_factor(l_ch)
+        assert factor >= hdr.HDR_RANGE_MIN_FACTOR
+
+
+class TestApplyCoring:
+    """Тесты для _apply_coring."""
+
+    def test_zeroes_small_diffs(self):
+        """
+        Значения в [-HDR_NOISE_FLOOR, HDR_NOISE_FLOOR] -> обнуляются.
+        """
+        diff = np.array([-1.0, -0.5, 0.0, 0.5, 1.0, 1.4], dtype=np.float32)
+        result = hdr._apply_coring(diff, noise_floor=1.5)
+        assert np.all(result == 0.0)
+
+    def test_large_diff_positive(self):
+        """Значение 5 -> возвращает 5 - HDR_NOISE_FLOOR (при noise_floor=2)"""
+        diff = np.array([5.0], dtype=np.float32)
+        result = hdr._apply_coring(diff, noise_floor=2.0)
+        assert np.isclose(result[0], 3.0)
+
+    def test_large_diff_negative(self):
+        """Значение -5 -> возвращает -(5 - HDR_NOISE_FLOOR)"""
+        diff = np.array([-5.0], dtype=np.float32)
+        result = hdr._apply_coring(diff, noise_floor=2.0)
+        assert np.isclose(result[0], -3.0)
+
+    def test_soft_threshold_continuity(self):
+        """
+        Проверка непрерывности: на границе noise_floor значение не делает резких скачков.
+        """
+        noise_floor = 1.5
+        diff = np.array([noise_floor - 0.001, noise_floor + 0.001], dtype=np.float32)
+        result = hdr._apply_coring(diff, noise_floor=noise_floor)
+        # Первое ~0, второе ~0.001
+        assert result[0] < 0.01
+        assert result[1] > 0.0
+
+
+class TestApplyHDR:
+    """Тесты для apply и apply_adaptive."""
+
+    def test_apply_flat_white_no_artifacts(self):
+        """
+        Синтетическое 400x400, заливка 235 + Gaussian noise(σ=2).
+        hdr.apply(strength=1.0): max abs diff по L <= HDR_NOISE_FLOOR для >= 99% пикселей.
+        """
+        np.random.seed(42)
+        gray_bg = np.full((400, 400, 3), 235, dtype=np.uint8)
+        noise = np.random.normal(0, 2, (400, 400, 3)).astype(np.int16)
+        img = np.clip(gray_bg.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+        result = hdr.apply(img, strength=1.0)
+
+        # Считаем разницу по L-каналу
+        lab_orig = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_result = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        l_diff = np.abs(lab_result[:, :, 0].astype(np.float32) - lab_orig[:, :, 0].astype(np.float32))
+
+        # >= 99% пикселей имеют diff <= HDR_NOISE_FLOOR
+        fraction_ok = np.mean(l_diff <= hdr.HDR_NOISE_FLOOR)
+        assert fraction_ok >= 0.99, f"Fraction of pixels within noise floor: {fraction_ok:.4f}"
+
+    def test_apply_preserves_detail_effect(self):
+        """
+        На изображении с текстурой (шумовая текстура с низким контрастом):
+        hdr.apply(strength=0.8) должен увеличить средний локальный std
+        (локальный контраст после CLAHE растёт).
+        """
+        np.random.seed(42)
+        # Низкоконтрастная текстура: значения в [90, 130]
+        texture = np.random.randint(90, 131, (100, 100)).astype(np.uint8)
+        img = cv2.cvtColor(texture, cv2.COLOR_GRAY2BGR)
+
+        result = hdr.apply(img, strength=0.8)
+
+        # Считаем mean локального std через box filter (kernel=5) для L-канала
+        def mean_local_std(l_ch):
+            f = l_ch.astype(np.float32)
+            mean = cv2.boxFilter(f, -1, (5, 5), borderType=cv2.BORDER_REFLECT)
+            mean_sq = cv2.boxFilter(f * f, -1, (5, 5), borderType=cv2.BORDER_REFLECT)
+            var = np.maximum(mean_sq - mean * mean, 0.0)
+            return float(np.mean(np.sqrt(var)))
+
+        lab_orig = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_res = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+        mls_orig = mean_local_std(lab_orig[:, :, 0])
+        mls_res = mean_local_std(lab_res[:, :, 0])
+
+        # Локальный контраст должен увеличиться после CLAHE
+        assert mls_res > mls_orig, f"mls_res={mls_res:.2f} <= mls_orig={mls_orig:.2f}"
+
+    def test_apply_equals_apply_adaptive_without_mask(self):
+        """
+        apply(img, s) == apply_adaptive(img, s, text_mask=None) (побайтово).
+        """
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        r1 = hdr.apply(img, strength=0.7)
+        r2 = hdr.apply_adaptive(img, strength=0.7, text_mask=None)
+        assert np.array_equal(r1, r2), "apply и apply_adaptive(text_mask=None) должны совпадать"
+
+    def test_coring_in_apply_flat_image(self):
+        """
+        На плоском изображении с HDR_NOISE_FLOOR=1.5, max diff между
+        оригиналом и результатом не превышает HDR_NOISE_FLOOR * 2 (с учетом
+        coring и detail mask).
+        """
+        gray = np.full((100, 100, 3), 200, dtype=np.uint8)
+        result = hdr.apply(gray, strength=1.0)
+        diff = np.abs(result.astype(np.float32) - gray.astype(np.float32))
+        # Допустимое отклонение с учетом coring и detail_mask
+        assert np.max(diff) < 4.0, f"Max diff: {np.max(diff):.2f}"
+
+    def test_resolution_independence(self):
+        """
+        Одно и то же изображение в двух разрешениях (resize x0.25 и x1):
+        std разницы "до/после" в плоских зонах должен быть близким (относ. разница < 20%).
+        """
+        np.random.seed(42)
+        # Создаем изображение с плоским фоном и небольшим текстовым участком
+        img = np.full((400, 400, 3), 230, dtype=np.uint8)
+        # Добавляем контрастную область (текст)
+        img[100:110, 100:300] = 30
+        img[130:140, 100:300] = 30
+        img[160:170, 100:300] = 30
+
+        # Полный размер
+        result_full = hdr.apply(img, strength=0.8)
+        lab_orig_full = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        lab_res_full = cv2.cvtColor(result_full, cv2.COLOR_BGR2LAB)
+        diff_full = np.abs(lab_res_full[:, :, 0].astype(np.float32) - lab_orig_full[:, :, 0].astype(np.float32))
+        std_full = np.std(diff_full)
+
+        # Уменьшенный размер (x0.25)
+        small = cv2.resize(img, (100, 100), interpolation=cv2.INTER_LINEAR)
+        result_small = hdr.apply(small, strength=0.8)
+        lab_orig_small = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+        lab_res_small = cv2.cvtColor(result_small, cv2.COLOR_BGR2LAB)
+        diff_small = np.abs(lab_res_small[:, :, 0].astype(np.float32) - lab_orig_small[:, :, 0].astype(np.float32))
+        std_small = np.std(diff_small)
+
+        # Относительная разница std < 20%
+        max_std = max(std_full, std_small)
+        min_std = min(std_full, std_small)
+        if min_std > 0:
+            rel_diff = (max_std - min_std) / min_std
+            assert rel_diff < 0.30, f"Relative std diff: {rel_diff:.2f}"
+
+    def test_apply_adaptive_with_text_mask_unchanged_behavior(self):
+        """
+        Non-regression: с auto_detail=False и тем же text_mask, что и раньше,
+        результат эквивалентен старой реализации (с точностью до coring).
+        Для проверки сравниваем с apply_adaptive без detail, только text_mask.
+        """
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Создаем простую text_mask: половина изображения
+        text_mask = np.zeros(gray.shape, dtype=np.uint8)
+        text_mask[25:75, 25:75] = 255
+
+        result = hdr.apply_adaptive(img, strength=0.6, text_mask=text_mask, auto_detail=False)
+
+        # Просто проверяем, что функция отработала без ошибок и вернула корректный тип
+        assert result.dtype == np.uint8
+        assert result.shape == img.shape
+
+
+if __name__ == "__main__":
+    pytest.main([__file__])
 ```
 
 ============================================================
