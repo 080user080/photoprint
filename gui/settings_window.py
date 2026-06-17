@@ -125,8 +125,8 @@ class SettingsWindow(QWidget):
         left = QVBoxLayout()
         left.setSpacing(LAYOUT_SPACING)
 
-        # === Обробка ===
-        proc_box = QGroupBox("Обробка")
+        # === Auto Fix ===
+        proc_box = QGroupBox("Auto Fix")
         proc_box.setStyleSheet(GROUPBOX_STYLE)
         proc_form = QFormLayout(proc_box)
 
@@ -294,14 +294,51 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
         mode_form.addRow(self._cb_minimize_to_tray)
 
-        # === Адаптивний режим (Full Auto) ===
-        fa_box = QGroupBox("Адаптивний режим (Full Auto)")
+        # === Full Auto ===
+        fa_box = QGroupBox("Full Auto")
         fa_box.setStyleSheet(GROUPBOX_STYLE)
         fa_form = QFormLayout(fa_box)
         self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
         fa_form.addRow(self._cb_full_auto_mode)
         self._cb_full_auto_perspective = QCheckBox("Застосовувати перспективу в Full Auto")
         fa_form.addRow(self._cb_full_auto_perspective)
+        self._cb_full_auto_hdr = QCheckBox()
+        fa_form.addRow("HDR в Full Auto:", self._cb_full_auto_hdr)
+
+        self._spin_full_auto_sharpen = QDoubleSpinBox()
+        self._spin_full_auto_sharpen.setRange(SHARPEN_MIN, SHARPEN_MAX)
+        self._spin_full_auto_sharpen.setSingleStep(SHARPEN_STEP)
+        self._spin_full_auto_sharpen.setDecimals(SHARPEN_DECIMALS)
+
+        self._spin_full_auto_shadow = QDoubleSpinBox()
+        self._spin_full_auto_shadow.setRange(SHADOW_MIN, SHADOW_MAX)
+        self._spin_full_auto_shadow.setSingleStep(SHADOW_STEP)
+        self._spin_full_auto_shadow.setDecimals(SHADOW_DECIMALS)
+
+        self._combo_full_auto_contrast_mode = QComboBox()
+        self._combo_full_auto_contrast_mode.addItem("Лінійний (класичний)", "linear")
+        self._combo_full_auto_contrast_mode.addItem("Перцентильне розтягнення", "percentile")
+        self._combo_full_auto_contrast_mode.addItem("S-подібна крива", "s_curve")
+        self._combo_full_auto_contrast_mode.addItem("Локальний адаптивний", "adaptive")
+
+        self._spin_full_auto_contrast = QDoubleSpinBox()
+        self._spin_full_auto_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
+        self._spin_full_auto_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
+        self._spin_full_auto_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
+
+        self._cb_full_auto_bw_binary = QCheckBox("Адаптивна бінаризація")
+        self._combo_full_auto_color_mode = QComboBox()
+        self._combo_full_auto_color_mode.addItem("Авто (за типом документа)", "auto")
+        self._combo_full_auto_color_mode.addItem("Кольоровий", "color")
+        self._combo_full_auto_color_mode.addItem("Чорно-білий (напівтони)", "grayscale")
+        self._combo_full_auto_color_mode.addItem("Чорно-білий (бінаризація)", "binary")
+
+        fa_form.addRow("Сила різкості (0–1):", self._spin_full_auto_sharpen)
+        fa_form.addRow("Висвітлення тіней (0–2):", self._spin_full_auto_shadow)
+        fa_form.addRow("Метод контрасту:", self._combo_full_auto_contrast_mode)
+        fa_form.addRow("Контраст (0–1):", self._spin_full_auto_contrast)
+        fa_form.addRow("Ч-б бінаризація:", self._cb_full_auto_bw_binary)
+        fa_form.addRow("Формат виходу:", self._combo_full_auto_color_mode)
         fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
                          "лише потрібні корекції з адаптивною силою.")
         fa_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -380,6 +417,21 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
         self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
         self._cb_full_auto_perspective.setChecked(s.get("full_auto_perspective", False))
+        self._cb_full_auto_hdr.setChecked(s.get("full_auto_hdr_enabled", True))
+        self._spin_full_auto_sharpen.setValue(s.get("full_auto_default_sharpen", 0.4))
+        self._spin_full_auto_shadow.setValue(s.get("full_auto_shadow_highlight_strength", 0.0))
+        self._spin_full_auto_contrast.setValue(s.get("full_auto_autofix_contrast", 0.15))
+        self._cb_full_auto_bw_binary.setChecked(s.get("full_auto_bw_binary", False))
+        # Метод контрасту Full Auto
+        fa_contrast_mode = s.get("full_auto_contrast_mode", "linear")
+        idx = self._combo_full_auto_contrast_mode.findData(fa_contrast_mode)
+        if idx >= 0:
+            self._combo_full_auto_contrast_mode.setCurrentIndex(idx)
+        # Формат виходу Full Auto
+        fa_color_mode = s.get("full_auto_output_color_mode", "auto")
+        idx = self._combo_full_auto_color_mode.findData(fa_color_mode)
+        if idx >= 0:
+            self._combo_full_auto_color_mode.setCurrentIndex(idx)
 
     def _collect_settings(self) -> dict:
         return {
@@ -414,6 +466,13 @@ class SettingsWindow(QWidget):
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
             "full_auto_perspective": self._cb_full_auto_perspective.isChecked(),
+            "full_auto_hdr_enabled": self._cb_full_auto_hdr.isChecked(),
+            "full_auto_default_sharpen": self._spin_full_auto_sharpen.value(),
+            "full_auto_shadow_highlight_strength": self._spin_full_auto_shadow.value(),
+            "full_auto_contrast_mode": self._combo_full_auto_contrast_mode.currentData(),
+            "full_auto_autofix_contrast": self._spin_full_auto_contrast.value(),
+            "full_auto_bw_binary": self._cb_full_auto_bw_binary.isChecked(),
+            "full_auto_output_color_mode": self._combo_full_auto_color_mode.currentData(),
         }
 
     def _save(self):

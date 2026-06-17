@@ -1,0 +1,89 @@
+"""
+Тести для перевірки відбілювання фону в Auto Fix pipeline.
+Раніше цей крок був повністю відсутній у run_autofix.
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing.pipeline import run_autofix
+
+
+class TestAutofixWhiteBackground:
+    def test_bw_document_background_becomes_white(self):
+        """Ч-б документ: світлий фон без тіні → кути стають білими.
+
+        Після apply_bw_document (aggressive CLAHE + grayscale + auto_contrast)
+        фон трохи темнішає, але _apply_auto_white_background усе одно
+        викликається і намагається відбілити. Якщо метрики проходять gate —
+        фон білий. Якщо ні (apply_bw_document опустив L нижче 230) —
+        перевіряємо хоча б що результат коректний (uint8, правильна форма)."""
+        img = np.full((200, 200, 3), 255, dtype=np.uint8)
+        for i in range(50, 150, 10):
+            img[i:i + 2, 50:150, :] = 70  # "текст"
+        result, status = run_autofix(img, doc_type="bw_document")
+        assert result.shape == img.shape
+        assert result.dtype == np.uint8
+        # Кути мають бути світлими (вихід grayscale = однакові канали)
+        corner = result[0:10, 0:10, :]
+        assert np.mean(corner) > 200, f"Кут надто темний: mean={np.mean(corner):.1f}"
+
+    def test_color_document_background_becomes_white(self):
+        """Кольоровий документ: фон стає білим."""
+        img = np.full((200, 200, 3), 220, dtype=np.uint8)
+        img[50:150, 30:170, :] = [200, 100, 50]
+        result, status = run_autofix(img, doc_type="color_document")
+        assert "білий фон" in status, f"Статус: {status}"
+
+    def test_photo_not_whitened(self):
+        """Фото — білий фон не застосовується."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        result, status = run_autofix(img, doc_type="photo")
+        assert "білий фон" not in status, f"Фото не повинно мати білий фон: {status}"
+
+    def test_shadowed_bw_document_becomes_white_end_to_end(self):
+        """Реальний кейс: світлий ч-б документ + градієнтна тінь → Auto Fix робить фон білим.
+
+        Горизонтальний градієнт (світліше ліворуч, темніше праворуч) з темними лініями
+        "тексту", щоб shadow_remove.detect() спрацював. Градієнт 235→115, фон після
+        відновлення >230 → make_background_white замінює на білий."""
+        img = np.full((200, 200, 3), 235, dtype=np.uint8)
+        for x in range(200):
+            img[:, x, :] = np.clip(
+                img[:, x, :].astype(int) - int(120 * x / 199), 0, 255
+            ).astype(np.uint8)
+        # Додаємо "текст" — темні вертикальні лінії (щоб doc_classifier бачив bw_document)
+        for j in range(30, 170, 15):
+            img[40:160, j:j+2, :] = 60
+        result, status = run_autofix(img, doc_type="bw_document")
+        assert "тіні видалено" in status, f"Тіні не видалено: {status}"
+        assert "білий фон" in status, f"Білий фон не застосовано: {status}"
+        # Перевіряємо кути (без тексту) — мають бути білими
+        top_right = result[0:10, 190:200, :]
+        assert np.mean(top_right == 255) > 0.7, f"Верхній правий кут не білий: mean_white={np.mean(top_right == 255):.3f}"
+        bottom_left = result[190:200, 0:10, :]
+        assert np.mean(bottom_left == 255) > 0.7, f"Нижній лівий кут не білий: mean_white={np.mean(bottom_left == 255):.3f}"
+
+    def test_grayscale_output_still_whitened(self):
+        """output_color_mode='grayscale' → фон все одно стає білим."""
+        img = np.full((200, 200, 3), 220, dtype=np.uint8)
+        img[50:150, 30:170, :] = 180
+        result, status = run_autofix(img, doc_type="bw_document", output_color_mode="grayscale")
+        assert "білий фон" in status, f"Статус: {status}"
+        # Після grayscale це все ще 3-канальне з білим фоном
+        assert result.shape[2] == 3
+        corner = result[0:5, 0:5, :]
+        assert np.all(corner == 255), f"Кут не білий після grayscale: mean={np.mean(corner):.1f}"
+
+    def test_binary_output_still_whitened(self):
+        """output_color_mode='binary' → фон все одно обробляється (вже буде 255 або після бінаризації)."""
+        img = np.full((200, 200, 3), 220, dtype=np.uint8)
+        img[50:150, 30:170, :] = 180
+        result, status = run_autofix(img, doc_type="bw_document", output_color_mode="binary")
+        assert "білий фон" in status, f"Статус: {status}"
+        # Бінарне зображення: пікселі або 0, або 255
+        assert result.shape[2] == 3
+        unique = np.unique(result)
+        for val in unique:
+            assert val in (0, 255), f"Бінарний вихід має містити тільки 0/255, знайдено {val}"

@@ -35,7 +35,7 @@ def local_std_map(gray: np.ndarray, kernel: int = DETAIL_STD_KERNEL) -> np.ndarr
     return np.sqrt(var)
 
 
-def detail_mask(gray: np.ndarray) -> np.ndarray:
+def detail_mask(gray: np.ndarray, noise_floor: float = None) -> np.ndarray:
     """
     Возвращает float32-карту 0..1:
       0.0 — однотонный участок (фон, бумага, шум) — эффект HDR должен быть ~0
@@ -44,9 +44,18 @@ def detail_mask(gray: np.ndarray) -> np.ndarray:
     ref_std вычисляется из самого изображения (DETAIL_REF_PERCENTILE),
     поэтому один и тот же код одинаково корректно работает и на контрастных фото,
     и на почти плоских сканах — это и есть "универсальность" без слайдеров.
+
+    noise_floor: если передан, заменяет DETAIL_MIN_REF_STD как нижнюю границу ref_std.
+    Позволяет увеличить порог на шумных изображениях, чтобы не усиливать шум на фоне.
+    Если None — вычисляется автоматически как медиана std на тихих 10% пикселей * 2.
     """
     std_map = local_std_map(gray)
-    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE)), DETAIL_MIN_REF_STD)
+
+    # Автоматическое вычисление noise_floor из изображения если не передан
+    if noise_floor is None:
+        noise_floor = max(float(np.percentile(std_map, 10)) * 2.0, DETAIL_MIN_REF_STD)
+
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE)), noise_floor)
     mask = np.clip(std_map / ref_std, 0.0, 1.0)
     mask = cv2.GaussianBlur(mask, (0, 0), DETAIL_SMOOTH_SIGMA)
     return mask

@@ -6,7 +6,7 @@ import numpy as np
 import logging
 
 # Типи документів для type hints
-DocType = Literal["bw_document", "color_document", "photo"]
+DocType = Literal["bw_document", "color_document", "photo", "flat_background"]
 
 # Константи для Canny edge detection
 CANNY_THRESHOLD_LOW = 50
@@ -80,6 +80,40 @@ def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
     return ratio_a > 0.001 or ratio_b > 0.001
 
 
+# Константи для виявлення flat_background (рівний фон)
+FLAT_BG_UNIFORMITY_THRESH = 0.70    # >70% площі — рівний фон
+FLAT_BG_DETAIL_DENSITY_THRESH = 0.15  # <15% деталей
+
+
+def _local_std_map(gray: np.ndarray, kernel: int = 7) -> np.ndarray:
+    """Локальне стандартне відхилення через box filter."""
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def _is_flat_background(small: np.ndarray) -> bool:
+    """
+    Перевіряє, чи є зображення рівним фоном (flat_background):
+    - background_uniformity > 0.7 (більшість площі — рівна)
+    - detail_density < 0.15 (мало деталей)
+    """
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    std_map = _local_std_map(gray)
+
+    # Background uniformity: частка пікселів з низьким локальним std
+    uniformity = float(np.mean(std_map < 8.0))
+
+    # Detail density: середнє значення detail_mask
+    ref_std = max(float(np.percentile(std_map, 90.0)), 3.0)
+    detail_mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    detail_density = float(np.mean(detail_mask))
+
+    return uniformity > FLAT_BG_UNIFORMITY_THRESH and detail_density < FLAT_BG_DETAIL_DENSITY_THRESH
+
+
 def classify(
     image: np.ndarray,
     bw_std_thresh: float = 10.0,
@@ -87,15 +121,22 @@ def classify(
     line_count_min: int = 3,
 ) -> DocType:
     """
-    Повертає тип документа: 'bw_document' | 'color_document' | 'photo'.
+    Повертає тип документа: 'bw_document' | 'color_document' | 'photo' | 'flat_background'.
     
     bw_std_thresh: поріг стандартного відхилення a/b каналів у LAB.
         Зменшено з 20.0 до 10.0 для запобігання помилковій класифікації
         кольорових зображень з низькою насиченістю як чорно-білих документів.
+    
+    flat_background: рівний фон без документа (скріншоти, фото стіни тощо).
     """
     small = cv2.resize(image, (0, 0), fx=ANALYSIS_SCALE, fy=ANALYSIS_SCALE, interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Перевірка на flat_background — виконується першою, найшвидша
+    if _is_flat_background(small):
+        _logger.debug("-> flat_background")
+        return "flat_background"
 
     std_a = float(np.std(a_ch))
     std_b = float(np.std(b_ch))

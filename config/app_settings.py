@@ -32,6 +32,13 @@ DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptiv
 DEFAULT_FULL_AUTO_MODE = False
 DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
 DEFAULT_FULL_AUTO_PERSPECTIVE = False
+DEFAULT_FULL_AUTO_HDR_ENABLED = True
+DEFAULT_FULL_AUTO_DEFAULT_SHARPEN = 0.4
+DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT = 0.0
+DEFAULT_FULL_AUTO_CONTRAST_MODE = "linear"
+DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST = 0.15
+DEFAULT_FULL_AUTO_BW_BINARY = False
+DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE = "auto"
 
 
 def _get_path(path=None):
@@ -78,6 +85,13 @@ def load(path=None) -> dict:
         "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
         "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
         "full_auto_perspective": cfg.getboolean("processing", "full_auto_perspective", fallback=DEFAULT_FULL_AUTO_PERSPECTIVE),
+        "full_auto_hdr_enabled": cfg.getboolean("processing", "full_auto_hdr_enabled", fallback=DEFAULT_FULL_AUTO_HDR_ENABLED),
+        "full_auto_default_sharpen": cfg.getfloat("processing", "full_auto_default_sharpen", fallback=DEFAULT_FULL_AUTO_DEFAULT_SHARPEN),
+        "full_auto_shadow_highlight_strength": cfg.getfloat("processing", "full_auto_shadow_highlight", fallback=DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT),
+        "full_auto_contrast_mode": cfg.get("processing", "full_auto_contrast_mode", fallback=DEFAULT_FULL_AUTO_CONTRAST_MODE),
+        "full_auto_autofix_contrast": cfg.getfloat("processing", "full_auto_autofix_contrast", fallback=DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST),
+        "full_auto_bw_binary": cfg.getboolean("processing", "full_auto_bw_binary", fallback=DEFAULT_FULL_AUTO_BW_BINARY),
+        "full_auto_output_color_mode": cfg.get("processing", "full_auto_output_color_mode", fallback=DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE),
     }
 
 
@@ -125,6 +139,13 @@ def save(settings: dict, path=None):
     cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
     cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
     cfg["processing"]["full_auto_perspective"] = str(settings.get("full_auto_perspective", DEFAULT_FULL_AUTO_PERSPECTIVE)).lower()
+    cfg["processing"]["full_auto_hdr_enabled"] = str(settings.get("full_auto_hdr_enabled", DEFAULT_FULL_AUTO_HDR_ENABLED)).lower()
+    cfg["processing"]["full_auto_default_sharpen"] = str(settings.get("full_auto_default_sharpen", DEFAULT_FULL_AUTO_DEFAULT_SHARPEN))
+    cfg["processing"]["full_auto_shadow_highlight"] = str(settings.get("full_auto_shadow_highlight_strength", DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT))
+    cfg["processing"]["full_auto_contrast_mode"] = settings.get("full_auto_contrast_mode", DEFAULT_FULL_AUTO_CONTRAST_MODE)
+    cfg["processing"]["full_auto_autofix_contrast"] = str(settings.get("full_auto_autofix_contrast", DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST))
+    cfg["processing"]["full_auto_bw_binary"] = str(settings.get("full_auto_bw_binary", DEFAULT_FULL_AUTO_BW_BINARY)).lower()
+    cfg["processing"]["full_auto_output_color_mode"] = settings.get("full_auto_output_color_mode", DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE)
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)

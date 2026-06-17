@@ -6,7 +6,7 @@ import numpy as np
 import cv2
 import pytest
 from processing.diagnostics import (
-    diagnose, partial_rediagnose, DiagnosticResult,
+    diagnose, partial_rediagnose, DiagnosticResult, measure_background_metrics,
     _resize_for_analysis, _measure_gradient, _measure_contrast,
     _measure_brightness, _measure_blur, _measure_perspective,
     DIAGNOSTICS_RESIZE_MAX, GRADIENT_L_DIFF_THRESHOLD,
@@ -230,8 +230,8 @@ class TestDiagnose:
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
         settings = _default_settings()
         result = diagnose(img, settings)
-        # Перевіряємо що всі поля присутні
-        assert result.doc_type in ("bw_document", "color_document", "photo")
+        # Перевіряємо що всі поля присутні (включаючи новий flat_background)
+        assert result.doc_type in ("bw_document", "color_document", "photo", "flat_background")
         assert isinstance(result.gradient_has, bool)
         assert isinstance(result.gradient_strength, float)
         assert isinstance(result.gradient_direction, str)
@@ -248,6 +248,65 @@ class TestDiagnose:
         assert isinstance(result.perspective_skew_ratio, float)
         # perspective_corners може бути None
         assert result.perspective_corners is None or isinstance(result.perspective_corners, np.ndarray)
+
+    # --- Нові тести для розширеної діагностики ---
+
+    def test_new_fields_present(self):
+        """Нові поля diagnostic присутні та мають правильний тип."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert isinstance(result.background_uniformity, float)
+        assert isinstance(result.noise_level, float)
+        assert isinstance(result.color_saturation, float)
+        assert isinstance(result.dynamic_range, float)
+        assert isinstance(result.detail_density, float)
+        # На ідеально рівному сірому фоні:
+        assert 0.0 <= result.background_uniformity <= 1.0
+        assert result.noise_level >= 0.0
+        assert result.color_saturation >= 0.0
+        assert result.dynamic_range >= 0.0
+        assert 0.0 <= result.detail_density <= 1.0
+
+    def test_uniform_image_high_uniformity(self):
+        """Ідеально рівне сіре зображення → background_uniformity ≈ 1.0."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.background_uniformity > 0.95
+        assert result.detail_density < 0.05
+
+    def test_detail_image_low_uniformity(self):
+        """Зображення з текстурою/шумом → background_uniformity < 0.5."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.background_uniformity < 0.5
+        assert result.detail_density > 0.5
+
+    def test_dark_image_dynamic_range(self):
+        """Тільки темні тони → dynamic_range < 50."""
+        img = np.full((100, 100, 3), 30, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.dynamic_range < 50
+
+    def test_full_range_dynamic_range(self):
+        """Чорний + білий → dynamic_range > 200."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :50, :] = 255  # половина біла, половина чорна
+        result = diagnose(img, _default_settings())
+        assert result.dynamic_range > 200
+
+    def test_color_saturation_gray(self):
+        """Сіре зображення → color_saturation ≈ 0."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.color_saturation < 5.0
+
+    def test_color_saturation_red(self):
+        """Червоне зображення → color_saturation > 50."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :, 2] = 255  # BGR: червоний канал
+        result = diagnose(img, _default_settings())
+        assert result.color_saturation > 50
 
     def test_diagnose_immutable(self):
         """Вхідне зображення не змінюється."""
@@ -271,6 +330,56 @@ class TestDiagnose:
 # ---------------------------------------------------------------------------
 # TestPartialRediagnose
 # ---------------------------------------------------------------------------
+
+class TestMeasureBackgroundMetrics:
+    def test_matches_diagnose_on_same_image(self):
+        """На незміненому зображенні значення збігаються з diagnose()."""
+        img = np.full((100, 100, 3), 220, dtype=np.uint8)
+        diag = diagnose(img, _default_settings())
+        uniformity, detail = measure_background_metrics(img)
+        assert uniformity == pytest.approx(diag.background_uniformity, abs=0.01)
+        assert detail == pytest.approx(diag.detail_density, abs=0.01)
+
+    def test_uniformity_increases_after_shadow_removed(self):
+        """measure_background_metrics на реальних зображеннях:
+        перевіряє, що функція не падає і повертає коректний діапазон
+        для зображень з різними властивостями."""
+        from processing import shadow_remove
+        # Тест 1: світлий фон + текст → uniformity висока, але не 1.0
+        doc_img = np.full((200, 200, 3), 240, dtype=np.uint8)
+        for i in range(40, 160, 15):
+            doc_img[i:i + 2, 30:170, :] = 50
+        u1, d1 = measure_background_metrics(doc_img)
+        assert 0.0 <= u1 <= 1.0
+        assert 0.0 <= d1 <= 1.0
+        # З текстом uniformity < 1.0
+        assert u1 < 1.0, f"З текстом uniformity має бути < 1.0: {u1:.3f}"
+        # detail_density з текстом > 0
+        assert d1 > 0.0, f"З текстом detail_density > 0: {d1:.3f}"
+
+        # Тест 2: shadow_remove не падає і повертає коректне зображення
+        cleaned, had_shadow = shadow_remove.auto_remove_shadow(doc_img)
+        u2, d2 = measure_background_metrics(cleaned)
+        assert cleaned.shape == doc_img.shape
+        assert cleaned.dtype == np.uint8
+        assert 0.0 <= u2 <= 1.0
+        assert 0.0 <= d2 <= 1.0
+
+    def test_uniform_image_high_values(self):
+        """Ідеально рівне зображення → uniformity ≈ 1.0, detail_density ≈ 0."""
+        img = np.full((100, 100, 3), 200, dtype=np.uint8)
+        uniformity, detail = measure_background_metrics(img)
+        assert uniformity > 0.95
+        assert detail < 0.05
+
+    def test_noisy_image_low_uniformity(self):
+        """Шумне зображення → uniformity < 0.5."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        uniformity, detail = measure_background_metrics(img)
+        assert uniformity < 0.5
+        assert detail > 0.5
+
 
 class TestPartialRediagnose:
     def test_returns_requested_fields(self):

@@ -257,10 +257,17 @@ class PreviewPanel(QWidget):
     def set_after(self, image: np.ndarray):
         self._after.set_image(image)
 
-    def set_autofix_applied(self, applied: bool):
-        """Візуальний індикатор застосованої автокорекції."""
-        if applied:
+    def set_autofix_applied(self, mode: str | None):
+        """Візуальний індикатор застосованої автокорекції.
+        
+        Параметри:
+            mode: "auto_fix" / "full_auto" / None (скидання)
+        """
+        if mode == "auto_fix":
             self._lbl_after.setText("✓ ПІСЛЯ (Auto Fix)")
+            self._lbl_after.setStyleSheet("font-weight:bold; color:#006600; font-size:13px;")
+        elif mode == "full_auto":
+            self._lbl_after.setText("✓ ПІСЛЯ (Full Auto)")
             self._lbl_after.setStyleSheet("font-weight:bold; color:#006600; font-size:13px;")
         else:
             self._lbl_after.setText("ПІСЛЯ")
@@ -269,7 +276,7 @@ class PreviewPanel(QWidget):
     def clear(self):
         self._before.set_placeholder()
         self._after.set_placeholder("Тут з'явиться результат")
-        self.set_autofix_applied(False)
+        self.set_autofix_applied(None)
 
     def enable_perspective_edit(self, corners: list[QPoint] | None = None):
         self._before.set_edit_mode(True, corners)

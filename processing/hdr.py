@@ -42,12 +42,16 @@ def adaptive_tile_grid(h: int, w: int, target_px: int = HDR_TILE_TARGET_PX) -> t
     return (gx, gy)
 
 
-def _apply_coring(diff: np.ndarray, noise_floor: float = HDR_NOISE_FLOOR) -> np.ndarray:
+def _apply_coring(diff: np.ndarray, noise_floor: float | None = None) -> np.ndarray:
     """
     Soft-threshold разницы HDR-CLAHE относительно оригинала.
     Разницы меньше noise_floor (типично — усиленный шум на ровном фоне)
     обнуляются; большие — уменьшаются на noise_floor (без резкого излома).
+
+    Если noise_floor не передан — использует HDR_NOISE_FLOOR.
     """
+    if noise_floor is None:
+        noise_floor = HDR_NOISE_FLOOR
     mag = np.maximum(np.abs(diff) - noise_floor, 0.0)
     return np.sign(diff) * mag
 
@@ -104,6 +108,7 @@ def apply_adaptive(
     strength: float = 0.5,
     text_mask: np.ndarray | None = None,
     auto_detail: bool = True,
+    noise_floor: float | None = None,
 ) -> np.ndarray:
     """
     Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
@@ -117,6 +122,7 @@ def apply_adaptive(
     auto_detail: если True (дефолт) — дополнительно ограничивает эффект на однотонных
                  участках через processing.detail_map.detail_mask. Это и есть фикс
                  артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
+    noise_floor: порог coring для подавления шума. Если None — используется HDR_NOISE_FLOOR.
 
     Возвращает uint8 BGR.
     """
@@ -132,7 +138,7 @@ def apply_adaptive(
 
     l_ch_f = l_ch.astype(np.float32)
     l_hdr_f = l_hdr.astype(np.float32)
-    diff = _apply_coring(l_hdr_f - l_ch_f)
+    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=noise_floor)
 
     # --- alpha map: базово "полный эффект" везде ---
     alpha_map = np.full(l_ch.shape, ADAPTIVE_HDR_ALPHA_BACKGROUND, dtype=np.float32)
@@ -140,7 +146,7 @@ def apply_adaptive(
     # --- ограничение на однотонных участках (новый, основной фикс) ---
     if auto_detail:
         from processing import detail_map as detail_map_module
-        dmask = detail_map_module.detail_mask(l_ch)  # 0..1, 0=плоско
+        dmask = detail_map_module.detail_mask(l_ch, noise_floor=noise_floor)  # 0..1, 0=плоско
         alpha_map *= dmask
 
     # --- существующее ограничение на тексте (как и раньше) ---

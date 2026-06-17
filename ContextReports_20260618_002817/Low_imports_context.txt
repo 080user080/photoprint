@@ -29,6 +29,7 @@ processing\shadow_highlight.py
 processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
+processing\white_background.py
 scaner\scaner.py
 tests\results
 tests\scenarios\debug_widgets.py
@@ -41,24 +42,27 @@ tests\scenarios\test_reset_buttons.py
 tests\scenarios\test_slider_adjustment.py
 tests\scenarios\test_sliders.py
 tests\test_images
+tests\unit\test_adaptive_params.py
 tests\unit\test_autofix.py
 tests\unit\test_brightness_contrast.py
 tests\unit\test_brightness_contrast_new.py
 tests\unit\test_detail_map.py
+tests\unit\test_detail_mask_noise.py
 tests\unit\test_diagnostics.py
 tests\unit\test_doc_classifier.py
+tests\unit\test_full_auto_universal.py
 tests\unit\test_hdr.py
 tests\unit\test_image_utils.py
 tests\unit\test_immutability.py
 tests\unit\test_loader.py
 tests\unit\test_partial_perspective.py
 tests\unit\test_perspective.py
+tests\unit\test_shadow_remove.py
+tests\unit\test_shadow_remove_large.py
 tests\unit\test_sharpen.py
 tests\unit\test_text_mask.py
-tests\README.md
 tests\conftest.py
 tests\gui_tester.py
-tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -66,10 +70,7 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
-status.md
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
@@ -434,7 +435,7 @@ def _make_contrast_lut(alpha: float) -> np.ndarray:
 
 Сутності:
 def local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
-def detail_mask(gray: np.ndarray) -> np.ndarray:
+def detail_mask(gray: np.ndarray, noise_floor: float) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\diagnostics.py
@@ -453,6 +454,12 @@ def _measure_contrast(image: np.ndarray) -> tuple[float, float, float, float]:
 def _measure_brightness(image: np.ndarray) -> tuple[float, float]:
 def _measure_blur(image: np.ndarray, settings: dict) -> tuple[float, float, float]:
 def _measure_perspective(image: np.ndarray) -> tuple[bool, np.ndarray | None, float]:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def _measure_background_uniformity(gray: np.ndarray) -> float:
+def _measure_noise_level(gray: np.ndarray) -> float:
+def _measure_color_saturation(lab: np.ndarray) -> float:
+def _measure_dynamic_range(gray: np.ndarray) -> float:
+def _measure_detail_density(gray: np.ndarray) -> float:
 def _measure_doc_type(image: np.ndarray, settings: dict) -> str:
 def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
 def partial_rediagnose(image: np.ndarray, settings: dict, fields: list[str]) -> dict:
@@ -469,6 +476,8 @@ def partial_rediagnose(image: np.ndarray, settings: dict, fields: list[str]) -> 
 Сутності:
 def _has_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> tuple[float, bool]:
 def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def _is_flat_background(small: np.ndarray) -> bool:
 def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
 
 ============================================================
@@ -480,11 +489,11 @@ def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, lin
 
 Сутності:
 def adaptive_tile_grid(h: int, w: int, target_px: int) -> tuple[int, int]:
-def _apply_coring(diff: np.ndarray, noise_floor: float) -> np.ndarray:
+def _apply_coring(diff: np.ndarray, noise_floor: float | None) -> np.ndarray:
 def _auto_strength_factor(l_ch: np.ndarray) -> float:
 def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
 def apply(image: np.ndarray, strength: float) -> np.ndarray:
-def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py
@@ -522,7 +531,7 @@ def _apply_clahe(gray: np.ndarray) -> np.ndarray:
   from typing import Optional
   import cv2
   import numpy
-  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove
+  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background
 
 Сутності:
 class DocType(str, Enum):
@@ -541,6 +550,7 @@ def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
 def run_auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
 def run_grayscale(image: np.ndarray) -> np.ndarray:
 def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def _compute_adaptive_params(diag) -> dict:
 def run_full_auto(image: np.ndarray, settings: dict, dry_run: bool) -> tuple[np.ndarray, str, dict]:
 def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool, contrast_mode: str) -> np.ndarray:
 
@@ -563,7 +573,9 @@ def auto_shadow_highlight(image: np.ndarray, percentile_low: float, max_strength
   import numpy
 
 Сутності:
-def remove_shadow(image: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
 def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
 def _auto_kernel_size(image: np.ndarray) -> int:
 def _detect_shadow(image: np.ndarray) -> bool:
@@ -593,6 +605,17 @@ def _filter_small_components(binary: np.ndarray) -> np.ndarray:
 def _dilate_mask(mask: np.ndarray) -> np.ndarray:
 def text_region_mask(gray: np.ndarray) -> np.ndarray:
 def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\white_background.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+
+Сутності:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def make_background_white(image: np.ndarray, background_uniformity: float, detail_density: float) -> tuple[np.ndarray, bool]:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\scaner\scaner.py
@@ -778,6 +801,28 @@ def test_sliders():
 
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_adaptive_params.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+  import pytest
+  from processing.pipeline import _compute_adaptive_params
+  from processing.diagnostics import diagnose
+
+Сутності:
+def _default_settings():
+class TestAdaptiveParams:
+    def test_uniform_image_low_hdr_strength(self):
+    def test_noisy_image_high_noise_floor(self):
+    def test_high_contrast_image_low_contrast_needed(self):
+    def test_textured_image_high_hdr(self):
+    def test_bright_image_no_brightness_needed(self):
+    def test_dark_image_brightness_needed(self):
+    def test_sharp_image_sharpen_strength(self):
+    def test_shadow_remove_for_document(self):
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_autofix.py
 ============================================================
 Імпорти:
@@ -871,6 +916,26 @@ class TestDetailMask:
     def test_output_shape_and_dtype(self):
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_detail_mask_noise.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+  import pytest
+  from processing.detail_map import detail_mask, local_std_map
+
+Сутності:
+class TestDetailMaskNoise:
+    def test_uniform_gray_mask_near_zero(self):
+    def test_noise_floor_raises_threshold(self):
+    def test_texture_mask_high(self):
+    def test_noise_floor_auto_computation(self):
+    def test_noise_floor_from_noise(self):
+    def test_noise_floor_lower_than_auto(self):
+    def test_detail_mask_immutable(self):
+    def test_gradient_image_mask(self):
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_diagnostics.py
 ============================================================
 Імпорти:
@@ -910,6 +975,13 @@ class TestMeasurePerspective:
     def test_perspective_immutable(self):
 class TestDiagnose:
     def test_returns_all_fields(self):
+    def test_new_fields_present(self):
+    def test_uniform_image_high_uniformity(self):
+    def test_detail_image_low_uniformity(self):
+    def test_dark_image_dynamic_range(self):
+    def test_full_range_dynamic_range(self):
+    def test_color_saturation_gray(self):
+    def test_color_saturation_red(self):
     def test_diagnose_immutable(self):
     def test_diagnose_consistent(self):
 class TestPartialRediagnose:
@@ -939,6 +1011,38 @@ class TestTrueGrayscaleScan:
     def test_still_bw_document(self):
 class TestLowSaturationPhoto:
     def test_not_bw_document(self):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_full_auto_universal.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+  import pytest
+  from processing.pipeline import run_full_auto
+
+Сутності:
+def _default_settings():
+class TestFullAutoUniversal:
+    def _check_result(self, img, result_msg):
+    def test_uniform_gray_image(self):
+    def test_bw_document_like(self):
+    def test_photo_like(self):
+    def test_color_document_like(self):
+    def test_dark_image(self):
+    def test_overexposed_image(self):
+    def test_sharp_image_unchanged(self):
+    def test_small_image(self):
+    def test_large_image(self):
+    def test_dry_run_never_modifies_input(self):
+    def test_run_full_auto_immutable_input(self):
+    def test_gradient_background_document(self):
+    def test_noise_floor_passed_to_hdr(self):
+    def test_color_saturation_effect(self):
+    def test_flat_background_handling(self):
+    def test_flat_background_becomes_white(self):
+    def test_bw_document_becomes_white_background(self):
+    def test_photo_not_whitened(self):
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_hdr.py
@@ -1134,6 +1238,53 @@ class TestAutoDetectCorners:
     def test_no_document_returns_none(self):
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_shadow_remove.py
+============================================================
+Імпорти:
+  import time
+  import cv2
+  import numpy
+  import pytest
+  from processing import shadow_remove
+
+Сутності:
+def _ssim(a: np.ndarray, b: np.ndarray) -> float:
+def _psnr(a: np.ndarray, b: np.ndarray) -> float:
+def _make_sharp_shadow_image(size: int) -> np.ndarray:
+def _make_guilloche_image(size: int) -> np.ndarray:
+def _make_text_document(size: int) -> np.ndarray:
+class TestMorphologyVsGaussian:
+    def test_auto_remove_no_shadow_on_uniform(self):
+    def test_sharp_shadow_edge_no_inversion(self):
+    def test_sharp_edge_dark_side_brightened(self):
+class TestProtectiveFilters:
+    def test_guilloche_detected_as_no_shadow(self):
+    def test_blurred_image_no_shadow_detected(self):
+    def test_small_image_unchanged(self):
+    def test_photo_not_processed(self):
+class TestTextDocument:
+    def test_text_remains_darker_than_background(self):
+    def test_gradient_shadow_reduced(self):
+class TestBenchmark:
+    def test_benchmark_400x400(self):
+    def test_benchmark_800x800(self):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_shadow_remove_large.py
+============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import pytest
+  from processing import shadow_remove
+
+Сутності:
+def _make_doc_with_large_shadow(h, w, shadow_l, paper_l):
+def test_large_shadow_no_hard_black_edge():
+def test_small_local_shadow_still_removed():
+def test_coarse_pass_can_be_disabled():
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_sharpen.py
 ============================================================
 Імпорти:
@@ -1179,8 +1330,6 @@ class TestHDRApplyAdaptive:
     def test_adaptive_preserves_dtype(self):
 class TestAutofixAdaptiveHDR:
     def test_autofix_adaptive_hdr_works(self):
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
@@ -1239,8 +1388,6 @@ class GUITester:
     def get_window_text(self) -> Optional[str]:
     def list_child_widgets(self) -> List[dict]:
     def read_logs(self) -> None:
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -1334,8 +1481,6 @@ def _read_drop_files(hdrop_int: int) -> list[str]:
 class DropEventFilter(QAbstractNativeEventFilter):
     def __init__(self, callback):
     def nativeEventFilter(self, event_type, message):
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
@@ -1349,6 +1494,3 @@ class DropEventFilter(QAbstractNativeEventFilter):
 
 Сутності:
 def main():
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\status.md

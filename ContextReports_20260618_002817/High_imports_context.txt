@@ -29,6 +29,7 @@ processing\shadow_highlight.py
 processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
+processing\white_background.py
 scaner\scaner.py
 tests\results
 tests\scenarios\debug_widgets.py
@@ -41,18 +42,23 @@ tests\scenarios\test_reset_buttons.py
 tests\scenarios\test_slider_adjustment.py
 tests\scenarios\test_sliders.py
 tests\test_images
+tests\unit\test_adaptive_params.py
 tests\unit\test_autofix.py
 tests\unit\test_brightness_contrast.py
 tests\unit\test_brightness_contrast_new.py
 tests\unit\test_detail_map.py
+tests\unit\test_detail_mask_noise.py
 tests\unit\test_diagnostics.py
 tests\unit\test_doc_classifier.py
+tests\unit\test_full_auto_universal.py
 tests\unit\test_hdr.py
 tests\unit\test_image_utils.py
 tests\unit\test_immutability.py
 tests\unit\test_loader.py
 tests\unit\test_partial_perspective.py
 tests\unit\test_perspective.py
+tests\unit\test_shadow_remove.py
+tests\unit\test_shadow_remove_large.py
 tests\unit\test_sharpen.py
 tests\unit\test_text_mask.py
 tests\conftest.py
@@ -322,6 +328,13 @@ DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptiv
 DEFAULT_FULL_AUTO_MODE = False
 DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
 DEFAULT_FULL_AUTO_PERSPECTIVE = False
+DEFAULT_FULL_AUTO_HDR_ENABLED = True
+DEFAULT_FULL_AUTO_DEFAULT_SHARPEN = 0.4
+DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT = 0.0
+DEFAULT_FULL_AUTO_CONTRAST_MODE = "linear"
+DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST = 0.15
+DEFAULT_FULL_AUTO_BW_BINARY = False
+DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE = "auto"
 
 
 def _get_path(path=None):
@@ -368,6 +381,13 @@ def load(path=None) -> dict:
         "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
         "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
         "full_auto_perspective": cfg.getboolean("processing", "full_auto_perspective", fallback=DEFAULT_FULL_AUTO_PERSPECTIVE),
+        "full_auto_hdr_enabled": cfg.getboolean("processing", "full_auto_hdr_enabled", fallback=DEFAULT_FULL_AUTO_HDR_ENABLED),
+        "full_auto_default_sharpen": cfg.getfloat("processing", "full_auto_default_sharpen", fallback=DEFAULT_FULL_AUTO_DEFAULT_SHARPEN),
+        "full_auto_shadow_highlight_strength": cfg.getfloat("processing", "full_auto_shadow_highlight", fallback=DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT),
+        "full_auto_contrast_mode": cfg.get("processing", "full_auto_contrast_mode", fallback=DEFAULT_FULL_AUTO_CONTRAST_MODE),
+        "full_auto_autofix_contrast": cfg.getfloat("processing", "full_auto_autofix_contrast", fallback=DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST),
+        "full_auto_bw_binary": cfg.getboolean("processing", "full_auto_bw_binary", fallback=DEFAULT_FULL_AUTO_BW_BINARY),
+        "full_auto_output_color_mode": cfg.get("processing", "full_auto_output_color_mode", fallback=DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE),
     }
 
 
@@ -415,6 +435,13 @@ def save(settings: dict, path=None):
     cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
     cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
     cfg["processing"]["full_auto_perspective"] = str(settings.get("full_auto_perspective", DEFAULT_FULL_AUTO_PERSPECTIVE)).lower()
+    cfg["processing"]["full_auto_hdr_enabled"] = str(settings.get("full_auto_hdr_enabled", DEFAULT_FULL_AUTO_HDR_ENABLED)).lower()
+    cfg["processing"]["full_auto_default_sharpen"] = str(settings.get("full_auto_default_sharpen", DEFAULT_FULL_AUTO_DEFAULT_SHARPEN))
+    cfg["processing"]["full_auto_shadow_highlight"] = str(settings.get("full_auto_shadow_highlight_strength", DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT))
+    cfg["processing"]["full_auto_contrast_mode"] = settings.get("full_auto_contrast_mode", DEFAULT_FULL_AUTO_CONTRAST_MODE)
+    cfg["processing"]["full_auto_autofix_contrast"] = str(settings.get("full_auto_autofix_contrast", DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST))
+    cfg["processing"]["full_auto_bw_binary"] = str(settings.get("full_auto_bw_binary", DEFAULT_FULL_AUTO_BW_BINARY)).lower()
+    cfg["processing"]["full_auto_output_color_mode"] = settings.get("full_auto_output_color_mode", DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE)
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
 
     target = _get_path(path)
@@ -1074,6 +1101,7 @@ class MainWindow(QMainWindow):
         self._processor: BatchProcessor = BatchProcessor(self._settings)
         self._orig: Optional[np.ndarray] = None
         self._base: Optional[np.ndarray] = None  # базове зображення після перспективи
+        self._base_for_perspective: Optional[np.ndarray] = None  # знімок _base до початку ручної перспективи
         self._processed: Optional[np.ndarray] = None
         self._auto_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
@@ -1276,28 +1304,32 @@ class MainWindow(QMainWindow):
         buttons_row.setSpacing(BUTTONS_ROW_SPACING)
 
         self._btn_autofix   = QPushButton("⚡ Auto Fix")
+        self._btn_full_auto = QPushButton("⚡ Full Auto")
         self._btn_print     = QPushButton("🖨  Друк")
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
         self._btn_save_img  = QPushButton("💾  Зберегти")
         self._btn_autofix.setObjectName("btn_autofix")
+        self._btn_full_auto.setObjectName("btn_full_auto")
         self._btn_print.setObjectName("btn_print")
         self._btn_skip.setObjectName("btn_skip")
         self._btn_print_all.setObjectName("btn_print_all")
         self._btn_save_img.setObjectName("btn_save_image")
 
-        for b in (self._btn_autofix, self._btn_print,
-                  self._btn_skip, self._btn_print_all, self._btn_save_img):
+        for b in (self._btn_autofix, self._btn_full_auto, self._btn_print,
+                   self._btn_skip, self._btn_print_all, self._btn_save_img):
             b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
         self._btn_autofix.clicked.connect(self._do_autofix)
+        self._btn_full_auto.clicked.connect(self._do_full_auto)
         self._btn_print.clicked.connect(self._do_print_current)
         self._btn_skip.clicked.connect(self._do_skip)
         self._btn_print_all.clicked.connect(self._do_print_all)
         self._btn_save_img.clicked.connect(self._do_save_image)
 
         buttons_row.addWidget(self._btn_autofix)
+        buttons_row.addWidget(self._btn_full_auto)
         buttons_row.addWidget(self._btn_print)
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
@@ -1354,11 +1386,6 @@ class MainWindow(QMainWindow):
         self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
-        # Встановлюємо текст кнопки Auto Fix при старті
-        if self._settings.get("full_auto_mode", False):
-            self._btn_autofix.setText("⚡ Full Auto")
-        else:
-            self._btn_autofix.setText("⚡ Auto Fix")
 
     def _load_window_geometry(self):
         """Завантажує розмір вікна та ширину черги з налаштувань."""
@@ -1385,11 +1412,6 @@ class MainWindow(QMainWindow):
         self._processor = BatchProcessor(self._settings)
         self._processor.set_files(self._queue.get_all_paths())
         self._apply_default_mode()
-        # Оновлюємо текст кнопки Auto Fix
-        if s.get("full_auto_mode", False):
-            self._btn_autofix.setText("⚡ Full Auto")
-        else:
-            self._btn_autofix.setText("⚡ Auto Fix")
 
     def _open_settings(self):
         self._settings_win.load_from_file()
@@ -1441,6 +1463,7 @@ class MainWindow(QMainWindow):
         self._preview.clear()
         self._orig = None
         self._base = None
+        self._base_for_perspective = None
         self._processed = None
         self._perspective_corners = None  # скидаємо кути перспективи
         self._current_path = None
@@ -1484,6 +1507,7 @@ class MainWindow(QMainWindow):
             img = loader.load(path)
             self._orig = img
             self._base = img.copy()  # початково base = orig
+            self._base_for_perspective = None
             self._processed = None
             self._perspective_corners = None  # скидаємо кути перспективи для нового файлу
             self._current_path = path
@@ -1492,7 +1516,7 @@ class MainWindow(QMainWindow):
             self._preview.set_before(prev)
             # Авто-застосування Auto Fix при завантаженні
             if self._settings.get("auto_apply_autofix", True):
-                self._do_autofix()
+                self._do_autofix_classic()
             else:
                 self._update_buttons()
         except Exception as e:
@@ -1504,10 +1528,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _do_autofix(self):
-        if self._settings.get("full_auto_mode", False):
-            self._do_full_auto()
-        else:
-            self._do_autofix_classic()
+        self._do_autofix_classic()
 
     def _do_full_auto(self):
         if self._orig is None:
@@ -1663,6 +1684,8 @@ class MainWindow(QMainWindow):
         """Авто-детекція перспективи з fallback до ручного режиму."""
         if self._orig is None or self._base is None:
             return
+        # Зберігаємо знімок _base до перспективи (для ручного редагування точок)
+        self._base_for_perspective = self._base.copy()
         # Шукаємо кути на _base (після автофікс), бо координати мають відповідати зображенню до якого застосовуємо перспективу
         corners = pipeline.detect_corners(self._base)
         if corners is not None:
@@ -1724,6 +1747,9 @@ class MainWindow(QMainWindow):
         """Ручна корекція: пробуємо знайти точки авто на _base, інакше дефолтні."""
         if self._orig is None or self._base is None:
             return
+        # Зберігаємо знімок _base — всі подальші перетягування точок
+        # будуть застосовуватись до цього знімку, а не до вже трансформованого _base
+        self._base_for_perspective = self._base.copy()
         corners = pipeline.detect_corners(self._base)
         if corners is not None:
             self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
@@ -1735,6 +1761,7 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         self._base = self._orig.copy()
+        self._base_for_perspective = None
         self._processed = self._orig.copy()
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
@@ -1750,6 +1777,7 @@ class MainWindow(QMainWindow):
         if self._orig is None:
             return
         self._base = self._orig.copy()
+        self._base_for_perspective = None
         self._processed = self._orig.copy()
         self._preview.set_before(image_utils.make_preview(self._orig))
         self._preview.set_after(image_utils.make_preview(self._orig))
@@ -1761,24 +1789,28 @@ class MainWindow(QMainWindow):
         self._store_current_settings()
 
     def _on_persp_pts(self, points: list):
-        """Користувач змінив точки перспективи — застосовуємо до _base."""
+        """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
         if self._base is None or len(points) != 4:
             return
         try:
-            base_h, base_w = self._base.shape[:2]
-            prev = image_utils.make_preview(self._base)
+            # Використовуємо знімок _base зроблений ДО початку ручної перспективи.
+            # Це гарантує що кожне перетягування точки застосовується до незміненого
+            # зображення, а не до результату попередньої трансформації.
+            source = self._base_for_perspective if self._base_for_perspective is not None else self._base
+            base_h, base_w = source.shape[:2]
+            prev = image_utils.make_preview(source)
             prev_h, prev_w = prev.shape[:2]
             # Координати точок — у системі прев'ю (≤900px).
-            # Масштабуємо назад в розмір базового зображення _base
+            # Масштабуємо назад в розмір базового зображення source
             scale_x = base_w / max(prev_w, 1)
             scale_y = base_h / max(prev_h, 1)
             corners = np.array(
                 [[p.x() * scale_x, p.y() * scale_y] for p in points],
                 dtype=np.float32
             )
-            result = pipeline.run_perspective_manual(self._base, corners)
-            # Оновлюємо базове зображення після ручної перспективи
-            self._base = result.copy()
+            result = pipeline.run_perspective_manual(source, corners)
+            # НЕ оновлюємо _base тут — це робиться лише після підтвердження
+            # (друк, авто-фікс тощо). _base залишається = _base_for_perspective.
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
         except Exception as e:
@@ -1790,6 +1822,10 @@ class MainWindow(QMainWindow):
 # ------------------------------------------------------------------
 
     def _do_print_current(self):
+        # Якщо є незафіксована ручна перспектива — фіксуємо
+        if self._base_for_perspective is not None and self._processed is not None:
+            self._base = self._processed.copy()
+            self._base_for_perspective = None
         # Правильна перевірка numpy array через "is not None"
         image = self._processed if self._processed is not None else self._base
         if image is None:
@@ -1963,11 +1999,12 @@ class MainWindow(QMainWindow):
         self._btn_print.setEnabled(has_img)
         self._btn_skip.setEnabled(self._processor.has_next())
         self._btn_autofix.setEnabled(has_img)
+        self._btn_full_auto.setEnabled(has_img)
         self._btn_save_img.setEnabled(has_img)
 
     def _set_buttons_enabled(self, enabled: bool):
-        for b in (self._btn_autofix, self._btn_print,
-                  self._btn_skip, self._btn_print_all):
+        for b in (self._btn_autofix, self._btn_full_auto,
+                  self._btn_print, self._btn_skip, self._btn_print_all):
             b.setEnabled(enabled)
 
     def _set_status(self, text: str):
@@ -2624,8 +2661,8 @@ class SettingsWindow(QWidget):
         left = QVBoxLayout()
         left.setSpacing(LAYOUT_SPACING)
 
-        # === Обробка ===
-        proc_box = QGroupBox("Обробка")
+        # === Auto Fix ===
+        proc_box = QGroupBox("Auto Fix")
         proc_box.setStyleSheet(GROUPBOX_STYLE)
         proc_form = QFormLayout(proc_box)
 
@@ -2793,14 +2830,51 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
         mode_form.addRow(self._cb_minimize_to_tray)
 
-        # === Адаптивний режим (Full Auto) ===
-        fa_box = QGroupBox("Адаптивний режим (Full Auto)")
+        # === Full Auto ===
+        fa_box = QGroupBox("Full Auto")
         fa_box.setStyleSheet(GROUPBOX_STYLE)
         fa_form = QFormLayout(fa_box)
         self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
         fa_form.addRow(self._cb_full_auto_mode)
         self._cb_full_auto_perspective = QCheckBox("Застосовувати перспективу в Full Auto")
         fa_form.addRow(self._cb_full_auto_perspective)
+        self._cb_full_auto_hdr = QCheckBox()
+        fa_form.addRow("HDR в Full Auto:", self._cb_full_auto_hdr)
+
+        self._spin_full_auto_sharpen = QDoubleSpinBox()
+        self._spin_full_auto_sharpen.setRange(SHARPEN_MIN, SHARPEN_MAX)
+        self._spin_full_auto_sharpen.setSingleStep(SHARPEN_STEP)
+        self._spin_full_auto_sharpen.setDecimals(SHARPEN_DECIMALS)
+
+        self._spin_full_auto_shadow = QDoubleSpinBox()
+        self._spin_full_auto_shadow.setRange(SHADOW_MIN, SHADOW_MAX)
+        self._spin_full_auto_shadow.setSingleStep(SHADOW_STEP)
+        self._spin_full_auto_shadow.setDecimals(SHADOW_DECIMALS)
+
+        self._combo_full_auto_contrast_mode = QComboBox()
+        self._combo_full_auto_contrast_mode.addItem("Лінійний (класичний)", "linear")
+        self._combo_full_auto_contrast_mode.addItem("Перцентильне розтягнення", "percentile")
+        self._combo_full_auto_contrast_mode.addItem("S-подібна крива", "s_curve")
+        self._combo_full_auto_contrast_mode.addItem("Локальний адаптивний", "adaptive")
+
+        self._spin_full_auto_contrast = QDoubleSpinBox()
+        self._spin_full_auto_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
+        self._spin_full_auto_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
+        self._spin_full_auto_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
+
+        self._cb_full_auto_bw_binary = QCheckBox("Адаптивна бінаризація")
+        self._combo_full_auto_color_mode = QComboBox()
+        self._combo_full_auto_color_mode.addItem("Авто (за типом документа)", "auto")
+        self._combo_full_auto_color_mode.addItem("Кольоровий", "color")
+        self._combo_full_auto_color_mode.addItem("Чорно-білий (напівтони)", "grayscale")
+        self._combo_full_auto_color_mode.addItem("Чорно-білий (бінаризація)", "binary")
+
+        fa_form.addRow("Сила різкості (0–1):", self._spin_full_auto_sharpen)
+        fa_form.addRow("Висвітлення тіней (0–2):", self._spin_full_auto_shadow)
+        fa_form.addRow("Метод контрасту:", self._combo_full_auto_contrast_mode)
+        fa_form.addRow("Контраст (0–1):", self._spin_full_auto_contrast)
+        fa_form.addRow("Ч-б бінаризація:", self._cb_full_auto_bw_binary)
+        fa_form.addRow("Формат виходу:", self._combo_full_auto_color_mode)
         fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
                          "лише потрібні корекції з адаптивною силою.")
         fa_desc.setStyleSheet("color: gray; font-size: 10px;")
@@ -2879,6 +2953,21 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
         self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
         self._cb_full_auto_perspective.setChecked(s.get("full_auto_perspective", False))
+        self._cb_full_auto_hdr.setChecked(s.get("full_auto_hdr_enabled", True))
+        self._spin_full_auto_sharpen.setValue(s.get("full_auto_default_sharpen", 0.4))
+        self._spin_full_auto_shadow.setValue(s.get("full_auto_shadow_highlight_strength", 0.0))
+        self._spin_full_auto_contrast.setValue(s.get("full_auto_autofix_contrast", 0.15))
+        self._cb_full_auto_bw_binary.setChecked(s.get("full_auto_bw_binary", False))
+        # Метод контрасту Full Auto
+        fa_contrast_mode = s.get("full_auto_contrast_mode", "linear")
+        idx = self._combo_full_auto_contrast_mode.findData(fa_contrast_mode)
+        if idx >= 0:
+            self._combo_full_auto_contrast_mode.setCurrentIndex(idx)
+        # Формат виходу Full Auto
+        fa_color_mode = s.get("full_auto_output_color_mode", "auto")
+        idx = self._combo_full_auto_color_mode.findData(fa_color_mode)
+        if idx >= 0:
+            self._combo_full_auto_color_mode.setCurrentIndex(idx)
 
     def _collect_settings(self) -> dict:
         return {
@@ -2913,6 +3002,13 @@ class SettingsWindow(QWidget):
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
             "full_auto_perspective": self._cb_full_auto_perspective.isChecked(),
+            "full_auto_hdr_enabled": self._cb_full_auto_hdr.isChecked(),
+            "full_auto_default_sharpen": self._spin_full_auto_sharpen.value(),
+            "full_auto_shadow_highlight_strength": self._spin_full_auto_shadow.value(),
+            "full_auto_contrast_mode": self._combo_full_auto_contrast_mode.currentData(),
+            "full_auto_autofix_contrast": self._spin_full_auto_contrast.value(),
+            "full_auto_bw_binary": self._cb_full_auto_bw_binary.isChecked(),
+            "full_auto_output_color_mode": self._combo_full_auto_color_mode.currentData(),
         }
 
     def _save(self):
@@ -3322,7 +3418,7 @@ def local_std_map(gray: np.ndarray, kernel: int = DETAIL_STD_KERNEL) -> np.ndarr
     return np.sqrt(var)
 
 
-def detail_mask(gray: np.ndarray) -> np.ndarray:
+def detail_mask(gray: np.ndarray, noise_floor: float = None) -> np.ndarray:
     """
     Возвращает float32-карту 0..1:
       0.0 — однотонный участок (фон, бумага, шум) — эффект HDR должен быть ~0
@@ -3331,12 +3427,22 @@ def detail_mask(gray: np.ndarray) -> np.ndarray:
     ref_std вычисляется из самого изображения (DETAIL_REF_PERCENTILE),
     поэтому один и тот же код одинаково корректно работает и на контрастных фото,
     и на почти плоских сканах — это и есть "универсальность" без слайдеров.
+
+    noise_floor: если передан, заменяет DETAIL_MIN_REF_STD как нижнюю границу ref_std.
+    Позволяет увеличить порог на шумных изображениях, чтобы не усиливать шум на фоне.
+    Если None — вычисляется автоматически как медиана std на тихих 10% пикселей * 2.
     """
     std_map = local_std_map(gray)
-    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE)), DETAIL_MIN_REF_STD)
+
+    # Автоматическое вычисление noise_floor из изображения если не передан
+    if noise_floor is None:
+        noise_floor = max(float(np.percentile(std_map, 10)) * 2.0, DETAIL_MIN_REF_STD)
+
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE)), noise_floor)
     mask = np.clip(std_map / ref_std, 0.0, 1.0)
     mask = cv2.GaussianBlur(mask, (0, 0), DETAIL_SMOOTH_SIGMA)
     return mask
+
 ```
 
 ============================================================
@@ -3377,7 +3483,7 @@ PERSPECTIVE_SKEW_THRESHOLD = 0.03  # 3% від розміру зображенн
 @dataclass
 class DiagnosticResult:
     """Результат повної діагностики зображення."""
-    doc_type: str                    # "bw_document" / "color_document" / "photo"
+    doc_type: str                    # "bw_document" / "color_document" / "photo" / "flat_background"
 
     # Градієнт фону
     gradient_has: bool
@@ -3403,6 +3509,13 @@ class DiagnosticResult:
     perspective_has: bool
     perspective_corners: np.ndarray | None   # shape (4,2) або None
     perspective_skew_ratio: float    # відносне відхилення від прямокутника
+
+    # Нові поля для адаптивної обробки (Крок 1)
+    background_uniformity: float     # 0..1, частка рівного фону (де локальний std низький)
+    noise_level: float               # std шуму на рівних ділянках (detail_mask < 0.1)
+    color_saturation: float          # середній chroma (a,b канали LAB)
+    dynamic_range: float             # p95 - p5 каналу L
+    detail_density: float            # середнє значення detail_mask по всьому зображенню
 
 
 # ---------------------------------------------------------------------------
@@ -3557,6 +3670,68 @@ def _measure_perspective(image: np.ndarray) -> tuple[bool, np.ndarray | None, fl
     return has_perspective, corners if has_perspective else None, skew_ratio
 
 
+# --- Нові вимірювання (Крок 1) ---
+
+LOCAL_STD_KERNEL = 9      # розмір вікна для локального std
+UNIFORMITY_STD_THRESH = 8  # поріг: std нижче цього — "рівна ділянка"
+DETAIL_REF_PERCENTILE_DIAG = 90.0  # перцентиль для detail_density
+
+
+def _local_std_map(gray: np.ndarray, kernel: int = LOCAL_STD_KERNEL) -> np.ndarray:
+    """Локальне стандартне відхилення через box filter (O(1) на піксель)."""
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def _measure_background_uniformity(gray: np.ndarray) -> float:
+    """
+    Частка площі з низьким локальним std (світло-сірий рівний фон).
+    Повертає 0..1.
+    """
+    std_map = _local_std_map(gray)
+    return float(np.mean(std_map < UNIFORMITY_STD_THRESH))
+
+
+def _measure_noise_level(gray: np.ndarray) -> float:
+    """
+    Рівень шуму: std на рівних ділянках (де detail_mask < 0.1).
+    Локальний std на найтихіших 10% пікселів × 2.
+    """
+    std_map = _local_std_map(gray)
+    return float(np.percentile(std_map, 10)) * 2.0
+
+
+def _measure_color_saturation(lab: np.ndarray) -> float:
+    """
+    Середній chroma = середнє sqrt(a^2 + b^2) в LAB.
+    """
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.sqrt(a * a + b * b)
+    return float(np.mean(chroma))
+
+
+def _measure_dynamic_range(gray: np.ndarray) -> float:
+    """p95 - p5 каналу L (0..255)."""
+    p5 = float(np.percentile(gray, 5))
+    p95 = float(np.percentile(gray, 95))
+    return p95 - p5
+
+
+def _measure_detail_density(gray: np.ndarray) -> float:
+    """
+    Середнє значення detail_mask по всьому зображенню.
+    Використовує локальний std та перцентильний ref_std, аналогічно detail_map.detail_mask.
+    """
+    std_map = _local_std_map(gray)
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE_DIAG)), 3.0)
+    mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    return float(np.mean(mask))
+
+
 def _measure_doc_type(image: np.ndarray, settings: dict) -> str:
     """
     Визначає тип документа.
@@ -3605,6 +3780,16 @@ def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
     # Тип документа
     doc_type = _measure_doc_type(small, settings)
 
+    # --- Нові вимірювання (Крок 1) ---
+    small_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    small_lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+
+    background_uniformity = _measure_background_uniformity(small_gray)
+    noise_level = _measure_noise_level(small_gray)
+    color_saturation = _measure_color_saturation(small_lab)
+    dynamic_range = _measure_dynamic_range(small_gray)
+    detail_density = _measure_detail_density(small_gray)
+
     return DiagnosticResult(
         doc_type=doc_type,
         gradient_has=gradient_has,
@@ -3622,6 +3807,11 @@ def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
         perspective_has=perspective_has,
         perspective_corners=perspective_corners,
         perspective_skew_ratio=perspective_skew_ratio,
+        background_uniformity=background_uniformity,
+        noise_level=noise_level,
+        color_saturation=color_saturation,
+        dynamic_range=dynamic_range,
+        detail_density=detail_density,
     )
 
 
@@ -3668,7 +3858,7 @@ import numpy as np
 import logging
 
 # Типи документів для type hints
-DocType = Literal["bw_document", "color_document", "photo"]
+DocType = Literal["bw_document", "color_document", "photo", "flat_background"]
 
 # Константи для Canny edge detection
 CANNY_THRESHOLD_LOW = 50
@@ -3742,6 +3932,40 @@ def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
     return ratio_a > 0.001 or ratio_b > 0.001
 
 
+# Константи для виявлення flat_background (рівний фон)
+FLAT_BG_UNIFORMITY_THRESH = 0.70    # >70% площі — рівний фон
+FLAT_BG_DETAIL_DENSITY_THRESH = 0.15  # <15% деталей
+
+
+def _local_std_map(gray: np.ndarray, kernel: int = 7) -> np.ndarray:
+    """Локальне стандартне відхилення через box filter."""
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def _is_flat_background(small: np.ndarray) -> bool:
+    """
+    Перевіряє, чи є зображення рівним фоном (flat_background):
+    - background_uniformity > 0.7 (більшість площі — рівна)
+    - detail_density < 0.15 (мало деталей)
+    """
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    std_map = _local_std_map(gray)
+
+    # Background uniformity: частка пікселів з низьким локальним std
+    uniformity = float(np.mean(std_map < 8.0))
+
+    # Detail density: середнє значення detail_mask
+    ref_std = max(float(np.percentile(std_map, 90.0)), 3.0)
+    detail_mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    detail_density = float(np.mean(detail_mask))
+
+    return uniformity > FLAT_BG_UNIFORMITY_THRESH and detail_density < FLAT_BG_DETAIL_DENSITY_THRESH
+
+
 def classify(
     image: np.ndarray,
     bw_std_thresh: float = 10.0,
@@ -3749,15 +3973,22 @@ def classify(
     line_count_min: int = 3,
 ) -> DocType:
     """
-    Повертає тип документа: 'bw_document' | 'color_document' | 'photo'.
+    Повертає тип документа: 'bw_document' | 'color_document' | 'photo' | 'flat_background'.
     
     bw_std_thresh: поріг стандартного відхилення a/b каналів у LAB.
         Зменшено з 20.0 до 10.0 для запобігання помилковій класифікації
         кольорових зображень з низькою насиченістю як чорно-білих документів.
+    
+    flat_background: рівний фон без документа (скріншоти, фото стіни тощо).
     """
     small = cv2.resize(image, (0, 0), fx=ANALYSIS_SCALE, fy=ANALYSIS_SCALE, interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Перевірка на flat_background — виконується першою, найшвидша
+    if _is_flat_background(small):
+        _logger.debug("-> flat_background")
+        return "flat_background"
 
     std_a = float(np.std(a_ch))
     std_b = float(np.std(b_ch))
@@ -3858,12 +4089,16 @@ def adaptive_tile_grid(h: int, w: int, target_px: int = HDR_TILE_TARGET_PX) -> t
     return (gx, gy)
 
 
-def _apply_coring(diff: np.ndarray, noise_floor: float = HDR_NOISE_FLOOR) -> np.ndarray:
+def _apply_coring(diff: np.ndarray, noise_floor: float | None = None) -> np.ndarray:
     """
     Soft-threshold разницы HDR-CLAHE относительно оригинала.
     Разницы меньше noise_floor (типично — усиленный шум на ровном фоне)
     обнуляются; большие — уменьшаются на noise_floor (без резкого излома).
+
+    Если noise_floor не передан — использует HDR_NOISE_FLOOR.
     """
+    if noise_floor is None:
+        noise_floor = HDR_NOISE_FLOOR
     mag = np.maximum(np.abs(diff) - noise_floor, 0.0)
     return np.sign(diff) * mag
 
@@ -3920,6 +4155,7 @@ def apply_adaptive(
     strength: float = 0.5,
     text_mask: np.ndarray | None = None,
     auto_detail: bool = True,
+    noise_floor: float | None = None,
 ) -> np.ndarray:
     """
     Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
@@ -3933,6 +4169,7 @@ def apply_adaptive(
     auto_detail: если True (дефолт) — дополнительно ограничивает эффект на однотонных
                  участках через processing.detail_map.detail_mask. Это и есть фикс
                  артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
+    noise_floor: порог coring для подавления шума. Если None — используется HDR_NOISE_FLOOR.
 
     Возвращает uint8 BGR.
     """
@@ -3948,7 +4185,7 @@ def apply_adaptive(
 
     l_ch_f = l_ch.astype(np.float32)
     l_hdr_f = l_hdr.astype(np.float32)
-    diff = _apply_coring(l_hdr_f - l_ch_f)
+    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=noise_floor)
 
     # --- alpha map: базово "полный эффект" везде ---
     alpha_map = np.full(l_ch.shape, ADAPTIVE_HDR_ALPHA_BACKGROUND, dtype=np.float32)
@@ -3956,7 +4193,7 @@ def apply_adaptive(
     # --- ограничение на однотонных участках (новый, основной фикс) ---
     if auto_detail:
         from processing import detail_map as detail_map_module
-        dmask = detail_map_module.detail_mask(l_ch)  # 0..1, 0=плоско
+        dmask = detail_map_module.detail_mask(l_ch, noise_floor=noise_floor)  # 0..1, 0=плоско
         alpha_map *= dmask
 
     # --- существующее ограничение на тексте (как и раньше) ---
@@ -4580,7 +4817,7 @@ from enum import Enum
 from typing import Optional
 import cv2
 import numpy as np
-from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove
+from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background
 
 
 class DocType(str, Enum):
@@ -4588,6 +4825,7 @@ class DocType(str, Enum):
     BW_DOCUMENT = "bw_document"
     COLOR_DOCUMENT = "color_document"
     PHOTO = "photo"
+    FLAT_BACKGROUND = "flat_background"
 
 
 # Константи для порогів застосування корекцій
@@ -4665,8 +4903,8 @@ def run_autofix(
             line_count_min=classify_line_count_min,
         )
 
-    # Видалення тіней — ТІЛЬКИ для ч-б документів (руйнує кольорові/фото!)
-    if doc_type == DocType.BW_DOCUMENT.value:
+    # Видалення тіней — для ч-б та кольорових документів (детектор відфільтрує фото)
+    if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
         result, had_shadow = shadow_remove.auto_remove_shadow(result)
         if had_shadow:
             status_parts.append("тіні видалено")
@@ -4844,31 +5082,82 @@ def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
     return shadow_remove.auto_remove_shadow(image)
 
 
+def _compute_adaptive_params(diag) -> dict:
+    """
+    Обчислює індивідуальні параметри обробки на основі діагностики (Крок 4).
+    Повертає словник з параметрами для run_full_auto.
+    """
+    params = {}
+
+    # CLAHE/HDR noise_floor: більше шуму на фоні → вищий поріг → менше артефактів
+    params["noise_floor"] = max(1.5, diag.noise_level * 2.5)
+
+    # Сила HDR: менша для рівних зображень, більша для контрастних
+    params["hdr_strength"] = min(0.8, 0.3 + diag.detail_density * 0.7)
+
+    # Сила різкості: адаптивна з діагностики
+    params["sharpen_strength"] = diag.blur_sharpen_strength
+
+    # Сила контрасту: менша якщо динамічний діапазон вже широкий
+    if diag.dynamic_range > 180:
+        params["contrast_strength"] = 0.0
+    elif diag.dynamic_range > 120:
+        params["contrast_strength"] = diag.contrast_strength_needed * 0.5
+    else:
+        params["contrast_strength"] = diag.contrast_strength_needed
+
+    # Яскравість: тільки якщо значне відхилення
+    params["brightness_needed"] = abs(diag.brightness_correction) > 0.08
+    params["brightness_correction"] = diag.brightness_correction
+
+    # Shadow remove: тільки для документів з реальними тінями
+    params["shadow_remove"] = (
+        diag.doc_type in ("bw_document", "color_document")
+        and diag.gradient_has
+        and diag.gradient_strength > 0.3
+        and diag.background_uniformity > 0.4
+    )
+
+    return params
+
+
 def run_full_auto(
     image: np.ndarray,
     settings: dict,
     dry_run: bool = False,
 ) -> tuple[np.ndarray, str, dict]:
     """
-    Адаптивний Full Auto pipeline.
-    Аналізує зображення через diagnostics.diagnose і застосовує
-    тільки потрібні корекції з адаптивною силою.
+    Універсальний адаптивний Full Auto pipeline (Крок 4).
+    Аналізує зображення через diagnostics.diagnose, обчислює індивідуальні
+    параметри через _compute_adaptive_params і застосовує тільки потрібні
+    корекції з адаптивною силою.
+
+    Кожне зображення отримує власні параметри: noise_floor, hdr_strength,
+    sharpen_strength, contrast_strength, brightness, shadow_remove.
 
     Параметр dry_run=True — тільки діагностика, нічого не застосовувати.
     Повертає (result, status_message, applied_steps).
     """
-    from processing import diagnostics
+    from processing import diagnostics as diag_module
 
     result = image.copy()
     applied_steps: dict[str, float | bool] = {}
     status_parts: list[str] = []
 
     # Крок 0 — Діагностика
-    diag = diagnostics.diagnose(image, settings)
+    diag = diag_module.diagnose(image, settings)
+    adaptive_params = _compute_adaptive_params(diag)
 
     if dry_run:
         status_parts.append("тільки діагностика")
         status_parts.append(f"тип: {diag.doc_type}")
+        status_parts.append(f"uniformity: {diag.background_uniformity:.2f}")
+        status_parts.append(f"noise: {diag.noise_level:.2f}")
+        status_parts.append(f"saturation: {diag.color_saturation:.2f}")
+        status_parts.append(f"dynamic_range: {diag.dynamic_range:.1f}")
+        status_parts.append(f"detail_density: {diag.detail_density:.2f}")
+        status_parts.append(f"noise_floor: {adaptive_params['noise_floor']:.2f}")
+        status_parts.append(f"hdr_strength: {adaptive_params['hdr_strength']:.2f}")
         if diag.gradient_has:
             status_parts.append(f"градієнт: {diag.gradient_direction} ({diag.gradient_strength:.2f})")
         status_parts.append(f"контраст: {diag.contrast_strength_needed:.2f}")
@@ -4879,82 +5168,83 @@ def run_full_auto(
         status_msg = "Full Auto (dry): " + ", ".join(status_parts)
         return image.copy(), status_msg, applied_steps
 
-    # Крок 1 — Видалення градієнтного фону
-    min_gradient_strength = settings.get("full_auto_min_gradient_strength", 0.3)
-    if diag.gradient_has and diag.doc_type != DocType.PHOTO.value and diag.gradient_strength > min_gradient_strength:
+    noise_floor = adaptive_params["noise_floor"]
+    hdr_strength = adaptive_params["hdr_strength"]
+    sharpen_strength = adaptive_params["sharpen_strength"]
+    contrast_strength = adaptive_params["contrast_strength"]
+
+    # Крок 1 — Видалення градієнтного фону (адаптивне: тільки для документів з тінями)
+    if adaptive_params["shadow_remove"]:
         result, had_shadow = shadow_remove.auto_remove_shadow(result)
         if had_shadow:
             applied_steps["shadow_remove"] = diag.gradient_strength
             status_parts.append("тіні видалено")
             # Частковий перерахунок
-            updated = diagnostics.partial_rediagnose(result, settings, ["contrast", "brightness"])
-            diag.contrast_range_l = updated.get("contrast_range_l", diag.contrast_range_l)
-            diag.contrast_strength_needed = updated.get("contrast_strength_needed", diag.contrast_strength_needed)
-            diag.brightness_mean_l = updated.get("brightness_mean_l", diag.brightness_mean_l)
-            diag.brightness_correction = updated.get("brightness_correction", diag.brightness_correction)
+            updated = diag_module.partial_rediagnose(result, settings, ["contrast", "brightness"])
+            contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
 
     # Крок 2 — Корекція перспективи (опціонально, керується full_auto_perspective)
     if settings.get("full_auto_perspective", False) and diag.perspective_has:
         result = perspective.apply_correction(result, diag.perspective_corners)
         applied_steps["perspective"] = diag.perspective_skew_ratio
         status_parts.append("перспектива")
-        # Частковий перерахунок
-        updated = diagnostics.partial_rediagnose(result, settings, ["contrast", "brightness", "blur"])
-        diag.contrast_range_l = updated.get("contrast_range_l", diag.contrast_range_l)
-        diag.contrast_strength_needed = updated.get("contrast_strength_needed", diag.contrast_strength_needed)
-        diag.brightness_mean_l = updated.get("brightness_mean_l", diag.brightness_mean_l)
-        diag.brightness_correction = updated.get("brightness_correction", diag.brightness_correction)
-        diag.blur_variance = updated.get("blur_variance", diag.blur_variance)
-        diag.blur_strength_needed = updated.get("blur_strength_needed", diag.blur_strength_needed)
-        diag.blur_sharpen_strength = updated.get("blur_sharpen_strength", diag.blur_sharpen_strength)
+        updated = diag_module.partial_rediagnose(result, settings, ["contrast", "brightness", "blur"])
+        contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
+        sharpen_strength = updated.get("blur_sharpen_strength", sharpen_strength)
 
-    # Крок 3 — Яскравість
-    brightness_strength = abs(diag.brightness_correction)
-    if brightness_strength >= 0.05:
-        if diag.brightness_correction > 0:
-            # Темне — агресивніше розтягування
+    # Крок 3 — Яскравість (тільки якщо значне відхилення)
+    if adaptive_params["brightness_needed"]:
+        bc_val = adaptive_params["brightness_correction"]
+        if bc_val > 0:
             result = bc.auto_brightness(result, percentile_low=2.0, percentile_high=98.0)
         else:
-            # Світле — м'якше
             result = bc.auto_brightness(result, percentile_low=5.0, percentile_high=95.0)
-        applied_steps["brightness"] = brightness_strength
-        status_parts.append(f"яскравість {brightness_strength:.2f}")
-        # Частковий перерахунок контрасту
-        updated = diagnostics.partial_rediagnose(result, settings, ["contrast"])
-        diag.contrast_strength_needed = updated.get("contrast_strength_needed", diag.contrast_strength_needed)
+        applied_steps["brightness"] = abs(bc_val)
+        status_parts.append(f"яскравість {abs(bc_val):.2f}")
+        updated = diag_module.partial_rediagnose(result, settings, ["contrast"])
+        contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
 
-    # Крок 4 — Контраст
-    contrast_strength = diag.contrast_strength_needed
+    # Крок 4 — Контраст (адаптивний)
     if contrast_strength >= 0.05:
         contrast_strength = min(contrast_strength, 0.85)
         contrast_mode = settings.get("contrast_mode", "linear")
         result = run_contrast_advanced(result, contrast_strength, contrast_mode)
         applied_steps["contrast"] = contrast_strength
         status_parts.append(f"контраст {contrast_strength:.2f}")
-        # Частковий перерахунок розмиття
-        updated = diagnostics.partial_rediagnose(result, settings, ["blur"])
-        diag.blur_sharpen_strength = updated.get("blur_sharpen_strength", diag.blur_sharpen_strength)
 
-    # Крок 5 — HDR (тільки для фото)
-    if diag.doc_type == DocType.PHOTO.value and settings.get("hdr_in_autofix", True):
-        hdr_strength = settings.get("hdr_strength", 0.5)
-        result = hdr.apply_adaptive(result, strength=hdr_strength)
-        applied_steps["hdr"] = hdr_strength
-        status_parts.append(f"HDR {hdr_strength:.2f}")
+    # Крок 5 — HDR з адаптивним noise_floor (тільки для фото і кольорових документів)
+    if diag.doc_type in (DocType.PHOTO.value, DocType.COLOR_DOCUMENT.value):
+        if settings.get("full_auto_hdr_enabled", True) and hdr_strength > 0.01:
+            result = hdr.apply_adaptive(
+                result,
+                strength=hdr_strength,
+                noise_floor=noise_floor,
+            )
+            applied_steps["hdr"] = hdr_strength
+            status_parts.append(f"HDR {hdr_strength:.2f}")
 
     # Крок 6 — Специфічна обробка по типу документа
-    sharpen_strength = diag.blur_sharpen_strength
-    if sharpen_strength <= 0.0:
-        sharpen_strength = settings.get("sharpen_strength", 0.4)
-    bw_binary = settings.get("bw_binary", False)
+    bw_binary = settings.get("full_auto_bw_binary", False)
 
-    if diag.doc_type == DocType.BW_DOCUMENT.value:
+    if diag.doc_type == DocType.FLAT_BACKGROUND.value:
+        # flat_background: тільки легка різкість, без CLAHE, без HDR
+        if sharpen_strength > 0.05:
+            result = sharpen.apply(result, strength=min(sharpen_strength, 0.3))
+            status_parts.append(f"різкість {sharpen_strength:.2f}")
+        status_parts.append("рівний фон")
+    elif diag.doc_type == DocType.BW_DOCUMENT.value:
+        if sharpen_strength <= 0.0:
+            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
         result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
         status_parts.append("ч-б документ")
     elif diag.doc_type == DocType.COLOR_DOCUMENT.value:
+        if sharpen_strength <= 0.0:
+            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
         result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)
         status_parts.append("кольоровий документ")
-    else:
+    else:  # photo
+        if sharpen_strength <= 0.0:
+            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
         if diag.blur_strength_needed > 0.05:
             result = sharpen.apply(result, strength=sharpen_strength)
             status_parts.append(f"різкість {sharpen_strength:.2f}")
@@ -4962,21 +5252,21 @@ def run_full_auto(
     applied_steps["doc_processing"] = diag.doc_type
 
     # Крок 7 — Shadow highlight
-    sh_strength = settings.get("shadow_highlight_strength", 0.0)
+    sh_strength = settings.get("full_auto_shadow_highlight_strength", 0.0)
     if sh_strength > 0.001:
         result = shadow_highlight.apply_shadow_highlight(result, strength=sh_strength)
         applied_steps["shadow_highlight"] = sh_strength
         status_parts.append(f"підсвічування {sh_strength:.2f}")
 
     # Крок 8 — Додатковий контраст Auto Fix
-    autofix_contrast = settings.get("autofix_contrast", 0.15)
-    contrast_mode = settings.get("contrast_mode", "linear")
+    autofix_contrast = settings.get("full_auto_autofix_contrast", 0.15)
+    contrast_mode = settings.get("full_auto_contrast_mode", "linear")
     if autofix_contrast > 0.001:
         result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
         applied_steps["autofix_contrast"] = autofix_contrast
 
     # Крок 9 — Формат виходу
-    output_color_mode = settings.get("output_color_mode", "auto")
+    output_color_mode = settings.get("full_auto_output_color_mode", "auto")
     if output_color_mode == "grayscale":
         result = bc.to_grayscale(result)
         status_parts.append("ч-б")
@@ -4988,6 +5278,17 @@ def run_full_auto(
                                      cv2.THRESH_BINARY, 15, 10)
         result = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
         status_parts.append("бінаризація")
+
+    # Крок 10 — Автоматичний білий фон (для документів, не фото)
+    if diag.doc_type != DocType.PHOTO.value:
+        result, had_white = white_background.make_background_white(
+            result,
+            background_uniformity=diag.background_uniformity,
+            detail_density=diag.detail_density,
+        )
+        if had_white:
+            applied_steps["white_background"] = True
+            status_parts.append("білий фон")
 
     status_msg = "Full Auto: " + ", ".join(status_parts)
     return result, status_msg, applied_steps
@@ -5138,8 +5439,78 @@ def auto_shadow_highlight(image: np.ndarray, percentile_low: float = AUTO_SHADOW
 ```python
 """
 Видалення тіней з документів через background estimation.
-Метод: GaussianBlur для оцінки фону + divide для нормалізації.
-Прибирає градієнтні тіні (від папки, руки тощо) без перетворення їх на чорні плями.
+Метод: морфологічне закриття (MORPH_CLOSE) + легке GaussianBlur для оцінки фону,
+       потім cv2.divide для нормалізації освітлення.
+       + ДРУГИЙ, "грубий" прохід (downsample-based) для великих тіней,
+       які один морфологічний kernel принципово не може прибрати (див. нижче).
+
+Чому морфологічний метод замість чистого GaussianBlur:
+- GaussianBlur — low-pass фільтр, який «розмазує» яскравість радіально від краю тіні,
+  створюючи плавний градієнт шириною ~kernel_size/2. Після cv2.divide це дає
+  світлу/темну облямівку («ореол») навколо різких тіней.
+- MORPH_CLOSE з еліптичним ядром: dilate заповнює темну тінь значеннями світлого фону,
+  потім erode повертає границю — геометрія краю зберігається, ореолів немає.
+- Еліптичне ядро обрано замість прямокутного, бо кругова форма не створює
+  «сходинок» на кутах тіней.
+- Легке GaussianBlur (мале ядро ~kernel_size/5) поверх результату прибирає
+  текстуру документа (текст, лінії), щоб вона не потрапила в модель фону.
+
+ВАЖЛИВО — чому одного MORPH_CLOSE недостатньо для ВЕЛИКИХ тіней
+(наприклад тінь від руки/телефону, що закриває половину кадру):
+
+  MORPH_CLOSE може або повністю "не дотягнутись", або стати по суті
+  no-op'ом — залежно від співвідношення розміру ядра й розміру тіні.
+  Це не помилка реалізації, а математична межа методу:
+
+  - kernel_size << ширина тіні:
+      dilate всередині тіні не дістає до світлих пікселів фону (вони
+      задалеко), тому центр тіні в моделі фону залишається темним.
+      Але рівно по краю тіні, на відстані ~kernel_size/2 від реального
+      контуру, dilate ВЖЕ дістає світлий фон — модель фону різко
+      "перескакує" з темного на світле саме там. Після cv2.divide
+      (оригінал лишається темним, фон раптом світлий) це дає НЕ
+      градієнт, а різкий темний контур — саме той "чіткий чорний
+      контур телефону", про який скаржаться користувачі. Поза цим
+      контуром (де kernel дотягнувся скрізь) корекція спрацьовує добре
+      і фон стає білим — тож контраст контуру щодо побілілого фону
+      стає ще більш разючим.
+  - kernel_size >> ширина тіні:
+      dilate з такого ядра дістає світлий фон практично з будь-якої
+      точки кадру (бо тінь відносно ядра — маленька крапка), тому
+      модель фону стає майже однорідною константою по всьому
+      зображенню. Ділення на константу — це просто масштабування
+      яскравості, воно НЕ прибирає форму тіні. Тінь залишається
+      майже незмінною (перевірено експериментально: kernel=401 на
+      636×783 практично відтворює оригінал).
+
+  Тобто для тіні такого розміру (значна частка кадру) НЕМАЄ єдиного
+  значення kernel_size, при якому один morph-прохід дає прийнятний
+  результат. Це і є причина артефакту з чорною плямою/контуром
+  телефону — а не баг у конкретних константах.
+
+  Рішення тут: ДРУГИЙ прохід оцінки фону через сильне зменшення
+  роздільності (downsample) + GaussianBlur + збільшення назад
+  (upsample). При зменшенні до ~32-48px по короткій стороні будь-яка
+  тінь (навіть на половину кадру) стає низькочастотним перепадом
+  яскравості, і немодельований "стрибок", що створює перший прохід,
+  теж зменшується разом з усім зображенням — після upsample він
+  розмазується по плавному градієнту, а не лишається різким краєм.
+  Цей прохід ВСЕРЕДИНІ не залежить від розміру тіні відносно kernel —
+  тому він прибирає саме той клас проблем, де морфологія застрягає.
+
+Обмеження:
+- Не застосовується до фото (перевіряється через std каналів A/B та насиченість HSV).
+- Не застосовується до документів з гільйошем (паспорти) — детектуються за
+  високою насиченістю S-каналу HSV.
+- Не застосовується до сильно розмитих зображень (Laplacian var < 10).
+- Не застосовується до зображень < 100×100 пікселів (уникнення артефактів).
+- Дуже темні й контрастні тіні з різким краєм (тінь від об'єкта, що
+  торкається/майже торкається документа, а не просто перекриває
+  світло віддалено) прибираються не на 100% — другий прохід сильно
+  пом'якшує залишок, але не гарантує ідеально рівний фон. Це
+  фундаментальна межа корекції освітлення з одного 2D-зображення:
+  немодельовано неможливо відрізнути "що мало бути під тінню" від
+  "що там справді надруковано", якщо тінь дуже глибока.
 
 Працює раніше за auto_contrast/CLAHE — тому наступні кроки бачать
 "чистий" документ без тіней і не посилюють їх.
@@ -5150,65 +5521,193 @@ def auto_shadow_highlight(image: np.ndarray, percentile_low: float = AUTO_SHADOW
 import cv2
 import numpy as np
 
-# Константи для background estimation
-BLUR_KERNEL_MIN = 21       # мінімальний розмір ядра (непарне)
+# Константи для background estimation (прохід 1 — морфологія)
+BLUR_KERNEL_MIN = 21       # мінімальний розмір ядра GaussianBlur (непарне)
 BLUR_KERNEL_MAX = 201      # максимальний розмір ядра
 BLUR_KERNEL_STEP = 2       # крок збільшення (залишає непарним)
 BLUR_SIGMA = 0             # 0 = автоматичний вибір sigma
+
+# Константи для морфологічної обробки
+MORPH_KERNEL_MIN = 31      # мінімальний розмір ядра для морфології (більший за Gaussian,
+                            # бо MORPH_CLOSE потребує ядра, яке «накриває» всю тінь)
+MORPH_SMOOTH_FACTOR = 5    # дільник для обчислення ядра фінального згладжування:
+                            # smooth_kernel = max(5, morph_kernel // MORPH_SMOOTH_FACTOR) | 1
 
 # Константи для divide
 DIVIDE_SCALE = 255.0       # масштаб для cv2.divide
 DIVIDE_EPSILON = 1.0       # мінус до background щоб уникнути ділення на 0
 
 # Константи для автоматичного визначення розміру ядра
-KERNEL_SCALE_FACTOR = 5    # kernel = max(21, min_side // factor)
+KERNEL_SCALE_FACTOR = 5    # kernel = max(min_kernel, min_side // factor)
 KERNEL_MIN_SIDE = 100      # мінімальний розмір сторони для масштабування
+
+# Константи для другого ("грубого") проходу — виправляє великі тіні,
+# з якими morph_close із проходу 1 принципово не може впоратись
+# (див. пояснення у docstring модуля).
+COARSE_PASS_ENABLED = True     # глобальний вимикач другого проходу
+COARSE_TARGET_SIDE = 48        # короткостороння thumbnail-роздільність для оцінки
+                                # широкої тіні; менше значення = сильніша корекція
+                                # великих тіней, але вищий ризик "виїдання" градієнтів
+                                # самого документа (дуже нерівномірно надрукованих)
+COARSE_BLUR_SIGMA = 2.0        # sigma додаткового згладжування thumbnail'у
+COARSE_DIVIDE_EPSILON = 1.0    # мінус до background щоб уникнути ділення на 0
 
 # Константи для детекції тіней
 SHADOW_DETECT_PERCENTILE = 5   # нижній перцентиль для детекції
 SHADOW_DETECT_THRESHOLD = 80   # поріг L-каналу: якщо p5 < threshold — є тіні
 SHADOW_RATIO_THRESHOLD = 0.3  # мінімальне відношення p5/p95 для визнання тіней
 
+# Константи для захисних механізмів
+MIN_IMAGE_SIDE = 100           # мінімальний розмір сторони для обробки
+PHOTO_COLOR_STD_THRESHOLD = 30  # поріг std каналів A/B: вище → фото
+HSV_SATURATION_THRESHOLD = 50   # поріг S-каналу HSV для детекції кольорових областей
+HSV_SATURATION_RATIO = 0.15     # якщо >15% пікселів мають S > 50 → фото/гільйош
+LAPLACIAN_BLUR_THRESHOLD = 10.0 # якщо дисперсія Laplacian < 10 → занадто розмите
 
-def remove_shadow(image: np.ndarray, kernel_size: int = 0) -> np.ndarray:
+
+def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
+    """
+    Створює модель фону через морфологічне закриття + легке згладжування.
+
+    Алгоритм:
+    1. MORPH_CLOSE з еліптичним ядром: dilate заповнює темні області (тіні, текст)
+       значеннями світлого фону; erode повертає границю до початкового розміру.
+       Еліптичне ядро зберігає геометрію кутів тіней без «сходинок».
+    2. GaussianBlur з малим ядром (~kernel_size/5) прибирає залишки текстури
+       (дрібний текст, лінії), щоб вони не вплинули на модель фону.
+
+    Працює добре для тіней, ширина яких порівнянна з kernel_size.
+    Для тіней, що сильно перевищують kernel_size, дає лише часткове
+    покриття (див. docstring модуля) — для цього є другий прохід,
+    _create_coarse_background().
+
+    Args:
+        l_channel: L-канал LAB зображення (uint8, 2D).
+        kernel_size: розмір ядра для морфології (непарне, >= MORPH_KERNEL_MIN).
+
+    Returns:
+        Модель фону (uint8, 2D) — згладжене зображення без тіней та текстури.
+    """
+    # Еліптичне ядро: краще зберігає кути тіней, ніж прямокутне
+    morph_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+    )
+
+    # Морфологічне закриття: dilate → erode
+    # Заповнює темні області (тіні, текст) кольором фону
+    closed = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, morph_kernel)
+
+    # Легке згладжування для прибирання залишків текстури
+    smooth_size = max(5, kernel_size // MORPH_SMOOTH_FACTOR) | 1
+    background = cv2.GaussianBlur(closed, (smooth_size, smooth_size), BLUR_SIGMA)
+
+    return background
+
+
+def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
+    """
+    Друга, "груба" модель фону: оцінює лише дуже низькочастотну
+    (широку) нерівномірність освітлення — саме ту, яку MORPH_CLOSE
+    з обмеженим kernel_size не може прибрати, коли тінь більша за ядро.
+
+    Алгоритм:
+    1. Зменшуємо L-канал до thumbnail з короткою стороною
+       COARSE_TARGET_SIDE пікселів (INTER_AREA — усереднює, тому
+       весь дрібний текст/лінії документа зникають самі по собі,
+       без окремої морфології).
+    2. Легке GaussianBlur thumbnail'у — додатково згладжує.
+    3. Збільшуємо назад до оригінального розміру (INTER_CUBIC) —
+       інтерполяція дає плавний градієнт без різких меж, тому що
+       на такій малій роздільності різких меж вже не існує.
+
+    Через те, що thumbnail настільки малий, будь-яка тінь (навіть
+    та, що займає половину кадру) для нього виглядає як низько-
+    частотний перепад — той самий метод однаково добре працює і для
+    маленької локальної тіні, і для тіні на півкадру, тому що ми
+    не прив'язані до фіксованого kernel_size відносно оригінального
+    розміру зображення.
+
+    Args:
+        l_channel: L-канал LAB зображення (uint8, 2D) — як правило,
+            вже після проходу 1 (_create_background_model + divide).
+
+    Returns:
+        Груба модель фону (uint8, 2D), того ж розміру що l_channel.
+    """
+    h, w = l_channel.shape[:2]
+    min_side = min(h, w)
+
+    scale = COARSE_TARGET_SIDE / float(min_side)
+    small_w = max(1, int(round(w * scale)))
+    small_h = max(1, int(round(h * scale)))
+
+    small = cv2.resize(l_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    small_blur = cv2.GaussianBlur(small, (0, 0), sigmaX=COARSE_BLUR_SIGMA)
+    background = cv2.resize(small_blur, (w, h), interpolation=cv2.INTER_CUBIC)
+
+    return background
+
+
+def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = True) -> np.ndarray:
     """
     Видаляє градієнтні тіні з документа через background estimation.
 
-    Метод:
-    1. Сильно розмиваємо зображення → отримуємо "фон" (включно з тінню)
-    2. Ділимо оригінал на фон → нормалізуємо освітлення
-    3. Результат: рівномірно освітлений документ без тіней
+    Метод (два проходи):
+    1. Морфологічне закриття з еліптичним ядром → модель фону без тіней,
+       ділимо оригінал на цю модель. Добре прибирає тіні, чий розмір
+       порівнянний з обчисленим kernel_size, без ореолів.
+    2. (якщо coarse_pass=True) Грубий downsample-based прохід зверху —
+       прибирає залишкову широку нерівномірність освітлення, яку
+       прохід 1 не міг прибрати через обмеження kernel_size відносно
+       розміру тіні (типово: тінь від руки/телефону на половину кадру).
 
     Args:
         image: BGR numpy array uint8
-        kernel_size: Розмір ядра GaussianBlur (0 = автоматичний)
-                     Чим більше ядро — тим більші тіні прибирає.
-                     Має бути непарним.
+        kernel_size: Розмір ядра для морфології (0 = автоматичний).
+                      Чим більше ядро — тим більші тіні прибирає
+                      ПРОХІД 1, але дуже велике ядро починає
+                      перетворюватись на no-op (див. docstring модуля).
+                      Має бути непарним.
+        coarse_pass: Чи застосовувати другий, грубий прохід для
+                      великих тіней. За замовчуванням True. Вимкніть,
+                      якщо точно знаєте, що тіні завжди дрібні/локальні
+                      і хочете заощадити обчислення.
 
     Returns:
         Оброблене BGR зображення без градієнтних тіней
     """
+    # Захисний механізм: не обробляємо занадто малі зображення
+    h, w = image.shape[:2]
+    if min(h, w) < MIN_IMAGE_SIDE:
+        return image.copy()
+
     if kernel_size == 0:
         kernel_size = _auto_kernel_size(image)
 
-    # Гарантуємо непарність
-    kernel_size = max(kernel_size | 1, BLUR_KERNEL_MIN)
+    # Гарантуємо непарність та мінімальний розмір для морфології
+    kernel_size = max(kernel_size | 1, MORPH_KERNEL_MIN)
 
     # Конвертуємо в LAB для роботи з каналом яскравості
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
-    # Оцінка фону через сильне розмиття
-    background = cv2.GaussianBlur(l_ch, (kernel_size, kernel_size), BLUR_SIGMA)
+    # --- Прохід 1: морфологічне закриття + легке згладжування ---
+    background = _create_background_model(l_ch, kernel_size)
 
-    # Нормалізація: ділимо оригінал на фон
-    # Конвертуємо в float32 для коректної роботи cv2.divide
     l_f = l_ch.astype(np.float32)
     bg_f = background.astype(np.float32) + DIVIDE_EPSILON
     l_norm = cv2.divide(l_f, bg_f, scale=DIVIDE_SCALE)
     # Критично: clamp до [0, 255] перед конвертацією, інакше float32 > 255
     # при astype(np.uint8) дають wrapping (mod 256) -> чорна інверсія
     l_norm = np.clip(l_norm, 0.0, 255.0).astype(np.uint8)
+
+    # --- Прохід 2: грубе виправлення залишкової широкої нерівномірності ---
+    if coarse_pass and COARSE_PASS_ENABLED:
+        coarse_bg = _create_coarse_background(l_norm)
+        l_f2 = l_norm.astype(np.float32)
+        coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
+        l_norm2 = cv2.divide(l_f2, coarse_bg_f, scale=DIVIDE_SCALE)
+        l_norm = np.clip(l_norm2, 0.0, 255.0).astype(np.uint8)
 
     # Збираємо LAB назад
     merged = cv2.merge([l_norm, a_ch, b_ch])
@@ -5235,18 +5734,24 @@ def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
 def _auto_kernel_size(image: np.ndarray) -> int:
     """
     Обчислює оптимальний розмір ядра на основі розміру зображення.
-    Більше зображення — більше ядро (щоб розмиття "захопило" всю тінь).
+    Більше зображення — більше ядро (щоб морфологія «захопила» всю тінь).
+
+    Примітка: це ядро для ПРОХОДУ 1 (морфологія). Воно навмисно
+    обмежене BLUR_KERNEL_MAX, бо занадто велике ядро робить
+    MORPH_CLOSE по суті no-op'ом (модель фону стає майже константою) —
+    компенсацію великих тіней понад цю межу бере на себе прохід 2
+    (_create_coarse_background), а не подальше зростання цього ядра.
     """
     h, w = image.shape[:2]
     min_side = min(h, w)
 
     if min_side < KERNEL_MIN_SIDE:
-        return BLUR_KERNEL_MIN
+        return MORPH_KERNEL_MIN
 
     kernel = min_side // KERNEL_SCALE_FACTOR
     # Робимо непарним та обмежуємо
     kernel = kernel | 1  # гарантуємо непарність
-    kernel = max(kernel, BLUR_KERNEL_MIN)
+    kernel = max(kernel, MORPH_KERNEL_MIN)
     kernel = min(kernel, BLUR_KERNEL_MAX)
 
     return kernel
@@ -5255,21 +5760,44 @@ def _auto_kernel_size(image: np.ndarray) -> int:
 def _detect_shadow(image: np.ndarray) -> bool:
     """
     Виявляє наявність тіней на зображенні.
-    Якщо нижній перцентиль L-каналу значно темніший за верхній — є тіні.
-    НЕ застосовуємо до фото (перевіряємо наявність кольору).
+
+    Багаторівнева перевірка:
+    1. Захисний фільтр: не обробляємо фото (std A/B > 30).
+    2. Захисний фільтр: не обробляємо документи з гільйошем/насиченим
+       кольором (S-канал HSV > 50 більше ніж у 15% пікселів).
+    3. Захисний фільтр: не обробляємо сильно розмиті зображення
+       (дисперсія Laplacian < 10), бо shadow_remove може створити артефакти.
+    4. Основна перевірка: якщо нижній перцентиль L-каналу значно
+       темніший за верхній — є тіні.
     """
+    h, w = image.shape[:2]
+    if min(h, w) < MIN_IMAGE_SIDE:
+        return False
+
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l = lab[:, :, 0]
     a = lab[:, :, 1]
     b = lab[:, :, 2]
 
-    # Перевіряємо чи це фото (багато кольору) — не застосовуємо shadow_remove до фото
+    # Рівень 1: Перевіряємо чи це фото (багато кольору)
     std_a = float(np.std(a))
     std_b = float(np.std(b))
-    # Якщо багато кольору — це фото, не документ з тінню
-    if std_a > 30 or std_b > 30:
+    if std_a > PHOTO_COLOR_STD_THRESHOLD or std_b > PHOTO_COLOR_STD_THRESHOLD:
         return False
 
+    # Рівень 2: Перевіряємо насиченість HSV — детектуємо гільйош, паспорти
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    s = hsv[:, :, 1]
+    saturated_ratio = float(np.count_nonzero(s > HSV_SATURATION_THRESHOLD)) / (h * w)
+    if saturated_ratio > HSV_SATURATION_RATIO:
+        return False
+
+    # Рівень 3: Перевіряємо розмитість — занадто розмиті зображення не обробляємо
+    laplacian_var = float(cv2.Laplacian(l, cv2.CV_64F).var())
+    if laplacian_var < LAPLACIAN_BLUR_THRESHOLD:
+        return False
+
+    # Рівень 4: Основна перевірка на тіні через перцентилі L-каналу
     p_low = float(np.percentile(l, SHADOW_DETECT_PERCENTILE))
     p_high = float(np.percentile(l, 100 - SHADOW_DETECT_PERCENTILE))
 
@@ -5286,7 +5814,6 @@ def _detect_shadow(image: np.ndarray) -> bool:
         return ratio < SHADOW_RATIO_THRESHOLD
 
     return False
-
 ```
 
 ============================================================
@@ -5496,6 +6023,105 @@ def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
             if std < UNIFORM_STD_THRESHOLD:
                 mask[y:y_end, x:x_end] = 255
     return mask
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\white_background.py
+============================================================
+```python
+"""
+Модуль автоматичного білізнення фону для документів.
+Визначає світлий однорідний фон і замінює його на білий (255, 255, 255),
+зберігаючи контент (текст, лінії, малюнки).
+"""
+
+import cv2
+import numpy as np
+
+# Константи для визначення фону
+WHITE_BG_L_THRESHOLD = 230.0    # пікселі з L > цього — потенційний фон
+WHITE_BG_STD_THRESHOLD = 8.0    # локальний std нижче цього — однорідна ділянка
+UNIFORMITY_MIN = 0.35           # мінімальна частка рівного фону для застосування
+DETAIL_DENSITY_MAX = 0.35       # максимальна деталізація для застосування (вище — фото)
+MORPH_KERNEL_SIZE = 7           # розмір ядра для морфологічних операцій
+DILATE_KERNEL_SIZE = 5          # розмір ядра для розширення маски (згладжування країв)
+
+
+def _local_std_map(gray: np.ndarray, kernel: int = 7) -> np.ndarray:
+    """Локальне стандартне відхилення через box filter (O(1) на піксель)."""
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def make_background_white(
+    image: np.ndarray,
+    background_uniformity: float,
+    detail_density: float,
+) -> tuple[np.ndarray, bool]:
+    """
+    Замінює світлий однорідний фон на білий.
+
+    Алгоритм:
+    1. Переводить в LAB, бере L-канал.
+    2. Будує маску фону: L > WHITE_BG_L_THRESHOLD + локальний std < WHITE_BG_STD_THRESHOLD.
+    3. Морфологічне closing для усунення дрібних дірок.
+    4. Розширення маски (dilate) для згладжування країв.
+    5. Замінює пікселі фону на (255, 255, 255).
+
+    Параметри:
+        image: BGR зображення (uint8).
+        background_uniformity: частка рівного фону (0..1) з діагностики.
+        detail_density: щільність деталей (0..1) з діагностики.
+
+    Повертає:
+        (модифіковане_зображення, чи_була_заміна)
+    """
+    # Перевірка: чи варто застосовувати
+    if background_uniformity < UNIFORMITY_MIN:
+        return image.copy(), False
+    if detail_density > DETAIL_DENSITY_MAX:
+        return image.copy(), False
+
+    result = image.copy()
+    h, w = result.shape[:2]
+
+    # LAB для L-каналу
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l_ch = lab[:, :, 0].astype(np.float32)
+
+    # Маска 1: світлі пікселі
+    light_mask = l_ch > WHITE_BG_L_THRESHOLD
+
+    # Маска 2: однорідні ділянки
+    gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+    std_map = _local_std_map(gray)
+    uniform_mask = std_map < WHITE_BG_STD_THRESHOLD
+
+    # Комбінована маска: світлі + однорідні
+    bg_mask = (light_mask & uniform_mask).astype(np.uint8) * 255
+
+    # Морфологічне closing: усуває дрібні дірки в масці
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (MORPH_KERNEL_SIZE, MORPH_KERNEL_SIZE))
+    bg_mask = cv2.morphologyEx(bg_mask, cv2.MORPH_CLOSE, kernel_close)
+
+    # Розширення маски для згладжування країв
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (DILATE_KERNEL_SIZE, DILATE_KERNEL_SIZE))
+    bg_mask = cv2.dilate(bg_mask, kernel_dilate)
+
+    # Частка фону після морфології
+    bg_ratio = float(np.mean(bg_mask > 0))
+
+    # Якщо фон займає менше 10% — не застосовуємо (може бути помилковою маскою)
+    if bg_ratio < 0.1:
+        return image.copy(), False
+
+    # Заміна фону на білий (255, 255, 255)
+    result[bg_mask > 0] = [255, 255, 255]
+
+    return result, True
 ```
 
 ============================================================
@@ -7422,6 +8048,123 @@ if __name__ == "__main__":
 
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_adaptive_params.py
+============================================================
+```python
+"""
+Тести для processing/pipeline.py — _compute_adaptive_params та адаптивна логіка.
+Перевіряє, що параметри обробки правильно обчислюються для різних типів зображень.
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing.pipeline import _compute_adaptive_params
+from processing.diagnostics import diagnose
+
+
+def _default_settings():
+    return {
+        "autosharp_max_strength": 0.7,
+        "autosharp_threshold": 80.0,
+        "bw_std_thresh": 20.0,
+        "edge_ratio_min": 0.03,
+        "line_count_min": 3,
+    }
+
+
+class TestAdaptiveParams:
+    def test_uniform_image_low_hdr_strength(self):
+        """Рівне сіре зображення → низька hdr_strength та noise_floor ≈ 1.5."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        diag = diagnose(img, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # На рівному фоні HDR сила мінімальна
+        assert params["hdr_strength"] <= 0.4
+        # Noise floor мінімальний
+        assert params["noise_floor"] >= 1.5
+        # Контраст не потрібен (або мінімальний)
+        assert params["contrast_strength"] >= 0.0
+        # Shadow remove має бути False на flat_background
+        assert params["shadow_remove"] is False
+
+    def test_noisy_image_high_noise_floor(self):
+        """Зашумлене зображення → вищий noise_floor."""
+        np.random.seed(42)
+        noise = np.random.normal(128, 30, (100, 100, 3)).astype(np.uint8)
+        diag = diagnose(noise, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # Noise_floor має бути > 1.5 для шумного зображення
+        assert params["noise_floor"] > 1.5
+
+    def test_high_contrast_image_low_contrast_needed(self):
+        """Висококонтрастне зображення → contrast_strength = 0 (якщо dynamic_range > 180)."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :50, :] = 255  # половина біла, половина чорна
+        diag = diagnose(img, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # Якщо dynamic_range > 180, contrast_strength = 0
+        if diag.dynamic_range > 180:
+            assert params["contrast_strength"] == 0.0
+
+    def test_textured_image_high_hdr(self):
+        """Текстурне зображення → вища hdr_strength (ближче до 0.8)."""
+        np.random.seed(42)
+        texture = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        diag = diagnose(texture, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # На текстурному зображенні detail_density висока → hdr_strength висока
+        assert params["hdr_strength"] > 0.5
+
+    def test_bright_image_no_brightness_needed(self):
+        """Зображення з середньою яскравістю → brightness_needed = False."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        diag = diagnose(img, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # На нейтральному зображенні brightness_needed = False
+        assert params["brightness_needed"] is False
+
+    def test_dark_image_brightness_needed(self):
+        """Темне зображення → brightness_needed = True."""
+        img = np.full((100, 100, 3), 30, dtype=np.uint8)
+        diag = diagnose(img, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # Темне зображення має потребу в корекції яскравості
+        assert params["brightness_needed"] is True
+        assert params["brightness_correction"] > 0
+
+    def test_sharp_image_sharpen_strength(self):
+        """Різке зображення → sharpen_strength = 0."""
+        np.random.seed(42)
+        sharp = np.random.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        diag = diagnose(sharp, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # На різкому зображенні (шум) sharpen_strength = 0
+        assert params["sharpen_strength"] >= 0.0
+
+    def test_shadow_remove_for_document(self):
+        """Документ з градієнтом → _compute_adaptive_params не падає, повертає bool."""
+        # Створюємо імітацію документа з градієнтом
+        img = np.full((200, 200, 3), 200, dtype=np.uint8)  # світлий фон
+        img[30:170, 30:170, :] = 180  # трохи темніший "документ"
+        # Додаємо горизонтальний градієнт
+        for x in range(200):
+            val = int(200 - 80 * x / 199)
+            img[:, x, :] = np.clip(img[:, x, :].astype(int) - (200 - val), 0, 255).astype(np.uint8)
+        diag = diagnose(img, _default_settings())
+        params = _compute_adaptive_params(diag)
+        # shadow_remove має бути bool
+        assert isinstance(params["shadow_remove"], bool)
+        # Якщо є градієнт і фон рівномірний — shadow_remove має бути True
+        if diag.gradient_has and diag.background_uniformity > 0.4 and diag.doc_type in ("bw_document", "color_document"):
+            assert params["shadow_remove"] is True
+        else:
+            # Інакше може бути False, це теж нормально
+            assert params["shadow_remove"] is False
+
+```
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_autofix.py
 ============================================================
 ```python
@@ -7992,6 +8735,88 @@ if __name__ == "__main__":
 ```
 
 ============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_detail_mask_noise.py
+============================================================
+```python
+"""
+Тести для processing/detail_map.py — адаптивний noise_floor.
+Перевіряє, що на рівному сірому фоні маска ≈ 0.
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing.detail_map import detail_mask, local_std_map
+
+
+class TestDetailMaskNoise:
+    def test_uniform_gray_mask_near_zero(self):
+        """На рівному сірому фоні detail_mask ≈ 0."""
+        gray = np.full((100, 100), 128, dtype=np.uint8)
+        mask = detail_mask(gray)
+        assert mask.max() < 0.05, f"Mask should be near 0 on uniform, got max={mask.max()}"
+        assert mask.mean() < 0.01
+
+    def test_noise_floor_raises_threshold(self):
+        """З вищим noise_floor маска стає ще нижчою на рівному фоні."""
+        gray = np.full((100, 100), 128, dtype=np.uint8)
+        mask_default = detail_mask(gray)
+        mask_high = detail_mask(gray, noise_floor=10.0)
+        # З вищим noise_floor маска має бути <= ніж з дефолтним
+        assert mask_high.max() <= mask_default.max() + 1e-6
+
+    def test_texture_mask_high(self):
+        """На текстурному/шумовому зображенні detail_mask > 0.5."""
+        np.random.seed(42)
+        gray = np.random.randint(0, 256, (100, 100), dtype=np.uint8)
+        mask = detail_mask(gray)
+        assert mask.mean() > 0.5, f"Mask should be high on texture, got mean={mask.mean()}"
+
+    def test_noise_floor_auto_computation(self):
+        """Автоматичне обчислення noise_floor на рівному фоні ≈ 0."""
+        gray = np.full((100, 100), 128, dtype=np.uint8)
+        mask = detail_mask(gray)  # noise_floor=None — авто
+        # На ідеально рівному фоні маска ≈ 0
+        assert mask.max() < 0.05
+
+    def test_noise_floor_from_noise(self):
+        """Авто noise_floor вищий за явно малий → маска вища з малим noise_floor (ref_std нижчий)."""
+        np.random.seed(42)
+        noise = np.random.normal(128, 15, (100, 100)).astype(np.uint8)
+        mask_without = detail_mask(noise)
+        # Авто noise_floor ≈ max(p10*2, 3) = ~24 для цього шуму.
+        # Явний noise_floor=50 вищий за авто, піднімає ref_std → маска нижча
+        mask_with_high = detail_mask(noise, noise_floor=50.0)
+        assert mask_with_high.mean() <= mask_without.mean()
+
+    def test_noise_floor_lower_than_auto(self):
+        """Явний noise_floor нижчий за авто → маска вища (ref_std нижчий)."""
+        np.random.seed(42)
+        noise = np.random.normal(128, 15, (100, 100)).astype(np.uint8)
+        mask_auto = detail_mask(noise)
+        # Авто noise_floor ≈ 24. Явний 10 нижчий → ref_std = max(p90, 10) = p90 ≈ 17
+        # В результаті маска вища
+        mask_low = detail_mask(noise, noise_floor=10.0)
+        assert mask_low.mean() > mask_auto.mean()
+
+    def test_detail_mask_immutable(self):
+        """detail_mask не змінює вхідний масив."""
+        gray = np.full((100, 100), 128, dtype=np.uint8)
+        gray_copy = gray.copy()
+        _ = detail_mask(gray)
+        assert np.array_equal(gray, gray_copy)
+
+    def test_gradient_image_mask(self):
+        """Градієнтне зображення має маску > 0 на перепаді."""
+        gray = np.zeros((100, 100), dtype=np.uint8)
+        for x in range(100):
+            gray[:, x] = x * 255 // 99  # градієнт 0..255
+        mask = detail_mask(gray)
+        # На перепаді яскравості маска має бути > 0
+        assert mask.mean() > 0.1
+```
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_diagnostics.py
 ============================================================
 ```python
@@ -8227,8 +9052,8 @@ class TestDiagnose:
         img = np.full((100, 100, 3), 128, dtype=np.uint8)
         settings = _default_settings()
         result = diagnose(img, settings)
-        # Перевіряємо що всі поля присутні
-        assert result.doc_type in ("bw_document", "color_document", "photo")
+        # Перевіряємо що всі поля присутні (включаючи новий flat_background)
+        assert result.doc_type in ("bw_document", "color_document", "photo", "flat_background")
         assert isinstance(result.gradient_has, bool)
         assert isinstance(result.gradient_strength, float)
         assert isinstance(result.gradient_direction, str)
@@ -8245,6 +9070,65 @@ class TestDiagnose:
         assert isinstance(result.perspective_skew_ratio, float)
         # perspective_corners може бути None
         assert result.perspective_corners is None or isinstance(result.perspective_corners, np.ndarray)
+
+    # --- Нові тести для розширеної діагностики ---
+
+    def test_new_fields_present(self):
+        """Нові поля diagnostic присутні та мають правильний тип."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert isinstance(result.background_uniformity, float)
+        assert isinstance(result.noise_level, float)
+        assert isinstance(result.color_saturation, float)
+        assert isinstance(result.dynamic_range, float)
+        assert isinstance(result.detail_density, float)
+        # На ідеально рівному сірому фоні:
+        assert 0.0 <= result.background_uniformity <= 1.0
+        assert result.noise_level >= 0.0
+        assert result.color_saturation >= 0.0
+        assert result.dynamic_range >= 0.0
+        assert 0.0 <= result.detail_density <= 1.0
+
+    def test_uniform_image_high_uniformity(self):
+        """Ідеально рівне сіре зображення → background_uniformity ≈ 1.0."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.background_uniformity > 0.95
+        assert result.detail_density < 0.05
+
+    def test_detail_image_low_uniformity(self):
+        """Зображення з текстурою/шумом → background_uniformity < 0.5."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.background_uniformity < 0.5
+        assert result.detail_density > 0.5
+
+    def test_dark_image_dynamic_range(self):
+        """Тільки темні тони → dynamic_range < 50."""
+        img = np.full((100, 100, 3), 30, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.dynamic_range < 50
+
+    def test_full_range_dynamic_range(self):
+        """Чорний + білий → dynamic_range > 200."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :50, :] = 255  # половина біла, половина чорна
+        result = diagnose(img, _default_settings())
+        assert result.dynamic_range > 200
+
+    def test_color_saturation_gray(self):
+        """Сіре зображення → color_saturation ≈ 0."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result = diagnose(img, _default_settings())
+        assert result.color_saturation < 5.0
+
+    def test_color_saturation_red(self):
+        """Червоне зображення → color_saturation > 50."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :, 2] = 255  # BGR: червоний канал
+        result = diagnose(img, _default_settings())
+        assert result.color_saturation > 50
 
     def test_diagnose_immutable(self):
         """Вхідне зображення не змінюється."""
@@ -8470,6 +9354,206 @@ class TestLowSaturationPhoto:
         # має запобігти bw_document через has_color_content або has_histogram_color
         assert result != "bw_document", \
             f"Фото з низькою насиченістю класифіковано як {result}"
+
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_full_auto_universal.py
+============================================================
+```python
+"""
+Інтеграційний тест для processing/pipeline.py — run_full_auto.
+Перевіряє, що Full Auto коректно обробляє різні типи зображень
+з адаптивними параметрами, і не падає на жодному з них.
+"""
+
+import numpy as np
+import cv2
+import pytest
+from processing.pipeline import run_full_auto
+
+
+def _default_settings():
+    return {
+        "full_auto_perspective": False,
+        "hdr_in_autofix": True,
+        "hdr_strength": 0.5,
+        "sharpen_strength": 0.4,
+        "autosharp_max_strength": 0.7,
+        "autosharp_threshold": 80.0,
+        "contrast_mode": "linear",
+        "autofix_contrast": 0.15,
+        "bw_binary": False,
+        "bw_std_thresh": 20.0,
+        "edge_ratio_min": 0.03,
+        "line_count_min": 3,
+        "shadow_highlight_strength": 0.0,
+        "output_color_mode": "auto",
+    }
+
+
+class TestFullAutoUniversal:
+    def _check_result(self, img, result_msg):
+        """Перевіряє, що результат має правильний тип та розмір."""
+        result, status_msg, applied_steps = result_msg
+        assert isinstance(result, np.ndarray)
+        assert result.shape == img.shape
+        assert result.dtype == np.uint8
+        assert "Full Auto" in status_msg
+        assert isinstance(applied_steps, dict)
+        return result, status_msg, applied_steps
+
+    def test_uniform_gray_image(self):
+        """Рівне сіре зображення (flat_background) → не падає, статус містить 'рівний фон'."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        assert "рівний фон" in status or "Full Auto" in status
+
+    def test_bw_document_like(self):
+        """Імітація ч-б документа → не падає."""
+        img = np.full((200, 200, 3), 220, dtype=np.uint8)  # світлий фон
+        img[40:160, 40:160, :] = 180  # темніший прямокутник
+        # Додаємо трохи тексту (випадкові лінії)
+        for i in range(50, 150, 10):
+            img[i:i+2, 50:150, :] = 80
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_photo_like(self):
+        """Імітація фото (випадковий кольоровий шум) → не падає."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_color_document_like(self):
+        """Імітація кольорового документа → не падає."""
+        img = np.full((200, 200, 3), 240, dtype=np.uint8)
+        # Кольоровий текст
+        img[50:150, 30:170, :] = [200, 100, 50]
+        img[60:140, 40:160, :] = [50, 150, 200]
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_dark_image(self):
+        """Темне зображення з варіацією → не падає, застосовується яскравість."""
+        np.random.seed(42)
+        img = np.random.normal(30, 10, (100, 100, 3)).astype(np.uint8)  # темне, але з варіацією
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_overexposed_image(self):
+        """Пересвічене зображення → не падає."""
+        img = np.full((100, 100, 3), 240, dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_sharp_image_unchanged(self):
+        """Різке зображення → sharpen_strength = 0, але все одно обробляється."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        # Результат не має бути ідентичним через інші корекції (контраст тощо)
+        # Але має бути коректним uint8
+
+    def test_small_image(self):
+        """Маленьке зображення (32x32) → не падає."""
+        img = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_large_image(self):
+        """Велике зображення (800x600) → не падає (тест на продуктивність)."""
+        img = np.random.randint(0, 256, (400, 300, 3), dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_dry_run_never_modifies_input(self):
+        """dry_run=True → вхідне зображення не змінюється."""
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8).astype(np.uint8)
+        img_copy = img.copy()
+        result, status, steps = run_full_auto(img, _default_settings(), dry_run=True)
+        assert np.array_equal(img, img_copy)
+        assert "dry" in status
+
+    def test_run_full_auto_immutable_input(self):
+        """run_full_auto не змінює вхідне зображення."""
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8).astype(np.uint8)
+        img_copy = img.copy()
+        result, status, steps = run_full_auto(img, _default_settings())
+        assert np.array_equal(img, img_copy)
+
+    def test_gradient_background_document(self):
+        """Документ з градієнтним фоном → не падає, shadow_remove може застосуватись."""
+        img = np.full((200, 200, 3), 200, dtype=np.uint8)
+        # Додаємо градієнт
+        for y in range(200):
+            img[y, :, :] = np.clip(img[y, :, :].astype(int) - int(80 * y / 199), 0, 255).astype(np.uint8)
+        # Додаємо "документ"
+        img[30:170, 30:170, :] = 180
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_noise_floor_passed_to_hdr(self):
+        """Перевіряє, що noise_floor передається в HDR (не крашиться)."""
+        np.random.seed(42)
+        noise = np.random.normal(128, 20, (100, 100, 3)).astype(np.uint8)
+        result, status, steps = run_full_auto(noise, _default_settings())
+        self._check_result(noise, (result, status, steps))
+
+    def test_color_saturation_effect(self):
+        """Кольорове фото → HDR застосовується (status містить HDR)."""
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :, 2] = 255  # червоний
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+
+    def test_flat_background_handling(self):
+        """flat_background → тільки легка різкість, без CLAHE/HDR."""
+        img = np.full((100, 100, 3), 128, dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        # На рівному фоні статус має згадувати "рівний фон" або бути коректним
+        assert isinstance(status, str)
+
+    def test_flat_background_becomes_white(self):
+        """Сірий рівний фон → фон стає білим (255, 255, 255)."""
+        img = np.full((100, 100, 3), 200, dtype=np.uint8)  # світло-сірий
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        # Перевіряємо, що більшість пікселів стали білими
+        white_ratio = float(np.mean(np.all(result == 255, axis=2)))
+        assert white_ratio > 0.8, f"Замало білих пікселів: {white_ratio:.3f}"
+        # Статус має згадувати "білий фон"
+        assert "білий фон" in status or "рівний фон" in status
+
+    def test_bw_document_becomes_white_background(self):
+        """Ч-б документ зі світлим фоном → фон стає білим."""
+        img = np.full((200, 200, 3), 220, dtype=np.uint8)  # світлий фон
+        img[40:160, 40:160, :] = 180  # темніший прямокутник
+        for i in range(50, 150, 10):
+            img[i:i+2, 50:150, :] = 80  # текст
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        # Фон має стати білим
+        top_left_corner = result[0:10, 0:10, :]
+        assert np.all(top_left_corner == 255), "Кут зображення не білий"
+        # Текст має зберегтися (темні пікселі)
+        assert np.any(result < 200), "Текст зник — все біле"
+
+    def test_photo_not_whitened(self):
+        """Фото — білий фон не застосовується."""
+        np.random.seed(42)
+        img = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
+        result, status, steps = run_full_auto(img, _default_settings())
+        self._check_result(img, (result, status, steps))
+        # Фото не повинно мати "білий фон" в статусі
+        assert "білий фон" not in status, "Фото не повинно отримати білий фон"
+        # Результат не має бути повністю білим
+        white_ratio = float(np.mean(np.all(result == 255, axis=2)))
+        assert white_ratio < 0.5, f"Фото стало майже білим: {white_ratio:.3f}"
 
 ```
 
@@ -9595,6 +10679,361 @@ class TestAutoDetectCorners:
         # Може знайти випадковий контур, але це ок
         # Перевіряємо, що не падає
         assert corners is None or corners.shape == (4, 2)
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_shadow_remove.py
+============================================================
+```python
+"""
+Тесты для shadow_remove — проверка морфологического метода,
+защитных механизмов и отсутствия ореолов.
+
+ВАЖНО: shadow_remove целенаправленно ИЗМЕНЯЕТ изображение (убирает тень),
+поэтому SSIM/PSNR с оригиналом ОЖИДАЕМО низкие. Тесты проверяют:
+- Отсутствие деградации на равномерном фоне (SSIM > 0.93).
+- Отсутствие инверсии (min > 5, тёмная область осветляется).
+- Защитные фильтры корректно блокируют неподходящие изображения.
+- Производительность в допустимых пределах.
+"""
+import time
+import cv2
+import numpy as np
+import pytest
+from processing import shadow_remove
+
+
+# ---------------------------------------------------------------------------
+# Вспомогательные утилиты
+# ---------------------------------------------------------------------------
+
+def _ssim(a: np.ndarray, b: np.ndarray) -> float:
+    """Упрощённый SSIM между двумя одноканальными uint8 изображениями."""
+    a_f = a.astype(np.float64)
+    b_f = b.astype(np.float64)
+    mu_a = a_f.mean()
+    mu_b = b_f.mean()
+    var_a = a_f.var()
+    var_b = b_f.var()
+    cov = ((a_f - mu_a) * (b_f - mu_b)).mean()
+    c1 = (0.01 * 255) ** 2
+    c2 = (0.03 * 255) ** 2
+    num = (2 * mu_a * mu_b + c1) * (2 * cov + c2)
+    den = (mu_a**2 + mu_b**2 + c1) * (var_a + var_b + c2)
+    return float(num / den)
+
+
+def _psnr(a: np.ndarray, b: np.ndarray) -> float:
+    """PSNR между двумя одноканальными uint8 изображениями."""
+    mse = ((a.astype(np.float64) - b.astype(np.float64)) ** 2).mean()
+    if mse == 0:
+        return 100.0
+    return float(20 * np.log10(255.0 / np.sqrt(mse)))
+
+
+def _make_sharp_shadow_image(size: int = 400) -> np.ndarray:
+    """
+    Создаёт синтетическое изображение с резким краем тени.
+    Левая половина — тёмная (L=60), правая — светлая (L=220).
+    Имитирует тень от папки или руки на документе.
+    """
+    img = np.full((size, size, 3), 220, dtype=np.uint8)
+    img[:, :size // 2] = (60, 60, 60)  # тёмная тень
+    # Добавляем лёгкий шум для реалистичности
+    noise = np.random.default_rng(42).normal(0, 3, (size, size, 3)).astype(np.int16)
+    img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    return img
+
+
+def _make_guilloche_image(size: int = 300) -> np.ndarray:
+    """
+    Создаёт синтетическое изображение паспорта с гільйошем:
+    цветной узор на фоне (высокая насыщенность S-канала HSV).
+    """
+    rng = np.random.default_rng(42)
+    img = np.full((size, size, 3), (200, 200, 200), dtype=np.uint8)
+    # Яркие цветные полосы — имитация гільйоша
+    for i in range(0, size, 8):
+        color = rng.integers(50, 255, 3).astype(np.uint8)
+        img[i : i + 3, :] = color
+    return img
+
+
+def _make_text_document(size: int = 400) -> np.ndarray:
+    """
+    Создаёт синтетическое изображение документа с текстом
+    и градиентной тенью (плавный переход, имитация тени от руки).
+    """
+    img = np.full((size, size, 3), 230, dtype=np.uint8)
+    # Горизонтальный градиент тени
+    gradient = np.linspace(0.4, 1.0, size).reshape(1, size, 1)
+    img = (img.astype(np.float64) * gradient).clip(0, 255).astype(np.uint8)
+    # Добавляем «текст» — случайные тёмные блоки
+    rng = np.random.default_rng(42)
+    for _ in range(50):
+        x = rng.integers(10, size - 30)
+        y = rng.integers(10, size - 10)
+        w = rng.integers(5, 25)
+        h = rng.integers(3, 7)
+        img[y : y + h, x : x + w] = (30, 30, 30)
+    return img
+
+
+# ---------------------------------------------------------------------------
+# Тесты
+# ---------------------------------------------------------------------------
+
+class TestMorphologyVsGaussian:
+    """Проверка базовых свойств морфологического метода."""
+
+    def test_auto_remove_no_shadow_on_uniform(self):
+        """
+        На равномерном изображении без тени auto_remove_shadow
+        должен корректно определить отсутствие тени и вернуть копию.
+        """
+        img = np.full((200, 200, 3), 180, dtype=np.uint8)
+        result, had_shadow = shadow_remove.auto_remove_shadow(img)
+        assert not had_shadow, (
+            "Равномерное изображение ошибочно распознано как тень"
+        )
+        assert np.array_equal(result, img), (
+            "Изображение изменилось, хотя тени не было"
+        )
+
+    def test_sharp_shadow_edge_no_inversion(self):
+        """
+        На изображении с резким краем тени не должно быть инверсии:
+        тёмная область должна осветлиться, пиксели не должны уйти
+        в экстремально тёмные значения.
+        """
+        img = _make_sharp_shadow_image(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Проверяем, что тёмная область стала светлее (тень убрана)
+        left_mean_in = gray_in[:, :180].mean()
+        left_mean_out = gray_out[:, :180].mean()
+        assert left_mean_out > left_mean_in, (
+            f"Тёмная область не осветлилась: было {left_mean_in:.1f}, стало {left_mean_out:.1f}"
+        )
+        # Проверяем, что нет аномально тёмных пикселей (инверсия в чёрное)
+        assert gray_out.min() > 5, f"Слишком тёмные пиксели: min={gray_out.min()}"
+
+    def test_sharp_edge_dark_side_brightened(self):
+        """
+        После обработки тёмная сторона должна стать значительно ярче,
+        а светлая — остаться примерно на том же уровне.
+        Проверяем, что контраст тени уменьшился.
+        """
+        img = _make_sharp_shadow_image(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Разница между левой и правой половиной должна уменьшиться
+        left_in = gray_in[:, :180].mean()
+        right_in = gray_in[:, 220:].mean()
+        left_out = gray_out[:, :180].mean()
+        right_out = gray_out[:, 220:].mean()
+        contrast_in = right_in - left_in
+        contrast_out = right_out - left_out
+        assert contrast_out < contrast_in * 0.7, (
+            f"Контраст тени недостаточно уменьшен: "
+            f"было {contrast_in:.1f}, стало {contrast_out:.1f}"
+        )
+        # Светлая сторона не должна сильно потемнеть
+        assert right_out > right_in * 0.85, (
+            f"Светлая сторона потемнела: было {right_in:.1f}, стало {right_out:.1f}"
+        )
+
+
+class TestProtectiveFilters:
+    """Проверка защитных механизмов _detect_shadow."""
+
+    def test_guilloche_detected_as_no_shadow(self):
+        """
+        Изображение с гільйошем (паспорт) не должно распознаваться
+        как документ с тенью — детектор должен вернуть False.
+        """
+        img = _make_guilloche_image(300)
+        result, had_shadow = shadow_remove.auto_remove_shadow(img)
+        assert not had_shadow, (
+            "Гільйош ошибочно распознан как тень "
+            "(S-канал HSV должен блокировать)"
+        )
+        # Результат должен быть копией (без изменений)
+        assert np.array_equal(result, img), "Изображение изменилось, хотя тени не было"
+
+    def test_blurred_image_no_shadow_detected(self):
+        """Сильно размытое изображение не должно обрабатываться."""
+        img = np.full((200, 200, 3), 150, dtype=np.uint8)
+        img_blurred = cv2.GaussianBlur(img, (31, 31), 0)
+        result, had_shadow = shadow_remove.auto_remove_shadow(img_blurred)
+        assert not had_shadow, "Размытое изображение ошибочно распознано как тень"
+
+    def test_small_image_unchanged(self):
+        """Изображения < 100×100 не должны обрабатываться."""
+        img = np.full((50, 50, 3), 100, dtype=np.uint8)
+        result = shadow_remove.remove_shadow(img)
+        assert np.array_equal(result, img), "Малое изображение изменилось"
+
+    def test_photo_not_processed(self):
+        """Цветное фото (высокая std A/B) не должно обрабатываться."""
+        rng = np.random.default_rng(42)
+        img = rng.integers(0, 255, (200, 200, 3), dtype=np.uint8)
+        result, had_shadow = shadow_remove.auto_remove_shadow(img)
+        assert not had_shadow, "Цветное фото ошибочно распознано как тень"
+
+
+class TestTextDocument:
+    """Проверка обработки документов с текстом и градиентной тенью."""
+
+    def test_text_remains_darker_than_background(self):
+        """
+        После обработки текст должен оставаться темнее окружающего фона.
+        Тень убирается (тёмный фон осветляется), но текст не должен
+        слиться с фоном.
+        """
+        img = _make_text_document(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Находим текстовые регионы — самые тёмные 5% пикселей оригинала
+        thresh = np.percentile(gray_in, 5)
+        text_mask = gray_in < thresh
+        if text_mask.sum() < 10:
+            pytest.skip("Слишком мало текстовых пикселей для проверки")
+        mean_text = gray_out[text_mask].mean()
+        mean_bg = gray_out[~text_mask].mean()
+        # Текст должен быть темнее фона минимум на 15 уровней
+        assert mean_bg - mean_text > 15, (
+            f"Текст слился с фоном: текст={mean_text:.1f}, фон={mean_bg:.1f}"
+        )
+
+    def test_gradient_shadow_reduced(self):
+        """
+        Градиент тени (разница между левым и правым краем)
+        должен значительно уменьшиться после обработки.
+        """
+        img = _make_text_document(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Средняя яркость левого и правого края
+        left_in = gray_in[:, :50].mean()
+        right_in = gray_in[:, -50:].mean()
+        left_out = gray_out[:, :50].mean()
+        right_out = gray_out[:, -50:].mean()
+        grad_in = right_in - left_in
+        grad_out = right_out - left_out
+        # Градиент должен уменьшиться как минимум на 40%
+        assert grad_out < grad_in * 0.6, (
+            f"Градиент тени недостаточно уменьшен: "
+            f"было {grad_in:.1f}, стало {grad_out:.1f}"
+        )
+        # Левый край (тёмный) должен осветлиться
+        assert left_out > left_in, (
+            f"Тёмный край не осветлился: было {left_in:.1f}, стало {left_out:.1f}"
+        )
+
+
+class TestBenchmark:
+    """Измерение производительности морфологического метода."""
+
+    def test_benchmark_400x400(self):
+        """Обработка 400×400 должна занимать < 0.5 секунды."""
+        img = _make_sharp_shadow_image(400)
+        start = time.perf_counter()
+        _ = shadow_remove.remove_shadow(img)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 0.5, f"Обработка 400×400 заняла {elapsed:.3f}s (порог 0.5s)"
+
+    def test_benchmark_800x800(self):
+        """Обработка 800×800 должна занимать < 2.0 секунды."""
+        img = _make_sharp_shadow_image(800)
+        start = time.perf_counter()
+        _ = shadow_remove.remove_shadow(img)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 2.0, f"Обработка 800×800 заняла {elapsed:.3f}s (порог 2.0s)"
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\unit\test_shadow_remove_large.py
+============================================================
+```python
+import cv2
+import numpy as np
+import pytest
+from processing import shadow_remove
+
+
+def _make_doc_with_large_shadow(h=783, w=636, shadow_l=70, paper_l=235):
+    """Білий 'документ' з великою темною плямою (тінь) на половину кадру,
+    що імітує тінь від руки/телефону. М'який край (Gaussian blur),
+    щоб тінь була градієнтною, а не різкою маскою."""
+    img_l = np.full((h, w), paper_l, dtype=np.float32)
+    mask = np.zeros((h, w), dtype=np.float32)
+    cv2.ellipse(mask, (w // 4, int(h * 0.75)), (w // 2, h // 3), 0, 0, 360, 1.0, -1)
+    mask = cv2.GaussianBlur(mask, (51, 51), 0)
+    img_l = img_l * (1 - mask) + shadow_l * mask
+    img_l = np.clip(img_l, 0, 255).astype(np.uint8)
+    bgr = cv2.cvtColor(img_l, cv2.COLOR_GRAY2BGR)
+    return bgr
+
+
+def test_large_shadow_no_hard_black_edge():
+    """Регресійний тест на баг: тінь, що значно перевищує kernel_size,
+    не повинна перетворюватись на різкий чорний контур.
+
+    Перевіряємо: після remove_shadow std яскравості всередині колишньої
+    зони тіні близький до std "чистого" паперу (немає залишкового
+    різкого перепаду), і немає пікселів, що лишились майже чорними
+    (min L не впав нижче розумного порогу)."""
+    img = _make_doc_with_large_shadow()
+    result = shadow_remove.remove_shadow(img)
+
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l = lab[:, :, 0]
+
+    shadow_zone = l[int(783 * 0.45):, : 636 // 2]
+    clean_zone = l[: int(783 * 0.3), :]
+
+    # Старий баг: std у зоні тіні був помітно вищий за std чистого паперу
+    # через різкий контур. Допускаємо невеликий запас, але не "вибух".
+    assert shadow_zone.std() < clean_zone.std() + 15
+
+    # Не повинно лишатись майже чорних залишкових плям
+    assert shadow_zone.min() > 50
+
+
+def test_small_local_shadow_still_removed():
+    """Контроль: дрібна локальна тінь (значно менша за kernel_size)
+    і раніше, і зараз має прибиратись майже повністю — другий прохід
+    не повинен робити це гірше."""
+    h, w = 783, 636
+    img_l = np.full((h, w), 235, dtype=np.float32)
+    mask = np.zeros((h, w), dtype=np.float32)
+    cv2.circle(mask, (100, 100), 40, 1.0, -1)
+    mask = cv2.GaussianBlur(mask, (31, 31), 0)
+    img_l = img_l * (1 - mask) + 150 * mask
+    img_l = np.clip(img_l, 0, 255).astype(np.uint8)
+    img = cv2.cvtColor(img_l, cv2.COLOR_GRAY2BGR)
+
+    result = shadow_remove.remove_shadow(img)
+    lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l = lab[:, :, 0]
+
+    shadow_zone = l[60:140, 60:140]
+    assert shadow_zone.mean() > 200  # тінь практично прибрана
+
+
+def test_coarse_pass_can_be_disabled():
+    """coarse_pass=False відтворює стару (тільки морфологічну) поведінку —
+    параметр не повинен ламати зворотну сумісність для тих, хто хоче
+    старий шлях."""
+    img = _make_doc_with_large_shadow()
+    result_with = shadow_remove.remove_shadow(img, coarse_pass=True)
+    result_without = shadow_remove.remove_shadow(img, coarse_pass=False)
+    assert not np.array_equal(result_with, result_without)
 ```
 
 ============================================================

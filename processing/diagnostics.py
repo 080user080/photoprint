@@ -32,7 +32,7 @@ PERSPECTIVE_SKEW_THRESHOLD = 0.03  # 3% від розміру зображенн
 @dataclass
 class DiagnosticResult:
     """Результат повної діагностики зображення."""
-    doc_type: str                    # "bw_document" / "color_document" / "photo"
+    doc_type: str                    # "bw_document" / "color_document" / "photo" / "flat_background"
 
     # Градієнт фону
     gradient_has: bool
@@ -58,6 +58,13 @@ class DiagnosticResult:
     perspective_has: bool
     perspective_corners: np.ndarray | None   # shape (4,2) або None
     perspective_skew_ratio: float    # відносне відхилення від прямокутника
+
+    # Нові поля для адаптивної обробки (Крок 1)
+    background_uniformity: float     # 0..1, частка рівного фону (де локальний std низький)
+    noise_level: float               # std шуму на рівних ділянках (detail_mask < 0.1)
+    color_saturation: float          # середній chroma (a,b канали LAB)
+    dynamic_range: float             # p95 - p5 каналу L
+    detail_density: float            # середнє значення detail_mask по всьому зображенню
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +219,68 @@ def _measure_perspective(image: np.ndarray) -> tuple[bool, np.ndarray | None, fl
     return has_perspective, corners if has_perspective else None, skew_ratio
 
 
+# --- Нові вимірювання (Крок 1) ---
+
+LOCAL_STD_KERNEL = 9      # розмір вікна для локального std
+UNIFORMITY_STD_THRESH = 8  # поріг: std нижче цього — "рівна ділянка"
+DETAIL_REF_PERCENTILE_DIAG = 90.0  # перцентиль для detail_density
+
+
+def _local_std_map(gray: np.ndarray, kernel: int = LOCAL_STD_KERNEL) -> np.ndarray:
+    """Локальне стандартне відхилення через box filter (O(1) на піксель)."""
+    f = gray.astype(np.float32)
+    mean = cv2.boxFilter(f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    mean_sq = cv2.boxFilter(f * f, -1, (kernel, kernel), borderType=cv2.BORDER_REFLECT)
+    var = np.maximum(mean_sq - mean * mean, 0.0)
+    return np.sqrt(var)
+
+
+def _measure_background_uniformity(gray: np.ndarray) -> float:
+    """
+    Частка площі з низьким локальним std (світло-сірий рівний фон).
+    Повертає 0..1.
+    """
+    std_map = _local_std_map(gray)
+    return float(np.mean(std_map < UNIFORMITY_STD_THRESH))
+
+
+def _measure_noise_level(gray: np.ndarray) -> float:
+    """
+    Рівень шуму: std на рівних ділянках (де detail_mask < 0.1).
+    Локальний std на найтихіших 10% пікселів × 2.
+    """
+    std_map = _local_std_map(gray)
+    return float(np.percentile(std_map, 10)) * 2.0
+
+
+def _measure_color_saturation(lab: np.ndarray) -> float:
+    """
+    Середній chroma = середнє sqrt(a^2 + b^2) в LAB.
+    """
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.sqrt(a * a + b * b)
+    return float(np.mean(chroma))
+
+
+def _measure_dynamic_range(gray: np.ndarray) -> float:
+    """p95 - p5 каналу L (0..255)."""
+    p5 = float(np.percentile(gray, 5))
+    p95 = float(np.percentile(gray, 95))
+    return p95 - p5
+
+
+def _measure_detail_density(gray: np.ndarray) -> float:
+    """
+    Середнє значення detail_mask по всьому зображенню.
+    Використовує локальний std та перцентильний ref_std, аналогічно detail_map.detail_mask.
+    """
+    std_map = _local_std_map(gray)
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE_DIAG)), 3.0)
+    mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    return float(np.mean(mask))
+
+
 def _measure_doc_type(image: np.ndarray, settings: dict) -> str:
     """
     Визначає тип документа.
@@ -228,6 +297,34 @@ def _measure_doc_type(image: np.ndarray, settings: dict) -> str:
         edge_ratio_min=edge_ratio_min,
         line_count_min=line_count_min,
     )
+
+
+def measure_background_metrics(image: np.ndarray) -> tuple[float, float]:
+    """
+    Швидкий ПОВТОРНИЙ розрахунок (background_uniformity, detail_density)
+    для довільного зображення — на відміну від diagnose(), рахує лише
+    ці два поля, тому дешевий і безпечний для повторних викликів.
+
+    Призначення: diagnose() рахує ці метрики ОДИН РАЗ на старті pipeline —
+    до shadow_remove/перспективи/контрасту. Якщо зображення суттєво
+    змінилось (особливо після видалення великої нерівномірної тіні),
+    старі значення вже не відповідають дійсності. Передача застарілих
+    значень у white_background.make_background_white() небезпечна:
+    функція має жорсткий поріг (background_uniformity < UNIFORMITY_MIN)
+    і просто НІЧОГО не робить, якщо отримає застаріле "нерівномірне"
+    значення, навіть коли поточне зображення вже готове до відбілювання.
+    """
+    small = _resize_for_analysis(image, DIAGNOSTICS_RESIZE_MAX)
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    std_map = _local_std_map(gray)
+
+    uniformity = float(np.mean(std_map < UNIFORMITY_STD_THRESH))
+
+    ref_std = max(float(np.percentile(std_map, DETAIL_REF_PERCENTILE_DIAG)), 3.0)
+    mask = np.clip(std_map / ref_std, 0.0, 1.0)
+    detail_density = float(np.mean(mask))
+
+    return uniformity, detail_density
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +357,16 @@ def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
     # Тип документа
     doc_type = _measure_doc_type(small, settings)
 
+    # --- Нові вимірювання (Крок 1) ---
+    small_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    small_lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+
+    background_uniformity = _measure_background_uniformity(small_gray)
+    noise_level = _measure_noise_level(small_gray)
+    color_saturation = _measure_color_saturation(small_lab)
+    dynamic_range = _measure_dynamic_range(small_gray)
+    detail_density = _measure_detail_density(small_gray)
+
     return DiagnosticResult(
         doc_type=doc_type,
         gradient_has=gradient_has,
@@ -277,6 +384,11 @@ def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
         perspective_has=perspective_has,
         perspective_corners=perspective_corners,
         perspective_skew_ratio=perspective_skew_ratio,
+        background_uniformity=background_uniformity,
+        noise_level=noise_level,
+        color_saturation=color_saturation,
+        dynamic_range=dynamic_range,
+        detail_density=detail_density,
     )
 
 
