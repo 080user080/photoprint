@@ -7,20 +7,24 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox,
     QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox,
-    QComboBox
+    QComboBox, QListWidget, QListWidgetItem, QStackedWidget,
+    QScrollArea
 )
 from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import Qt
 from config import app_settings
 
 # Константи для layout
 WINDOW_MIN_WIDTH = 1100
 WINDOW_MIN_HEIGHT = 700
-LAYOUT_SPACING = 12
+LAYOUT_SPACING = 16
 GROUPBOX_STYLE = (
     "QGroupBox { font-weight:bold; border:1px solid #BBBBBB; border-radius:4px; "
     "margin-top:8px; padding-top:14px; background:#FAFAFA; }"
     "QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 4px; }"
 )
+SIDEBAR_WIDTH = 200
+SPINBOX_MIN_WIDTH = 100
 
 # Константи для Shadow Highlight
 SHADOW_MIN = 0.0
@@ -39,6 +43,21 @@ HDR_MIN = 0.0
 HDR_MAX = 1.0
 HDR_STEP = 0.05
 HDR_DECIMALS = 2
+
+# Константи для Shadow Remove
+SHADOW_DETECT_THRESHOLD_MIN = 20.0
+SHADOW_DETECT_THRESHOLD_MAX = 200.0
+SHADOW_DETECT_THRESHOLD_STEP = 5.0
+
+SHADOW_DETECT_RATIO_MIN = 0.05
+SHADOW_DETECT_RATIO_MAX = 0.80
+SHADOW_DETECT_RATIO_STEP = 0.05
+SHADOW_DETECT_RATIO_DECIMALS = 2
+
+SHADOW_COARSE_BLEND_MIN = 0.0
+SHADOW_COARSE_BLEND_MAX = 1.0
+SHADOW_COARSE_BLEND_STEP = 0.1
+SHADOW_COARSE_BLEND_DECIMALS = 1
 
 # Константи для класифікації
 BW_STD_MIN = 1.0
@@ -89,6 +108,128 @@ QUALITY_MAX = 100
 # Константи для кнопок
 BROWSE_BUTTON_WIDTH = 32
 
+# === Пресети стратегій ===
+PRESETS = {
+    "doc_bw": {
+        "label": "Документ (чб)",
+        "steps": ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
+    },
+    "doc_color": {
+        "label": "Документ (кольоровий)",
+        "steps": ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "white_background"],
+    },
+    "photo": {
+        "label": "Фото",
+        "steps": ["perspective", "hdr", "sharpen"],
+    },
+    "geometry": {
+        "label": "Тільки геометрія",
+        "steps": ["perspective"],
+    },
+    "custom": {
+        "label": "Власний",
+        "steps": None,
+    },
+}
+
+# Фіксований порядок кроків обробки
+PIPELINE_STEPS_FIXED_ORDER = [
+    ("shadow_remove",    "Видалення тіней"),
+    ("perspective",      "Авто-перспектива"),
+    ("brightness",       "Авто-яскравість"),
+    ("contrast",         "Авто-контраст"),
+    ("hdr",              "HDR"),
+    ("sharpen",          "Різкість"),
+    ("grayscale",        "Grayscale / бінаризація"),
+    ("white_background", "Білий фон"),
+]
+
+# === Список розділів ===
+SECTIONS = [
+    ("autofix",      "Auto Fix"),
+    ("shadowremove", "Видалення тіней"),
+    ("classify",     "Класифікація"),
+    ("sharpen",      "Авто-різкість"),
+    ("brightcontr",  "Яскравість/контраст"),
+    ("strategy",     "Стратегія обробки"),
+    ("format",       "Формат/Збереження"),
+    ("printer",      "Принтер/Режим"),
+]
+
+
+class StrategyPresetWidget(QWidget):
+    """Віджет вибору пресета стратегії обробки."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self._combo = QComboBox()
+        for key, preset in PRESETS.items():
+            self._combo.addItem(preset["label"], key)
+        layout.addWidget(self._combo)
+
+        self._list = QListWidget()
+        self._list.setMaximumHeight(200)
+        self._checkboxes = []
+        for key, label in PIPELINE_STEPS_FIXED_ORDER:
+            item = QListWidgetItem()
+            cb = QCheckBox(label)
+            cb.setChecked(True)
+            item.setSizeHint(cb.sizeHint())
+            self._list.addItem(item)
+            self._list.setItemWidget(item, cb)
+            self._checkboxes.append((key, cb))
+        layout.addWidget(self._list)
+
+        self._combo.currentIndexChanged.connect(self._on_preset_changed)
+        self._on_preset_changed(0)
+
+    def _on_preset_changed(self, index):
+        key = self._combo.currentData()
+        self._list.setVisible(key == "custom")
+
+    def get_preset(self) -> str:
+        return self._combo.currentData()
+
+    def get_enabled_steps(self) -> list[str]:
+        key = self._combo.currentData()
+        if key != "custom":
+            steps = PRESETS.get(key, {}).get("steps", [])
+            return steps if steps else []
+        enabled = []
+        for step_key, cb in self._checkboxes:
+            if cb.isChecked():
+                enabled.append(step_key)
+        return enabled
+
+    def set_state(self, preset: str, enabled: list[str] | None = None):
+        idx = self._combo.findData(preset)
+        if idx >= 0:
+            self._combo.setCurrentIndex(idx)
+        if preset == "custom" and enabled is not None:
+            for step_key, cb in self._checkboxes:
+                cb.setChecked(step_key in enabled)
+        self._on_preset_changed(self._combo.currentIndex())
+
+
+def _make_scroll_page(widget: QWidget) -> QWidget:
+    """Загорнути віджет у QScrollArea всередині QWidget."""
+    page = QWidget()
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(0, 0, 0, 0)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setWidget(widget)
+    layout.addWidget(scroll)
+    return page
+
+
+def _set_spinbox_minw(spin):
+    """Встановити мінімальну ширину для спін-бокса."""
+    spin.setMinimumWidth(SPINBOX_MIN_WIDTH)
+
 
 class SettingsWindow(QWidget):
     """Вікно налаштувань. Зміни набирають силу після натискання Зберегти."""
@@ -110,54 +251,98 @@ class SettingsWindow(QWidget):
         return Qt.WindowType.Tool
 
     # ------------------------------------------------------------------
-    # Побудова UI
+    # Побудова UI — сайдбар + сторінки
     # ------------------------------------------------------------------
 
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setSpacing(LAYOUT_SPACING)
 
-        # === Дві колонки ===
-        columns = QHBoxLayout()
-        columns.setSpacing(LAYOUT_SPACING)
+        # Основний горизонтальний layout: сайдбар + контент
+        hbox = QHBoxLayout()
+        hbox.setSpacing(LAYOUT_SPACING)
 
-        # --- Ліва колонка ---
-        left = QVBoxLayout()
-        left.setSpacing(LAYOUT_SPACING)
+        # --- Лівий сайдбар ---
+        self._sidebar = QListWidget()
+        self._sidebar.setFixedWidth(SIDEBAR_WIDTH)
+        self._sidebar.setSpacing(2)
+        for key, label in SECTIONS:
+            self._sidebar.addItem(label)
+        self._sidebar.setCurrentRow(0)
 
-        # === Auto Fix ===
-        proc_box = QGroupBox("Auto Fix")
-        proc_box.setStyleSheet(GROUPBOX_STYLE)
-        proc_form = QFormLayout(proc_box)
+        # --- Правий стек ---
+        self._stack = QStackedWidget()
+
+        # Сторінки
+        self._stack.addWidget(_make_scroll_page(self._page_autofix()))
+        self._stack.addWidget(_make_scroll_page(self._page_shadow_remove()))
+        self._stack.addWidget(_make_scroll_page(self._page_classify()))
+        self._stack.addWidget(_make_scroll_page(self._page_autosharp()))
+        self._stack.addWidget(_make_scroll_page(self._page_brightness_contrast()))
+        self._stack.addWidget(_make_scroll_page(self._page_strategy()))
+        self._stack.addWidget(_make_scroll_page(self._page_format_save()))
+        self._stack.addWidget(_make_scroll_page(self._page_printer_mode()))
+
+        self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
+
+        hbox.addWidget(self._sidebar)
+        hbox.addWidget(self._stack, 1)
+        root.addLayout(hbox)
+
+        # --- Кнопки внизу ---
+        btn_row = QHBoxLayout()
+        btn_save   = QPushButton("Зберегти")
+        btn_cancel = QPushButton("Скасувати")
+        btn_save.setDefault(True)
+        btn_save.clicked.connect(self._save)
+        btn_cancel.clicked.connect(self.hide)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_save)
+        btn_row.addWidget(btn_cancel)
+        root.addLayout(btn_row)
+
+    # ------------------------------------------------------------------
+    # Сторінки
+    # ------------------------------------------------------------------
+
+    def _page_autofix(self) -> QWidget:
+        """Сторінка Auto Fix — основні параметри обробки."""
+        box = QGroupBox("Auto Fix")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
 
         self._cb_autofix        = QCheckBox()
         self._cb_auto_apply     = QCheckBox()
         self._cb_hdr            = QCheckBox()
         self._cb_perspective    = QCheckBox()
-        proc_form.addRow("Auto Fix за замовчуванням:",    self._cb_autofix)
-        proc_form.addRow("Авто-застосувати при завантаженні:", self._cb_auto_apply)
-        proc_form.addRow("HDR в Auto Fix:",                self._cb_hdr)
-        proc_form.addRow("Авто-перспектива:",              self._cb_perspective)
+        form.addRow("Auto Fix за замовчуванням:",    self._cb_autofix)
+        form.addRow("Авто-застосувати при завантаженні:", self._cb_auto_apply)
+        form.addRow("HDR в Auto Fix:",                self._cb_hdr)
+        form.addRow("Авто-перспектива:",              self._cb_perspective)
 
         self._spin_shadow = QDoubleSpinBox()
         self._spin_shadow.setRange(SHADOW_MIN, SHADOW_MAX)
         self._spin_shadow.setSingleStep(SHADOW_STEP)
         self._spin_shadow.setDecimals(SHADOW_DECIMALS)
+        _set_spinbox_minw(self._spin_shadow)
 
         self._spin_sharpen = QDoubleSpinBox()
         self._spin_sharpen.setRange(SHARPEN_MIN, SHARPEN_MAX)
         self._spin_sharpen.setSingleStep(SHARPEN_STEP)
         self._spin_sharpen.setDecimals(SHARPEN_DECIMALS)
+        _set_spinbox_minw(self._spin_sharpen)
 
         self._spin_hdr = QDoubleSpinBox()
         self._spin_hdr.setRange(HDR_MIN, HDR_MAX)
         self._spin_hdr.setSingleStep(HDR_STEP)
         self._spin_hdr.setDecimals(HDR_DECIMALS)
+        _set_spinbox_minw(self._spin_hdr)
 
         self._spin_autofix_contrast = QDoubleSpinBox()
         self._spin_autofix_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
         self._spin_autofix_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
         self._spin_autofix_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
+        _set_spinbox_minw(self._spin_autofix_contrast)
 
         self._combo_contrast_mode = QComboBox()
         self._combo_contrast_mode.addItem("Лінійний (класичний)", "linear")
@@ -165,79 +350,133 @@ class SettingsWindow(QWidget):
         self._combo_contrast_mode.addItem("S-подібна крива", "s_curve")
         self._combo_contrast_mode.addItem("Локальний адаптивний", "adaptive")
 
-        proc_form.addRow("Метод контрасту:", self._combo_contrast_mode)
-        proc_form.addRow("Контраст Auto Fix (0–1):", self._spin_autofix_contrast)
-        proc_form.addRow("Висвітлення тіней (0–2):", self._spin_shadow)
-        proc_form.addRow("Сила різкості (0–1):", self._spin_sharpen)
-        proc_form.addRow("Сила HDR (0–1):",      self._spin_hdr)
+        form.addRow("Метод контрасту:", self._combo_contrast_mode)
+        form.addRow("Контраст Auto Fix (0–1):", self._spin_autofix_contrast)
+        form.addRow("Висвітлення тіней (0–2):", self._spin_shadow)
+        form.addRow("Сила різкості (0–1):", self._spin_sharpen)
+        form.addRow("Сила HDR (0–1):",      self._spin_hdr)
 
-        # === Класифікація документів ===
-        cls_box = QGroupBox("Класифікація документів")
-        cls_box.setStyleSheet(GROUPBOX_STYLE)
-        cls_form = QFormLayout(cls_box)
+        return box
+
+    def _page_shadow_remove(self) -> QWidget:
+        """Сторінка видалення тіней."""
+        box = QGroupBox("Видалення тіней")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
+
+        self._cb_shadow_remove = QCheckBox()
+        form.addRow("Видалення тіней увімкнено:", self._cb_shadow_remove)
+
+        self._spin_shadow_detect_threshold = QDoubleSpinBox()
+        self._spin_shadow_detect_threshold.setRange(SHADOW_DETECT_THRESHOLD_MIN, SHADOW_DETECT_THRESHOLD_MAX)
+        self._spin_shadow_detect_threshold.setSingleStep(SHADOW_DETECT_THRESHOLD_STEP)
+        self._spin_shadow_detect_threshold.setDecimals(0)
+        _set_spinbox_minw(self._spin_shadow_detect_threshold)
+        form.addRow("Поріг темних ділянок p5 (0-255):", self._spin_shadow_detect_threshold)
+
+        self._spin_shadow_detect_ratio = QDoubleSpinBox()
+        self._spin_shadow_detect_ratio.setRange(SHADOW_DETECT_RATIO_MIN, SHADOW_DETECT_RATIO_MAX)
+        self._spin_shadow_detect_ratio.setSingleStep(SHADOW_DETECT_RATIO_STEP)
+        self._spin_shadow_detect_ratio.setDecimals(SHADOW_DETECT_RATIO_DECIMALS)
+        _set_spinbox_minw(self._spin_shadow_detect_ratio)
+        form.addRow("Поріг відношення p5/p95 (0-1):", self._spin_shadow_detect_ratio)
+
+        self._spin_shadow_coarse_blend = QDoubleSpinBox()
+        self._spin_shadow_coarse_blend.setRange(SHADOW_COARSE_BLEND_MIN, SHADOW_COARSE_BLEND_MAX)
+        self._spin_shadow_coarse_blend.setSingleStep(SHADOW_COARSE_BLEND_STEP)
+        self._spin_shadow_coarse_blend.setDecimals(SHADOW_COARSE_BLEND_DECIMALS)
+        _set_spinbox_minw(self._spin_shadow_coarse_blend)
+        form.addRow("2-й прохід для кольорових (0=вимк, 1=повний):", self._spin_shadow_coarse_blend)
+
+        return box
+
+    def _page_classify(self) -> QWidget:
+        """Сторінка класифікації документів."""
+        box = QGroupBox("Класифікація документів")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
 
         self._spin_bw_std = QDoubleSpinBox()
         self._spin_bw_std.setRange(BW_STD_MIN, BW_STD_MAX)
         self._spin_bw_std.setSingleStep(BW_STD_STEP)
         self._spin_bw_std.setDecimals(BW_STD_DECIMALS)
+        _set_spinbox_minw(self._spin_bw_std)
 
         self._spin_edge_ratio = QDoubleSpinBox()
         self._spin_edge_ratio.setRange(EDGE_RATIO_MIN, EDGE_RATIO_MAX)
         self._spin_edge_ratio.setSingleStep(EDGE_RATIO_STEP)
         self._spin_edge_ratio.setDecimals(EDGE_RATIO_DECIMALS)
+        _set_spinbox_minw(self._spin_edge_ratio)
 
         self._spin_line_count = QSpinBox()
         self._spin_line_count.setRange(LINE_COUNT_MIN, LINE_COUNT_MAX)
+        _set_spinbox_minw(self._spin_line_count)
 
-        cls_form.addRow("Поріг std(a,b) для ЧБ:",    self._spin_bw_std)
-        cls_form.addRow("Мін. частка країв (0–1):",   self._spin_edge_ratio)
-        cls_form.addRow("Мін. кількість ліній:",      self._spin_line_count)
+        form.addRow("Поріг std(a,b) для ЧБ:",    self._spin_bw_std)
+        form.addRow("Мін. частка країв (0–1):",   self._spin_edge_ratio)
+        form.addRow("Мін. кількість ліній:",      self._spin_line_count)
 
-        # === Авто-різкість ===
-        sh_box = QGroupBox("Авто-різкість")
-        sh_box.setStyleSheet(GROUPBOX_STYLE)
-        sh_form = QFormLayout(sh_box)
+        return box
+
+    def _page_autosharp(self) -> QWidget:
+        """Сторінка авто-різкості."""
+        box = QGroupBox("Авто-різкість")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
 
         self._spin_asharp_thresh = QDoubleSpinBox()
         self._spin_asharp_thresh.setRange(AUTOSHARP_THRESH_MIN, AUTOSHARP_THRESH_MAX)
         self._spin_asharp_thresh.setSingleStep(AUTOSHARP_THRESH_STEP)
         self._spin_asharp_thresh.setDecimals(AUTOSHARP_THRESH_DECIMALS)
+        _set_spinbox_minw(self._spin_asharp_thresh)
 
         self._spin_asharp_max = QDoubleSpinBox()
         self._spin_asharp_max.setRange(AUTOSHARP_MAX_MIN, AUTOSHARP_MAX_MAX)
         self._spin_asharp_max.setSingleStep(AUTOSHARP_MAX_STEP)
         self._spin_asharp_max.setDecimals(AUTOSHARP_MAX_DECIMALS)
+        _set_spinbox_minw(self._spin_asharp_max)
 
-        sh_form.addRow("Поріг Laplacian variance:",  self._spin_asharp_thresh)
-        sh_form.addRow("Макс. сила різкості (0–1):", self._spin_asharp_max)
+        form.addRow("Поріг Laplacian variance:",  self._spin_asharp_thresh)
+        form.addRow("Макс. сила різкості (0–1):", self._spin_asharp_max)
 
-        # === Авто-яскравість/контраст ===
-        pct_box = QGroupBox("Авто-яскравість / контраст")
-        pct_box.setStyleSheet(GROUPBOX_STYLE)
-        pct_form = QFormLayout(pct_box)
+        return box
+
+    def _page_brightness_contrast(self) -> QWidget:
+        """Сторінка яскравість/контраст."""
+        box = QGroupBox("Авто-яскравість / контраст")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
 
         self._spin_pct_low = QDoubleSpinBox()
         self._spin_pct_low.setRange(PCT_LOW_MIN, PCT_LOW_MAX)
         self._spin_pct_low.setSingleStep(PCT_LOW_STEP)
         self._spin_pct_low.setDecimals(PCT_LOW_DECIMALS)
+        _set_spinbox_minw(self._spin_pct_low)
 
         self._spin_pct_high = QDoubleSpinBox()
         self._spin_pct_high.setRange(PCT_HIGH_MIN, PCT_HIGH_MAX)
         self._spin_pct_high.setSingleStep(PCT_HIGH_STEP)
         self._spin_pct_high.setDecimals(PCT_HIGH_DECIMALS)
+        _set_spinbox_minw(self._spin_pct_high)
 
-        pct_form.addRow("Відсікання тіней (%):",   self._spin_pct_low)
-        pct_form.addRow("Відсікання світла (%):",  self._spin_pct_high)
+        form.addRow("Відсікання тіней (%):",   self._spin_pct_low)
+        form.addRow("Відсікання світла (%):",  self._spin_pct_high)
 
-        left.addWidget(proc_box)
-        left.addWidget(cls_box)
-        left.addWidget(sh_box)
-        left.addWidget(pct_box)
-        left.addStretch()
+        return box
 
-        # --- Права колонка ---
-        right = QVBoxLayout()
-        right.setSpacing(LAYOUT_SPACING)
+    def _page_strategy(self) -> QWidget:
+        """Сторінка стратегії обробки."""
+        box = QGroupBox("Стратегія обробки")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        layout = QVBoxLayout(box)
+        self._preset_widget = StrategyPresetWidget()
+        layout.addWidget(self._preset_widget)
+        return box
+
+    def _page_format_save(self) -> QWidget:
+        """Сторінка формату виходу та збереження."""
+        vbox = QVBoxLayout()
+        vbox.setSpacing(LAYOUT_SPACING)
 
         # === Формат виходу ===
         out_box = QGroupBox("Формат виходу")
@@ -262,6 +501,7 @@ class SettingsWindow(QWidget):
 
         self._spin_quality = QSpinBox()
         self._spin_quality.setRange(QUALITY_MIN, QUALITY_MAX)
+        _set_spinbox_minw(self._spin_quality)
 
         self._edit_folder = QLineEdit()
         self._edit_folder.setPlaceholderText("(порожньо = не зберігати)")
@@ -275,6 +515,21 @@ class SettingsWindow(QWidget):
 
         save_form.addRow("Якість JPG (50–100):", self._spin_quality)
         save_form.addRow("Папка збереження:",    folder_row)
+
+        # Збираємо в один віджет
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(LAYOUT_SPACING)
+        layout.addWidget(out_box)
+        layout.addWidget(save_box)
+        layout.addStretch()
+        return container
+
+    def _page_printer_mode(self) -> QWidget:
+        """Сторінка принтера та режиму запуску."""
+        vbox = QVBoxLayout()
+        vbox.setSpacing(LAYOUT_SPACING)
 
         # === Принтер ===
         print_box = QGroupBox("Принтер")
@@ -294,79 +549,14 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
         mode_form.addRow(self._cb_minimize_to_tray)
 
-        # === Full Auto ===
-        fa_box = QGroupBox("Full Auto")
-        fa_box.setStyleSheet(GROUPBOX_STYLE)
-        fa_form = QFormLayout(fa_box)
-        self._cb_full_auto_mode = QCheckBox("Використовувати Full Auto замість Auto Fix")
-        fa_form.addRow(self._cb_full_auto_mode)
-        self._cb_full_auto_perspective = QCheckBox("Застосовувати перспективу в Full Auto")
-        fa_form.addRow(self._cb_full_auto_perspective)
-        self._cb_full_auto_hdr = QCheckBox()
-        fa_form.addRow("HDR в Full Auto:", self._cb_full_auto_hdr)
-
-        self._spin_full_auto_sharpen = QDoubleSpinBox()
-        self._spin_full_auto_sharpen.setRange(SHARPEN_MIN, SHARPEN_MAX)
-        self._spin_full_auto_sharpen.setSingleStep(SHARPEN_STEP)
-        self._spin_full_auto_sharpen.setDecimals(SHARPEN_DECIMALS)
-
-        self._spin_full_auto_shadow = QDoubleSpinBox()
-        self._spin_full_auto_shadow.setRange(SHADOW_MIN, SHADOW_MAX)
-        self._spin_full_auto_shadow.setSingleStep(SHADOW_STEP)
-        self._spin_full_auto_shadow.setDecimals(SHADOW_DECIMALS)
-
-        self._combo_full_auto_contrast_mode = QComboBox()
-        self._combo_full_auto_contrast_mode.addItem("Лінійний (класичний)", "linear")
-        self._combo_full_auto_contrast_mode.addItem("Перцентильне розтягнення", "percentile")
-        self._combo_full_auto_contrast_mode.addItem("S-подібна крива", "s_curve")
-        self._combo_full_auto_contrast_mode.addItem("Локальний адаптивний", "adaptive")
-
-        self._spin_full_auto_contrast = QDoubleSpinBox()
-        self._spin_full_auto_contrast.setRange(AUTOFIX_CONTRAST_MIN, AUTOFIX_CONTRAST_MAX)
-        self._spin_full_auto_contrast.setSingleStep(AUTOFIX_CONTRAST_STEP)
-        self._spin_full_auto_contrast.setDecimals(AUTOFIX_CONTRAST_DECIMALS)
-
-        self._cb_full_auto_bw_binary = QCheckBox("Адаптивна бінаризація")
-        self._combo_full_auto_color_mode = QComboBox()
-        self._combo_full_auto_color_mode.addItem("Авто (за типом документа)", "auto")
-        self._combo_full_auto_color_mode.addItem("Кольоровий", "color")
-        self._combo_full_auto_color_mode.addItem("Чорно-білий (напівтони)", "grayscale")
-        self._combo_full_auto_color_mode.addItem("Чорно-білий (бінаризація)", "binary")
-
-        fa_form.addRow("Сила різкості (0–1):", self._spin_full_auto_sharpen)
-        fa_form.addRow("Висвітлення тіней (0–2):", self._spin_full_auto_shadow)
-        fa_form.addRow("Метод контрасту:", self._combo_full_auto_contrast_mode)
-        fa_form.addRow("Контраст (0–1):", self._spin_full_auto_contrast)
-        fa_form.addRow("Ч-б бінаризація:", self._cb_full_auto_bw_binary)
-        fa_form.addRow("Формат виходу:", self._combo_full_auto_color_mode)
-        fa_desc = QLabel("Full Auto аналізує кожне зображення окремо і застосовує "
-                         "лише потрібні корекції з адаптивною силою.")
-        fa_desc.setStyleSheet("color: gray; font-size: 10px;")
-        fa_form.addRow(fa_desc)
-
-        right.addWidget(out_box)
-        right.addWidget(save_box)
-        right.addWidget(print_box)
-        right.addWidget(mode_box)
-        right.addWidget(fa_box)
-        right.addStretch()
-
-        # === Збираємо колонки ===
-        columns.addLayout(left, 1)
-        columns.addLayout(right, 1)
-        root.addLayout(columns)
-
-        # === Кнопки ===
-        btn_row = QHBoxLayout()
-        btn_save   = QPushButton("Зберегти")
-        btn_cancel = QPushButton("Скасувати")
-        btn_save.setDefault(True)
-        btn_save.clicked.connect(self._save)
-        btn_cancel.clicked.connect(self.hide)
-        btn_row.addStretch()
-        btn_row.addWidget(btn_save)
-        btn_row.addWidget(btn_cancel)
-        root.addLayout(btn_row)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(LAYOUT_SPACING)
+        layout.addWidget(print_box)
+        layout.addWidget(mode_box)
+        layout.addStretch()
+        return container
 
     # ------------------------------------------------------------------
     # Завантаження / збереження
@@ -385,6 +575,12 @@ class SettingsWindow(QWidget):
         self._spin_shadow.setValue(s.get("shadow_highlight_strength", 0.0))
         self._spin_sharpen.setValue(s.get("sharpen_strength", 0.4))
         self._spin_hdr.setValue(s.get("hdr_strength", 0.5))
+
+        # Параметри видалення тіней
+        self._cb_shadow_remove.setChecked(s.get("shadow_remove_enabled", True))
+        self._spin_shadow_detect_threshold.setValue(s.get("shadow_detect_threshold", 80.0))
+        self._spin_shadow_detect_ratio.setValue(s.get("shadow_detect_ratio", 0.3))
+        self._spin_shadow_coarse_blend.setValue(s.get("shadow_coarse_blend_color", 0.0))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -415,23 +611,12 @@ class SettingsWindow(QWidget):
         self._edit_printer.setText(s.get("printer_name", "priPrinter"))
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
-        self._cb_full_auto_mode.setChecked(s.get("full_auto_mode", False))
-        self._cb_full_auto_perspective.setChecked(s.get("full_auto_perspective", False))
-        self._cb_full_auto_hdr.setChecked(s.get("full_auto_hdr_enabled", True))
-        self._spin_full_auto_sharpen.setValue(s.get("full_auto_default_sharpen", 0.4))
-        self._spin_full_auto_shadow.setValue(s.get("full_auto_shadow_highlight_strength", 0.0))
-        self._spin_full_auto_contrast.setValue(s.get("full_auto_autofix_contrast", 0.15))
-        self._cb_full_auto_bw_binary.setChecked(s.get("full_auto_bw_binary", False))
-        # Метод контрасту Full Auto
-        fa_contrast_mode = s.get("full_auto_contrast_mode", "linear")
-        idx = self._combo_full_auto_contrast_mode.findData(fa_contrast_mode)
-        if idx >= 0:
-            self._combo_full_auto_contrast_mode.setCurrentIndex(idx)
-        # Формат виходу Full Auto
-        fa_color_mode = s.get("full_auto_output_color_mode", "auto")
-        idx = self._combo_full_auto_color_mode.findData(fa_color_mode)
-        if idx >= 0:
-            self._combo_full_auto_color_mode.setCurrentIndex(idx)
+
+        # Пресет стратегії
+        preset = s.get("pipeline_preset", "doc_bw")
+        enabled_str = s.get("pipeline_steps_enabled", "")
+        enabled = [k.strip() for k in enabled_str.split(",") if k.strip()] if enabled_str else None
+        self._preset_widget.set_state(preset, enabled)
 
     def _collect_settings(self) -> dict:
         return {
@@ -441,6 +626,10 @@ class SettingsWindow(QWidget):
             "auto_perspective":   self._cb_perspective.isChecked(),
             "autofix_contrast":   self._spin_autofix_contrast.value(),
             "shadow_highlight_strength": self._spin_shadow.value(),
+            "shadow_remove_enabled":     self._cb_shadow_remove.isChecked(),
+            "shadow_detect_threshold":   self._spin_shadow_detect_threshold.value(),
+            "shadow_detect_ratio":       self._spin_shadow_detect_ratio.value(),
+            "shadow_coarse_blend_color": self._spin_shadow_coarse_blend.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
@@ -462,17 +651,10 @@ class SettingsWindow(QWidget):
             "jpg_quality":       self._spin_quality.value(),
             "save_folder":       self._edit_folder.text().strip(),
             "printer_name":      self._edit_printer.text().strip(),
+            "pipeline_preset":        self._preset_widget.get_preset(),
+            "pipeline_steps_enabled":  ",".join(self._preset_widget.get_enabled_steps()),
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
-            "full_auto_mode":    self._cb_full_auto_mode.isChecked(),
-            "full_auto_perspective": self._cb_full_auto_perspective.isChecked(),
-            "full_auto_hdr_enabled": self._cb_full_auto_hdr.isChecked(),
-            "full_auto_default_sharpen": self._spin_full_auto_sharpen.value(),
-            "full_auto_shadow_highlight_strength": self._spin_full_auto_shadow.value(),
-            "full_auto_contrast_mode": self._combo_full_auto_contrast_mode.currentData(),
-            "full_auto_autofix_contrast": self._spin_full_auto_contrast.value(),
-            "full_auto_bw_binary": self._cb_full_auto_bw_binary.isChecked(),
-            "full_auto_output_color_mode": self._combo_full_auto_color_mode.currentData(),
         }
 
     def _save(self):

@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Optional
 import cv2
 import numpy as np
-from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background
+from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew as deskew_module
 
 
 class DocType(str, Enum):
@@ -20,6 +20,18 @@ class DocType(str, Enum):
 
 # Константи для порогів застосування корекцій
 EPSILON = 0.001  # Поріг для ігнорування дуже малих значень
+
+# Фіксований порядок кроків обробки (для пресетів)
+PIPELINE_STEPS_FIXED_ORDER = [
+    ("shadow_remove",    "Видалення тіней"),
+    ("perspective",      "Авто-перспектива"),
+    ("brightness",       "Авто-яскравість"),
+    ("contrast",         "Авто-контраст"),
+    ("hdr",              "HDR"),
+    ("sharpen",          "Різкість"),
+    ("grayscale",        "Grayscale / бінаризація"),
+    ("white_background", "Білий фон"),
+]
 
 
 def run_contrast_advanced(image: np.ndarray, value: float, mode: str = "linear") -> np.ndarray:
@@ -63,10 +75,14 @@ def run_autofix(
     adaptive_hdr: bool = False,
     autofix_contrast: float = 0.15,
     contrast_mode: str = "linear",
-) -> tuple[np.ndarray, str]:
+    settings: Optional[dict] = None,
+) -> tuple[np.ndarray, str, list[dict]]:
     """
     Повний автоматичний pipeline з авто-визначенням типу документа.
-    Повертає (результат, статус_повідомлення).
+    Повертає (результат, статус_повідомлення, список_кроків).
+
+    Кожен елемент списку_кроків — dict:
+        {"step": str, "applied": bool, "detail": str}
 
     Типи:
       bw_document   — чб документ (без HDR, grayscale/bw, сильний контраст)
@@ -80,9 +96,26 @@ def run_autofix(
     output_color_mode — формат виходу: "auto" (за типом), "color", "grayscale", "binary".
     adaptive_hdr — якщо True, використовує hdr.apply_adaptive для фото-документів.
     contrast_mode — метод контрасту ("linear", "percentile", "s_curve", "adaptive").
+    settings — словник налаштувань для параметрів видалення тіней.
     """
     result = image.copy()
-    status_parts = []
+    log_entries: list[dict] = []
+
+    # Визначаємо список увімкнених кроків згідно з пресетом
+    _preset_steps_map = {
+        "doc_bw":    ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
+        "doc_color": ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "white_background"],
+        "photo":     ["perspective", "hdr", "sharpen"],
+        "geometry":  ["perspective"],
+    }
+    _steps_enabled: list[str] | None = None
+    if settings:
+        _preset = settings.get("pipeline_preset", "doc_bw")
+        if _preset != "custom":
+            _steps_enabled = _preset_steps_map.get(_preset, [])
+        else:
+            _enabled_str = settings.get("pipeline_steps_enabled", "")
+            _steps_enabled = [k.strip() for k in _enabled_str.split(",") if k.strip()] if _enabled_str else None
 
     # Спочатку визначаємо тип документа (до будь-якої обробки!)
     if doc_type is None:
@@ -93,77 +126,109 @@ def run_autofix(
             line_count_min=classify_line_count_min,
         )
 
-    # Видалення тіней — для ч-б та кольорових документів (детектор відфільтрує фото)
-    if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
-        result, had_shadow = shadow_remove.auto_remove_shadow(result)
-        if had_shadow:
-            status_parts.append("тіні видалено")
+    # Проходимо циклом по фіксованому порядку кроків
+    for step_key, _ in PIPELINE_STEPS_FIXED_ORDER:
+        # Якщо steps_enabled визначено і крок не в списку — пропускаємо
+        if _steps_enabled is not None and step_key not in _steps_enabled:
+            continue
 
-    # Висвітлення тіней — додаткове підсвічування
-    if shadow_highlight_strength > EPSILON:
-        result = shadow_highlight.apply_shadow_highlight(result, strength=shadow_highlight_strength)
-        status_parts.append(f"підсвічування {shadow_highlight_strength:.2f}")
+        if step_key == "shadow_remove":
+            if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
+                is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
+                shadow_mode = settings.get("shadow_remove_mode", "auto") if settings else "auto"
+                coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
+                detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
+                detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
 
-    if use_perspective:
-        corrected, found = perspective.auto_correct(result) if not partial_perspective else perspective.auto_correct_partial(result)
-        if found:
-            result = corrected
-            status_parts.append("перспектива виправлена")
+                if shadow_mode == "always":
+                    result = shadow_remove.remove_shadow(result, is_color_document=is_color, coarse_blend=coarse_blend)
+                    log_entries.append({"step": "shadow_remove", "applied": True, "detail": "тіні видалено (примусово)"})
+                else:
+                    result, had_shadow = shadow_remove.auto_remove_shadow(
+                        result,
+                        is_color_document=is_color,
+                        coarse_blend=coarse_blend,
+                        detect_threshold=detect_threshold,
+                        detect_ratio=detect_ratio,
+                    )
+                    if had_shadow:
+                        log_entries.append({"step": "shadow_remove", "applied": True, "detail": "тіні видалено"})
+                # Висвітлення тіней — додаткове підсвічування
+                if shadow_highlight_strength > EPSILON:
+                    result = shadow_highlight.apply_shadow_highlight(result, strength=shadow_highlight_strength)
+                    log_entries.append({"step": "shadow_highlight", "applied": True, "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 
-    if doc_type == DocType.BW_DOCUMENT.value:
-        result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
-        status_parts.append("ч-б документ")
-        if bw_binary:
-            status_parts.append("бінаризація")
-    elif doc_type == DocType.COLOR_DOCUMENT.value:
-        result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)
-        status_parts.append("кольоровий документ")
-    else:
-        # photo або fallback — повний pipeline
-        result = autofix.apply(
-            result,
-            sharpen_strength=sharpen_strength,
-            hdr_strength=hdr_strength,
-            use_hdr=use_hdr,
-            adaptive_hdr=adaptive_hdr,
-        )
-        status_parts.append("фото")
-        if use_hdr:
-            if adaptive_hdr:
-                status_parts.append("адаптивний HDR")
+        elif step_key == "perspective":
+            if use_perspective:
+                result, persp_status = run_perspective_auto_smart(result, settings)
+                if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
+                    log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
+
+        elif step_key == "brightness":
+            # Яскравість окремо не застосовується в autofix — вона в ручних налаштуваннях
+            pass
+
+        elif step_key == "contrast":
+            result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
+            log_entries.append({"step": "contrast", "applied": True, "detail": f"контраст {autofix_contrast:.2f}"})
+
+        elif step_key == "hdr":
+            if doc_type == DocType.PHOTO.value:
+                _use_hdr = settings.get("hdr_in_autofix", True) if settings else use_hdr
+                if _use_hdr:
+                    result = autofix.apply(result, sharpen_strength=0.0, hdr_strength=hdr_strength, use_hdr=True, adaptive_hdr=adaptive_hdr)
+                    log_entries.append({"step": "hdr", "applied": True, "detail": "HDR"})
+            # Для не-photo HDR пропускаємо
+
+        elif step_key == "sharpen":
+            # Різкість застосовується згідно з типом документа
+            if doc_type == DocType.BW_DOCUMENT.value:
+                result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
+                log_entries.append({"step": "sharpen", "applied": True, "detail": f"різкість {sharpen_strength:.2f}"})
+                if bw_binary:
+                    log_entries.append({"step": "binary", "applied": True, "detail": "бінаризація"})
+            elif doc_type == DocType.COLOR_DOCUMENT.value:
+                result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)
+                log_entries.append({"step": "sharpen", "applied": True, "detail": f"різкість {sharpen_strength:.2f}"})
             else:
-                status_parts.append("HDR")
+                result = sharpen.apply(result, strength=sharpen_strength)
+                log_entries.append({"step": "sharpen", "applied": True, "detail": f"різкість {sharpen_strength:.2f}"})
 
-    status_parts.append(f"різкість {sharpen_strength:.2f}")
+        elif step_key == "grayscale":
+            if doc_type == DocType.BW_DOCUMENT.value:
+                # Для bw_document — конвертуємо в чб
+                result = bc.to_grayscale(result)
+                log_entries.append({"step": "grayscale", "applied": True, "detail": "ч-б"})
 
-    # Додатковий контраст в кінці циклу (налаштовується)
-    result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
+        elif step_key == "white_background":
+            result, had_white = _apply_auto_white_background(result, doc_type)
+            if had_white:
+                log_entries.append({"step": "white_background", "applied": True, "detail": "білий фон"})
+
+    # Додаємо інформацію про тип документа в лог
+    if doc_type == DocType.BW_DOCUMENT.value:
+        log_entries.append({"step": "doc_type", "applied": True, "detail": "ч-б документ"})
+    elif doc_type == DocType.COLOR_DOCUMENT.value:
+        log_entries.append({"step": "doc_type", "applied": True, "detail": "кольоровий документ"})
+    else:
+        log_entries.append({"step": "doc_type", "applied": True, "detail": "фото"})
 
     # Формат виходу: якщо не "auto" — примусово конвертуємо
     if output_color_mode == "grayscale":
         result = bc.to_grayscale(result)
-        status_parts.append("ч-б")
+        log_entries.append({"step": "color_mode", "applied": True, "detail": "ч-б"})
     elif output_color_mode == "binary":
         result = bc.to_grayscale(result)
         gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        binary_img = cv2.adaptiveThreshold(gray, 255,
-                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv2.THRESH_BINARY, 15, 10)
-        result = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
-        status_parts.append("бінаризація")
+        tt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 10)
+        result = cv2.cvtColor(tt, cv2.COLOR_GRAY2BGR)
+        log_entries.append({"step": "color_mode", "applied": True, "detail": "бінаризація"})
     elif output_color_mode == "color":
-        # Нічого не робимо — залишаємо кольоровим
         pass
-    # "auto" — залишаємо як є (визначено типом документа)
 
-    # Автоматичний білий фон (для документів, не фото) — раніше був
-    # повністю відсутній у цьому pipeline, на відміну від run_full_auto.
-    result, had_white = _apply_auto_white_background(result, doc_type)
-    if had_white:
-        status_parts.append("білий фон")
-
+    status_parts = [e["detail"] for e in log_entries if e["applied"]]
     status_msg = "Auto Fix: " + ", ".join(status_parts)
-    return result, status_msg
+    return result, status_msg, log_entries
 
 
 def run_sharpen(image: np.ndarray, strength: float = 0.4) -> np.ndarray:
@@ -208,6 +273,56 @@ def run_hdr(image: np.ndarray, strength: float = 0.5, adaptive: bool = False) ->
         mask = text_mask_module.text_region_mask(gray)
         return hdr.apply_adaptive(image, strength=strength, text_mask=mask)
     return hdr.apply(image, strength=strength)
+
+
+def run_perspective_auto_smart(
+    image: np.ndarray,
+    settings: dict | None = None,
+) -> tuple[np.ndarray, str]:
+    """
+    Розумна авто-перспектива з deskew.
+
+    Логіка:
+    - Вимірює кут нахилу (skew)
+    - Шукає кути документа
+    - Якщо знайдено викривлення перспективи — warp + deskew
+    - Якщо тільки нахил — тільки deskew
+    - Якщо нічого — без змін
+
+    Returns:
+        (result, status_message)
+    """
+    # 1. Виміряти кут
+    angle = deskew_module.measure_skew_angle(image)
+
+    # 2. Спробувати знайти кути документа
+    corners = perspective.auto_detect_corners(image)
+
+    if corners is not None:
+        # 3. Перевірити чи є викривлення перспективи
+        skewed = perspective.detect_skewed_sides(corners)
+        has_skewed = any(skewed.values())
+
+        if has_skewed:
+            # Warp + deskew
+            result = perspective.apply_correction(image, corners)
+            if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                result = deskew_module.apply_deskew(result, angle)
+            return result, "перспектива виправлена + deskew"
+        else:
+            # Тільки deskew (якщо потрібно)
+            if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                result = deskew_module.apply_deskew(image, angle)
+                return result, "deskew (нахил виправлено)"
+            else:
+                return image.copy(), "перспектива не потребує корекції"
+    else:
+        # Кути не знайдено — тільки deskew (якщо потрібно)
+        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+            result = deskew_module.apply_deskew(image, angle)
+            return result, "deskew (нахил виправлено)"
+        else:
+            return image.copy(), "перспектива не потрібна"
 
 
 def run_perspective_auto(image: np.ndarray, partial: bool = False) -> tuple[np.ndarray, bool]:
@@ -299,215 +414,6 @@ def _apply_auto_white_background(image: np.ndarray, doc_type: str) -> tuple[np.n
     )
 
 
-def _compute_adaptive_params(diag) -> dict:
-    """
-    Обчислює індивідуальні параметри обробки на основі діагностики (Крок 4).
-    Повертає словник з параметрами для run_full_auto.
-    """
-    params = {}
-
-    # CLAHE/HDR noise_floor: більше шуму на фоні → вищий поріг → менше артефактів
-    params["noise_floor"] = max(1.5, diag.noise_level * 2.5)
-
-    # Сила HDR: менша для рівних зображень, більша для контрастних
-    params["hdr_strength"] = min(0.8, 0.3 + diag.detail_density * 0.7)
-
-    # Сила різкості: адаптивна з діагностики
-    params["sharpen_strength"] = diag.blur_sharpen_strength
-
-    # Сила контрасту: менша якщо динамічний діапазон вже широкий
-    if diag.dynamic_range > 180:
-        params["contrast_strength"] = 0.0
-    elif diag.dynamic_range > 120:
-        params["contrast_strength"] = diag.contrast_strength_needed * 0.5
-    else:
-        params["contrast_strength"] = diag.contrast_strength_needed
-
-    # Яскравість: тільки якщо значне відхилення
-    params["brightness_needed"] = abs(diag.brightness_correction) > 0.08
-    params["brightness_correction"] = diag.brightness_correction
-
-    # Shadow remove: тільки для документів з реальними тінями
-    params["shadow_remove"] = (
-        diag.doc_type in ("bw_document", "color_document")
-        and diag.gradient_has
-        and diag.gradient_strength > 0.3
-        and diag.background_uniformity > 0.4
-    )
-
-    return params
-
-
-def run_full_auto(
-    image: np.ndarray,
-    settings: dict,
-    dry_run: bool = False,
-) -> tuple[np.ndarray, str, dict]:
-    """
-    Універсальний адаптивний Full Auto pipeline (Крок 4).
-    Аналізує зображення через diagnostics.diagnose, обчислює індивідуальні
-    параметри через _compute_adaptive_params і застосовує тільки потрібні
-    корекції з адаптивною силою.
-
-    Кожне зображення отримує власні параметри: noise_floor, hdr_strength,
-    sharpen_strength, contrast_strength, brightness, shadow_remove.
-
-    Параметр dry_run=True — тільки діагностика, нічого не застосовувати.
-    Повертає (result, status_message, applied_steps).
-    """
-    from processing import diagnostics as diag_module
-
-    result = image.copy()
-    applied_steps: dict[str, float | bool] = {}
-    status_parts: list[str] = []
-
-    # Крок 0 — Діагностика
-    diag = diag_module.diagnose(image, settings)
-    adaptive_params = _compute_adaptive_params(diag)
-
-    if dry_run:
-        status_parts.append("тільки діагностика")
-        status_parts.append(f"тип: {diag.doc_type}")
-        status_parts.append(f"uniformity: {diag.background_uniformity:.2f}")
-        status_parts.append(f"noise: {diag.noise_level:.2f}")
-        status_parts.append(f"saturation: {diag.color_saturation:.2f}")
-        status_parts.append(f"dynamic_range: {diag.dynamic_range:.1f}")
-        status_parts.append(f"detail_density: {diag.detail_density:.2f}")
-        status_parts.append(f"noise_floor: {adaptive_params['noise_floor']:.2f}")
-        status_parts.append(f"hdr_strength: {adaptive_params['hdr_strength']:.2f}")
-        if diag.gradient_has:
-            status_parts.append(f"градієнт: {diag.gradient_direction} ({diag.gradient_strength:.2f})")
-        status_parts.append(f"контраст: {diag.contrast_strength_needed:.2f}")
-        status_parts.append(f"яскравість: {diag.brightness_correction:.2f}")
-        status_parts.append(f"розмиття: {diag.blur_strength_needed:.2f}")
-        if diag.perspective_has:
-            status_parts.append(f"перспектива: {diag.perspective_skew_ratio:.3f}")
-        status_msg = "Full Auto (dry): " + ", ".join(status_parts)
-        return image.copy(), status_msg, applied_steps
-
-    noise_floor = adaptive_params["noise_floor"]
-    hdr_strength = adaptive_params["hdr_strength"]
-    sharpen_strength = adaptive_params["sharpen_strength"]
-    contrast_strength = adaptive_params["contrast_strength"]
-
-    # Крок 1 — Видалення градієнтного фону (адаптивне: тільки для документів з тінями)
-    if adaptive_params["shadow_remove"]:
-        result, had_shadow = shadow_remove.auto_remove_shadow(result)
-        if had_shadow:
-            applied_steps["shadow_remove"] = diag.gradient_strength
-            status_parts.append("тіні видалено")
-            # Частковий перерахунок
-            updated = diag_module.partial_rediagnose(result, settings, ["contrast", "brightness"])
-            contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
-
-    # Крок 2 — Корекція перспективи (опціонально, керується full_auto_perspective)
-    if settings.get("full_auto_perspective", False) and diag.perspective_has:
-        result = perspective.apply_correction(result, diag.perspective_corners)
-        applied_steps["perspective"] = diag.perspective_skew_ratio
-        status_parts.append("перспектива")
-        updated = diag_module.partial_rediagnose(result, settings, ["contrast", "brightness", "blur"])
-        contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
-        sharpen_strength = updated.get("blur_sharpen_strength", sharpen_strength)
-
-    # Крок 3 — Яскравість (тільки якщо значне відхилення)
-    if adaptive_params["brightness_needed"]:
-        bc_val = adaptive_params["brightness_correction"]
-        if bc_val > 0:
-            result = bc.auto_brightness(result, percentile_low=2.0, percentile_high=98.0)
-        else:
-            result = bc.auto_brightness(result, percentile_low=5.0, percentile_high=95.0)
-        applied_steps["brightness"] = abs(bc_val)
-        status_parts.append(f"яскравість {abs(bc_val):.2f}")
-        updated = diag_module.partial_rediagnose(result, settings, ["contrast"])
-        contrast_strength = updated.get("contrast_strength_needed", contrast_strength)
-
-    # Крок 4 — Контраст (адаптивний)
-    if contrast_strength >= 0.05:
-        contrast_strength = min(contrast_strength, 0.85)
-        contrast_mode = settings.get("contrast_mode", "linear")
-        result = run_contrast_advanced(result, contrast_strength, contrast_mode)
-        applied_steps["contrast"] = contrast_strength
-        status_parts.append(f"контраст {contrast_strength:.2f}")
-
-    # Крок 5 — HDR з адаптивним noise_floor (тільки для фото і кольорових документів)
-    if diag.doc_type in (DocType.PHOTO.value, DocType.COLOR_DOCUMENT.value):
-        if settings.get("full_auto_hdr_enabled", True) and hdr_strength > 0.01:
-            result = hdr.apply_adaptive(
-                result,
-                strength=hdr_strength,
-                noise_floor=noise_floor,
-            )
-            applied_steps["hdr"] = hdr_strength
-            status_parts.append(f"HDR {hdr_strength:.2f}")
-
-    # Крок 6 — Специфічна обробка по типу документа
-    bw_binary = settings.get("full_auto_bw_binary", False)
-
-    if diag.doc_type == DocType.FLAT_BACKGROUND.value:
-        # flat_background: тільки легка різкість, без CLAHE, без HDR
-        if sharpen_strength > 0.05:
-            result = sharpen.apply(result, strength=min(sharpen_strength, 0.3))
-            status_parts.append(f"різкість {sharpen_strength:.2f}")
-        status_parts.append("рівний фон")
-    elif diag.doc_type == DocType.BW_DOCUMENT.value:
-        if sharpen_strength <= 0.0:
-            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
-        result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
-        status_parts.append("ч-б документ")
-    elif diag.doc_type == DocType.COLOR_DOCUMENT.value:
-        if sharpen_strength <= 0.0:
-            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
-        result = autofix.apply_color_document(result, sharpen_strength=sharpen_strength)
-        status_parts.append("кольоровий документ")
-    else:  # photo
-        if sharpen_strength <= 0.0:
-            sharpen_strength = settings.get("full_auto_default_sharpen", 0.4)
-        if diag.blur_strength_needed > 0.05:
-            result = sharpen.apply(result, strength=sharpen_strength)
-            status_parts.append(f"різкість {sharpen_strength:.2f}")
-        status_parts.append("фото")
-    applied_steps["doc_processing"] = diag.doc_type
-
-    # Крок 7 — Shadow highlight
-    sh_strength = settings.get("full_auto_shadow_highlight_strength", 0.0)
-    if sh_strength > 0.001:
-        result = shadow_highlight.apply_shadow_highlight(result, strength=sh_strength)
-        applied_steps["shadow_highlight"] = sh_strength
-        status_parts.append(f"підсвічування {sh_strength:.2f}")
-
-    # Крок 8 — Додатковий контраст Auto Fix
-    autofix_contrast = settings.get("full_auto_autofix_contrast", 0.15)
-    contrast_mode = settings.get("full_auto_contrast_mode", "linear")
-    if autofix_contrast > 0.001:
-        result = run_contrast_advanced(result, autofix_contrast, contrast_mode)
-        applied_steps["autofix_contrast"] = autofix_contrast
-
-    # Крок 9 — Формат виходу
-    output_color_mode = settings.get("full_auto_output_color_mode", "auto")
-    if output_color_mode == "grayscale":
-        result = bc.to_grayscale(result)
-        status_parts.append("ч-б")
-    elif output_color_mode == "binary":
-        result = bc.to_grayscale(result)
-        gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        binary_img = cv2.adaptiveThreshold(gray, 255,
-                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv2.THRESH_BINARY, 15, 10)
-        result = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
-        status_parts.append("бінаризація")
-
-    # Крок 10 — Автоматичний білий фон (для документів, не фото).
-    # ВАЖЛИВО: метрики перераховуються на поточному result, а не на
-    # diag з кроку 0 — на цей момент зображення вже пройшло
-    # shadow_remove/перспективу/контраст/HDR/sharpen і могло докорінно
-    # змінитись (особливо коли була велика нерівномірна тінь).
-    result, had_white = _apply_auto_white_background(result, diag.doc_type)
-    if had_white:
-        applied_steps["white_background"] = True
-        status_parts.append("білий фон")
-
-    status_msg = "Full Auto: " + ", ".join(status_parts)
-    return result, status_msg, applied_steps
 
 
 def run_manual_adjustments(

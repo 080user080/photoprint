@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QButtonGroup, QRadioButton,
     QFileDialog, QProgressBar, QScrollArea, QApplication,
-    QSystemTrayIcon, QMenu,
+    QSystemTrayIcon, QMenu, QComboBox, QListWidget,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
 from PyQt6.QtGui import QIcon
@@ -267,9 +267,14 @@ class MainWindow(QMainWindow):
         self._status.setStyleSheet("color:#444444; font-size:12px;")
         self._status.setWordWrap(True)
 
+        self._log_widget = QListWidget()
+        self._log_widget.setMaximumHeight(120)
+        self._log_widget.setVisible(False)
+
         center.addWidget(self._preview, 1)
         center.addWidget(self._progress)
         center.addWidget(self._status)
+        center.addWidget(self._log_widget)
 
         # === Внизу під прев'ю: керування ===
         # Панель керування (controls + кнопки)
@@ -301,32 +306,38 @@ class MainWindow(QMainWindow):
         buttons_row.setSpacing(BUTTONS_ROW_SPACING)
 
         self._btn_autofix   = QPushButton("⚡ Auto Fix")
-        self._btn_full_auto = QPushButton("⚡ Full Auto")
         self._btn_print     = QPushButton("🖨  Друк")
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
         self._btn_save_img  = QPushButton("💾  Зберегти")
         self._btn_autofix.setObjectName("btn_autofix")
-        self._btn_full_auto.setObjectName("btn_full_auto")
         self._btn_print.setObjectName("btn_print")
         self._btn_skip.setObjectName("btn_skip")
         self._btn_print_all.setObjectName("btn_print_all")
         self._btn_save_img.setObjectName("btn_save_image")
 
-        for b in (self._btn_autofix, self._btn_full_auto, self._btn_print,
+        for b in (self._btn_autofix, self._btn_print,
                    self._btn_skip, self._btn_print_all, self._btn_save_img):
             b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
+        # ComboBox для режиму видалення тіней
+        self._combo_shadow_mode = QComboBox()
+        self._combo_shadow_mode.addItem("Авто", "auto")
+        self._combo_shadow_mode.addItem("Завжди", "always")
+        self._combo_shadow_mode.addItem("Ніколи", "never")
+        self._combo_shadow_mode.setObjectName("combo_shadow_mode")
+        self._combo_shadow_mode.setFixedWidth(120)
+        self._combo_shadow_mode.currentIndexChanged.connect(self._on_shadow_mode_changed)
+
         self._btn_autofix.clicked.connect(self._do_autofix)
-        self._btn_full_auto.clicked.connect(self._do_full_auto)
         self._btn_print.clicked.connect(self._do_print_current)
         self._btn_skip.clicked.connect(self._do_skip)
         self._btn_print_all.clicked.connect(self._do_print_all)
         self._btn_save_img.clicked.connect(self._do_save_image)
 
         buttons_row.addWidget(self._btn_autofix)
-        buttons_row.addWidget(self._btn_full_auto)
+        buttons_row.addWidget(self._combo_shadow_mode)
         buttons_row.addWidget(self._btn_print)
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
@@ -383,6 +394,11 @@ class MainWindow(QMainWindow):
         self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
+        # Ініціалізація ComboBox режиму видалення тіней
+        shadow_mode = self._settings.get("shadow_remove_mode", "auto")
+        idx = self._combo_shadow_mode.findData(shadow_mode)
+        if idx >= 0:
+            self._combo_shadow_mode.setCurrentIndex(idx)
 
     def _load_window_geometry(self):
         """Завантажує розмір вікна та ширину черги з налаштувань."""
@@ -403,6 +419,14 @@ class MainWindow(QMainWindow):
         """Перевизначення resizeEvent для збереження розміру вікна."""
         super().resizeEvent(event)
         self._save_window_geometry()
+
+    def _on_shadow_mode_changed(self, index: int):
+        """Зміна режиму видалення тіней через ComboBox."""
+        mode = self._combo_shadow_mode.currentData()
+        self._settings["shadow_remove_mode"] = mode
+        app_settings.save(self._settings)
+        # Перезапускаємо Auto Fix з новим режимом
+        self._do_autofix_classic()
 
     def _on_settings_saved(self, s: dict):
         self._settings = s
@@ -527,27 +551,6 @@ class MainWindow(QMainWindow):
     def _do_autofix(self):
         self._do_autofix_classic()
 
-    def _do_full_auto(self):
-        if self._orig is None:
-            self._set_status("Спочатку оберіть файл")
-            return
-        try:
-            result, status_msg, applied_steps = pipeline.run_full_auto(
-                self._base,
-                settings=self._settings,
-            )
-            self._processed = result
-            # Оновлюємо _base, щоб подальші слайдери працювали з результатом Full Auto
-            self._base = result.copy()
-            self._preview.set_after(image_utils.make_preview(result))
-            self._preview.set_autofix_applied("full_auto")
-            self._set_status(status_msg)
-            self._logger.debug(f"Full Auto applied_steps: {applied_steps}")
-            self._update_buttons()
-        except Exception as e:
-            self._logger.error(f"Помилка Full Auto: {e}", exc_info=True)
-            self._set_status(f"Помилка Full Auto: {e}")
-
     def _do_autofix_classic(self):
         if self._orig is None:
             self._set_status("Спочатку оберіть файл")
@@ -556,7 +559,7 @@ class MainWindow(QMainWindow):
             s = self._settings
             vals = self._controls.values()
             if s.get("autofix_enabled", True):
-                result, status_msg = pipeline.run_autofix(
+                result, status_msg, log_entries = pipeline.run_autofix(
                     self._base,
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
@@ -571,10 +574,12 @@ class MainWindow(QMainWindow):
                     output_color_mode=s.get("output_color_mode", "auto"),
                     autofix_contrast=s.get("autofix_contrast", 0.15),
                     contrast_mode=s.get("contrast_mode", "linear"),
+                    settings=self._settings,
                 )
                 # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
                 # щоб повторне натискання не накладало ефекти каскадно.
                 self._set_status(status_msg)
+                self._show_log(log_entries)
                 self._preview.set_autofix_applied("auto_fix")
             else:
                 # autofix_enabled=False: тільки ручні налаштування
@@ -678,36 +683,26 @@ class MainWindow(QMainWindow):
             self._set_status("Зображення достатньо різке — різкість не потрібна")
 
     def _do_persp_auto(self):
-        """Авто-детекція перспективи з fallback до ручного режиму."""
+        """Авто-детекція перспективи з deskew та fallback до ручного режиму."""
         if self._orig is None or self._base is None:
             return
-        # Зберігаємо знімок _base до перспективи (для ручного редагування точок)
         self._base_for_perspective = self._base.copy()
-        # Шукаємо кути на _base (після автофікс), бо координати мають відповідати зображенню до якого застосовуємо перспективу
+        # Smart perspective з deskew
+        result, status = pipeline.run_perspective_auto_smart(self._base, self._settings)
+        self._base = result.copy()
+        self._processed = result
+        self._preview.set_before(image_utils.make_preview(result))
+        self._preview.set_after(image_utils.make_preview(result))
+        # Спробуємо знайти кути для ручного редагування
         corners = pipeline.detect_corners(self._base)
         if corners is not None:
-            # Зберігаємо кути для повторного застосування після автофікс
             self._perspective_corners = corners.copy()
-            # Авто знайшло документ — застосовуємо перспективу до _base
-            result = pipeline.run_perspective_manual(self._base, corners)
-            self._base = result.copy()
-            self._processed = result
-            self._preview.set_before(image_utils.make_preview(result))
-            self._preview.set_after(image_utils.make_preview(result))
-            # Показуємо точки кутів нового зображення (після перспективи)
-            h, w = result.shape[:2]
-            new_corners = np.array([
-                [0, 0],
-                [w - 1, 0],
-                [w - 1, h - 1],
-                [0, h - 1]
-            ], dtype=np.float32)
-            self._show_perspective_points(new_corners, "Перспективу виправлено — підправте точки якщо потрібно")
-            # Застосовуємо поточні слайдери до нового базового зображення
-            self._on_controls_changed()
+            self._show_perspective_points(corners, status)
         else:
-            # Fallback: документ не знайдено → ручний режим з дефолтними точками
-            self._do_persp_manual_fallback()
+            self._perspective_corners = None
+            self._set_status(status)
+        # Застосовуємо поточні слайдери до нового базового зображення
+        self._on_controls_changed()
         self._update_buttons()
 
     def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
@@ -996,16 +991,26 @@ class MainWindow(QMainWindow):
         self._btn_print.setEnabled(has_img)
         self._btn_skip.setEnabled(self._processor.has_next())
         self._btn_autofix.setEnabled(has_img)
-        self._btn_full_auto.setEnabled(has_img)
         self._btn_save_img.setEnabled(has_img)
 
     def _set_buttons_enabled(self, enabled: bool):
-        for b in (self._btn_autofix, self._btn_full_auto,
-                  self._btn_print, self._btn_skip, self._btn_print_all):
+        for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all):
             b.setEnabled(enabled)
 
     def _set_status(self, text: str):
         self._status.setText(text)
+
+    def _show_log(self, log_entries: list[dict]):
+        """Показує лог кроків обробки у віджеті списку."""
+        self._log_widget.clear()
+        if not log_entries:
+            self._log_widget.setVisible(False)
+            return
+        for entry in log_entries:
+            icon = "✓" if entry["applied"] else "✗"
+            text = f"{icon} {entry['step']}: {entry['detail']}"
+            self._log_widget.addItem(text)
+        self._log_widget.setVisible(True)
 
     # ------------------------------------------------------------------
     # Debug dump для GUI-тестувальника

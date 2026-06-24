@@ -31,6 +31,12 @@ processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
 scaner\scaner.py
+tests\results
+tests\test_images
+tests\README.md
+tests\conftest.py
+tests\gui_tester.py
+tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -41,6 +47,7 @@ utils\win_drop.py
 README.md
 main.py
 requirements.txt
+shadow_remove_gui.py
 status.md
 
 ============================================================
@@ -1188,6 +1195,200 @@ class MainWindow(QMainWindow):
     def _load_exclusions(self) -> Dict[str, List[str]]:
     def _save_exclusions(self):
     def _collect_unchecked(self, item: QStandardItem, result: List[str]):
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
+
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
+
+
+============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
+============================================================
+# Автоматизований тестувальник GUI для PhotoPrint
+
+Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
+
+## Структура
+
+```
+tests/
+├── gui_tester.py          # Ядро тестувальника (GUITester клас)
+├── requirements.txt       # Залежності для тестів
+├── README.md             # Цей файл
+├── scenarios/            # Сценарії тестів
+│   ├── test_autofix_toggle.py
+│   └── test_perspective_auto.py
+├── test_images/          # Тестові зображення
+├── expected/             # Очікувані результати
+├── results/              # Результати тестів (скріншоти)
+└── logs/                 # Логи додатка
+```
+
+## Встановлення
+
+1. Встановіть залежності:
+```bash
+pip install -r tests/requirements.txt
+```
+
+## Використання
+
+### Запуск окремого тесту
+
+```bash
+python tests/scenarios/test_autofix_toggle.py
+python tests/scenarios/test_perspective_auto.py
+```
+
+### Створення нового сценарію
+
+1. Створіть новий файл в `tests/scenarios/`
+2. Імпортуйте GUITester:
+```python
+from tests.gui_tester import GUITester
+```
+
+3. Створіть функцію тесту:
+```python
+def test_my_feature():
+    tester = GUITester("gui/main.py")
+    tester.setup_directories()
+    tester.launch_app()
+    tester.wait(3)
+    tester.activate_window(title="PhotoPrint")
+    # Ваші дії...
+    tester.close_app()
+    return True
+```
+
+## GUITester API
+
+### Методи
+
+- `launch_app()` - Запускає GUI додаток через subprocess
+- `activate_window(title)` - Активує вікно за назвою
+- `type_text(text)` - Вставляє текст в активне вікно
+- `press_key(key)` - Натискає клавішу
+- `click_at(x, y)` - Клікає мишкою по координатах
+- `wait(seconds)` - Чекає заданий час
+- `screenshot(filename)` - Зберігає скріншот вікна
+- `compare_images(actual, expected, tolerance)` - Порівнює зображення
+- `close_app()` - Закриває GUI додаток
+- `setup_directories()` - Створює необхідні директорії
+- `clear_logs()` - Очищає логи перед тестом
+- `read_logs()` - Читає логи після тесту
+
+## TODO
+
+- [ ] Реалізувати завантаження зображень через drag & drop
+- [ ] Реалізувати перемикання елементів через координати
+- [ ] Додати більше сценаріїв тестів
+- [ ] Інтеграція з pytest
+- [ ] CI/CD інтеграція
+
+## Примітки
+
+- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
+- Не залежить від внутрішньої структури GUI
+- Працює як реальний користувач
+- Потрібно щоб GUI було відкрито і видимим під час тестів
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
+============================================================
+Імпорти:
+  import sys
+  import os
+  import pytest
+
+Сутності:
+def test_image_path() -> str:
+    """Повертає шлях до тестового JPG-зображення."""
+def pytest_configure(config):
+def gui_tester():
+    """Фікстура для GUITester з desktop-режимом ( реальний Windows desktop)."""
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
+============================================================
+Імпорти:
+  import json
+  import subprocess
+  import time
+  import sys
+  import os
+  import ctypes
+  import threading
+  from pathlib import Path
+  from typing import Optional, Tuple, List, Dict
+
+Сутності:
+class GUITester:
+    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
+    def __init__(self, app_path: str, venv_python: Optional[str], debug_mode: bool):
+    def launch_app(self) -> bool:
+        """Запускає GUI додаток через subprocess"""
+    def activate_window(self, title: str, max_retries: int, retry_delay: float) -> bool:
+        """Активує вікно за назвою (через Windows API) з повторними спробами"""
+    def type_text(self, text: str) -> bool:
+        """Вставляє текст в активне вікно"""
+    def press_key(self, key: str) -> bool:
+        """Натискає клавішу"""
+    def click_at(self, x: int, y: int) -> bool:
+        """Клікає мишкою по координатах"""
+    def wait(self, seconds: float) -> None:
+        """Чекає заданий час"""
+    def screenshot(self, filename: str) -> bool:
+        """Зберігає скріншот вікна"""
+    def compare_images(self, actual_path: str, expected_path: str, tolerance: int) -> bool:
+        """Порівнює два зображення через OpenCV"""
+    def close_app(self) -> None:
+        """Закриває GUI додаток"""
+    def load_widget_geometries(self) -> Dict[str, dict]:
+        """Завантажує геометрію віджетів з JSON-файлу (debug dump)."""
+    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
+        """Повертає глобальну геометрію віджета за objectName."""
+    def click_widget(self, object_name: str) -> bool:
+        """Клікає по центру віджета, знайденого за objectName."""
+    def get_status_text(self) -> Optional[str]:
+        """Повертає текст статусного рядка (objectName='status_label')."""
+    def wait_for_widget(self, object_name: str, timeout: float, poll_interval: float) -> Optional[Dict[str, int]]:
+        """Чекає поки віджет з'явиться у debug dump."""
+    def setup_directories(self) -> None:
+        """Створює необхідні директорії"""
+    def clear_logs(self) -> None:
+        """Очищає логи перед тестом"""
+    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Повертає координати вікна (left, top, right, bottom)"""
+    def drag_drop_files(self, file_paths: List[str]) -> bool:
+        """Імітує Drag & Drop файлів у вікно додатка через WM_DROPFILES"""
+    def click_button_by_text(self, text: str) -> bool:
+        """Знаходить кнопку за текстом і клікає на неї (через розрахунок координат для PyQt6)"""
+    def set_checkbox(self, text: str, checked: bool) -> bool:
+        """Знаходить чекбокс за текстом і встановлює його стан (через координати для PyQt6)"""
+    def _click_relative(self, rel_x: float, rel_y: float, label: str) -> bool:
+        """Клікає по відносних координатах вікна (0.0-1.0)"""
+    def hotkey(self) -> bool:
+        """Натискає комбінацію клавіш (наприклад hotkey('ctrl', 's'))"""
+    def drag_slider(self, slider_label: str, value: float) -> bool:
+        """Встановлює значення слайдера за назвою (через відносні координати вікна)"""
+    def screenshot_window(self, filename: str) -> bool:
+        """Зберігає скріншот тільки вікна додатка"""
+    def get_window_text(self) -> Optional[str]:
+        """Повертає заголовок вікна"""
+    def list_child_widgets(self) -> List[dict]:
+        """Перелічує всі дочірні віджети вікна (для дебагу)"""
+    def read_logs(self) -> None:
+        """Читає логи після тесту"""
+
+============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
+============================================================
+pyautogui>=0.9.54
+pywin32>=306
+opencv-python>=4.8.0
+pytest>=7.4.0
+
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -1529,6 +1730,57 @@ Pillow>=10.0
 pillow-heif>=0.13
 PyQt6>=6.5
 rawpy>=0.27
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
+============================================================
+Імпорти:
+  import tkinter
+  from tkinter import ttk, filedialog, messagebox
+  import threading
+  import os
+
+Сутності:
+def _auto_kernel_size(image: np.ndarray) -> int:
+def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
+def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
+def _detect_shadow(image: np.ndarray) -> bool:
+    """Returns True if shadow is detected and removal should proceed."""
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
+    """Remove gradient shadows from a document image.
+
+Parameters
+----------
+image       : BGR numpy array
+kernel_size : morphological kernel size (0 = auto)
+coarse_pass : whether to apply the downsample second pass
+
+Returns
+-------
+Corrected BGR numpy array"""
+def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
+    """Automatically detect and remove shadows.
+
+Returns (processed_image, shadow_was_detected)
+If force=True, skips detection and always processes."""
+def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
+class ShadowRemoverApp(tk.Tk):
+    def __init__(self):
+    def _build_ui(self):
+    def _on_kernel_change(self, _):
+    def _on_options_change(self):
+    def _pick_input(self):
+    def _pick_output(self):
+    def _show_preview_before(self, img: np.ndarray):
+    def _show_preview_after(self, img: np.ndarray):
+    def _clear_after_canvas(self):
+    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
+    def _run_threaded(self):
+    def _process(self):
+    def _finish(self, status: str):
+    def _error(self, msg: str):
+    def _save_result(self):
 
 ============================================================
 Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\status.md

@@ -31,6 +31,10 @@ processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
 scaner\scaner.py
+tests\results
+tests\test_images
+tests\conftest.py
+tests\gui_tester.py
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -38,10 +42,8 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
-status.md
+shadow_remove_gui.py
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
@@ -653,6 +655,68 @@ class MainWindow(QMainWindow):
     def _load_exclusions(self) -> Dict[str, List[str]]:
     def _save_exclusions(self):
     def _collect_unchecked(self, item: QStandardItem, result: List[str]):
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
+
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
+============================================================
+Імпорти:
+  import sys
+  import os
+  import pytest
+
+Сутності:
+def test_image_path() -> str:
+def pytest_configure(config):
+def gui_tester():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
+============================================================
+Імпорти:
+  import json
+  import subprocess
+  import time
+  import sys
+  import os
+  import ctypes
+  import threading
+  from pathlib import Path
+  from typing import Optional, Tuple, List, Dict
+
+Сутності:
+class GUITester:
+    def __init__(self, app_path: str, venv_python: Optional[str], debug_mode: bool):
+    def launch_app(self) -> bool:
+    def activate_window(self, title: str, max_retries: int, retry_delay: float) -> bool:
+    def type_text(self, text: str) -> bool:
+    def press_key(self, key: str) -> bool:
+    def click_at(self, x: int, y: int) -> bool:
+    def wait(self, seconds: float) -> None:
+    def screenshot(self, filename: str) -> bool:
+    def compare_images(self, actual_path: str, expected_path: str, tolerance: int) -> bool:
+    def close_app(self) -> None:
+    def load_widget_geometries(self) -> Dict[str, dict]:
+    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
+    def click_widget(self, object_name: str) -> bool:
+    def get_status_text(self) -> Optional[str]:
+    def wait_for_widget(self, object_name: str, timeout: float, poll_interval: float) -> Optional[Dict[str, int]]:
+    def setup_directories(self) -> None:
+    def clear_logs(self) -> None:
+    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
+    def drag_drop_files(self, file_paths: List[str]) -> bool:
+    def click_button_by_text(self, text: str) -> bool:
+    def set_checkbox(self, text: str, checked: bool) -> bool:
+    def _click_relative(self, rel_x: float, rel_y: float, label: str) -> bool:
+    def hotkey(self) -> bool:
+    def drag_slider(self, slider_label: str, value: float) -> bool:
+    def screenshot_window(self, filename: str) -> bool:
+    def get_window_text(self) -> Optional[str]:
+    def list_child_widgets(self) -> List[dict]:
+    def read_logs(self) -> None:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -746,8 +810,6 @@ def _read_drop_files(hdrop_int: int) -> list[str]:
 class DropEventFilter(QAbstractNativeEventFilter):
     def __init__(self, callback):
     def nativeEventFilter(self, event_type, message):
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
@@ -761,6 +823,38 @@ class DropEventFilter(QAbstractNativeEventFilter):
 
 Сутності:
 def main():
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
 
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\status.md
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
+============================================================
+Імпорти:
+  import tkinter
+  from tkinter import ttk, filedialog, messagebox
+  import threading
+  import os
+
+Сутності:
+def _auto_kernel_size(image: np.ndarray) -> int:
+def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
+def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
+def _detect_shadow(image: np.ndarray) -> bool:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
+def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
+def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
+class ShadowRemoverApp(tk.Tk):
+    def __init__(self):
+    def _build_ui(self):
+    def _on_kernel_change(self, _):
+    def _on_options_change(self):
+    def _pick_input(self):
+    def _pick_output(self):
+    def _show_preview_before(self, img: np.ndarray):
+    def _show_preview_after(self, img: np.ndarray):
+    def _clear_after_canvas(self):
+    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
+    def _run_threaded(self):
+    def _process(self):
+    def _finish(self, status: str):
+    def _error(self, msg: str):
+    def _save_result(self):

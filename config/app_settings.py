@@ -29,16 +29,16 @@ DEFAULT_PARTIAL_PERSPECTIVE = False  # PRIO 2: часткова перспект
 DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
 DEFAULT_AUTOFIX_CONTRAST = 0.15
 DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
-DEFAULT_FULL_AUTO_MODE = False
-DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH = 0.3
-DEFAULT_FULL_AUTO_PERSPECTIVE = False
-DEFAULT_FULL_AUTO_HDR_ENABLED = True
-DEFAULT_FULL_AUTO_DEFAULT_SHARPEN = 0.4
-DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT = 0.0
-DEFAULT_FULL_AUTO_CONTRAST_MODE = "linear"
-DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST = 0.15
-DEFAULT_FULL_AUTO_BW_BINARY = False
-DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE = "auto"
+
+# Константи для видалення тіней
+DEFAULT_SHADOW_REMOVE_ENABLED = True
+DEFAULT_SHADOW_DETECT_THRESHOLD = 80.0
+DEFAULT_SHADOW_DETECT_RATIO = 0.3
+DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
+
+# Константи для пресетів стратегій
+DEFAULT_PIPELINE_PRESET = "doc_bw"
+DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,hdr,sharpen,grayscale,white_background"
 
 
 def _get_path(path=None):
@@ -82,16 +82,14 @@ def load(path=None) -> dict:
         "autofix_contrast":  cfg.getfloat("processing",  "autofix_contrast",    fallback=DEFAULT_AUTOFIX_CONTRAST),
         "minimize_to_tray":  cfg.getboolean("general",   "minimize_to_tray",    fallback=DEFAULT_MINIMIZE_TO_TRAY),
         "contrast_mode":     cfg.get("processing",       "contrast_mode",       fallback=DEFAULT_CONTRAST_MODE),
-        "full_auto_mode":    cfg.getboolean("processing", "full_auto_mode",    fallback=DEFAULT_FULL_AUTO_MODE),
-        "full_auto_min_gradient_strength": cfg.getfloat("processing", "full_auto_min_gradient_strength", fallback=DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH),
-        "full_auto_perspective": cfg.getboolean("processing", "full_auto_perspective", fallback=DEFAULT_FULL_AUTO_PERSPECTIVE),
-        "full_auto_hdr_enabled": cfg.getboolean("processing", "full_auto_hdr_enabled", fallback=DEFAULT_FULL_AUTO_HDR_ENABLED),
-        "full_auto_default_sharpen": cfg.getfloat("processing", "full_auto_default_sharpen", fallback=DEFAULT_FULL_AUTO_DEFAULT_SHARPEN),
-        "full_auto_shadow_highlight_strength": cfg.getfloat("processing", "full_auto_shadow_highlight", fallback=DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT),
-        "full_auto_contrast_mode": cfg.get("processing", "full_auto_contrast_mode", fallback=DEFAULT_FULL_AUTO_CONTRAST_MODE),
-        "full_auto_autofix_contrast": cfg.getfloat("processing", "full_auto_autofix_contrast", fallback=DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST),
-        "full_auto_bw_binary": cfg.getboolean("processing", "full_auto_bw_binary", fallback=DEFAULT_FULL_AUTO_BW_BINARY),
-        "full_auto_output_color_mode": cfg.get("processing", "full_auto_output_color_mode", fallback=DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE),
+        # Видалення тіней
+        "shadow_remove_enabled":     cfg.getboolean("processing", "shadow_remove_enabled",     fallback=DEFAULT_SHADOW_REMOVE_ENABLED),
+        "shadow_detect_threshold":   cfg.getfloat("processing",   "shadow_detect_threshold",   fallback=DEFAULT_SHADOW_DETECT_THRESHOLD),
+        "shadow_detect_ratio":       cfg.getfloat("processing",   "shadow_detect_ratio",       fallback=DEFAULT_SHADOW_DETECT_RATIO),
+        "shadow_coarse_blend_color": cfg.getfloat("processing",   "shadow_coarse_blend_color", fallback=DEFAULT_SHADOW_COARSE_BLEND_COLOR),
+        # Пресети стратегій
+        "pipeline_preset":        cfg.get("processing", "pipeline_preset",        fallback=DEFAULT_PIPELINE_PRESET),
+        "pipeline_steps_enabled": cfg.get("processing", "pipeline_steps_enabled", fallback=DEFAULT_PIPELINE_STEPS_ENABLED),
     }
 
 
@@ -136,17 +134,13 @@ def save(settings: dict, path=None):
     }
     cfg["processing"]["autofix_contrast"] = str(settings.get("autofix_contrast", DEFAULT_AUTOFIX_CONTRAST))
     cfg["processing"]["contrast_mode"] = settings.get("contrast_mode", DEFAULT_CONTRAST_MODE)
-    cfg["processing"]["full_auto_mode"] = str(settings.get("full_auto_mode", DEFAULT_FULL_AUTO_MODE)).lower()
-    cfg["processing"]["full_auto_min_gradient_strength"] = str(settings.get("full_auto_min_gradient_strength", DEFAULT_FULL_AUTO_MIN_GRADIENT_STRENGTH))
-    cfg["processing"]["full_auto_perspective"] = str(settings.get("full_auto_perspective", DEFAULT_FULL_AUTO_PERSPECTIVE)).lower()
-    cfg["processing"]["full_auto_hdr_enabled"] = str(settings.get("full_auto_hdr_enabled", DEFAULT_FULL_AUTO_HDR_ENABLED)).lower()
-    cfg["processing"]["full_auto_default_sharpen"] = str(settings.get("full_auto_default_sharpen", DEFAULT_FULL_AUTO_DEFAULT_SHARPEN))
-    cfg["processing"]["full_auto_shadow_highlight"] = str(settings.get("full_auto_shadow_highlight_strength", DEFAULT_FULL_AUTO_SHADOW_HIGHLIGHT))
-    cfg["processing"]["full_auto_contrast_mode"] = settings.get("full_auto_contrast_mode", DEFAULT_FULL_AUTO_CONTRAST_MODE)
-    cfg["processing"]["full_auto_autofix_contrast"] = str(settings.get("full_auto_autofix_contrast", DEFAULT_FULL_AUTO_AUTOFIX_CONTRAST))
-    cfg["processing"]["full_auto_bw_binary"] = str(settings.get("full_auto_bw_binary", DEFAULT_FULL_AUTO_BW_BINARY)).lower()
-    cfg["processing"]["full_auto_output_color_mode"] = settings.get("full_auto_output_color_mode", DEFAULT_FULL_AUTO_OUTPUT_COLOR_MODE)
+    cfg["processing"]["shadow_remove_enabled"] = str(settings.get("shadow_remove_enabled", DEFAULT_SHADOW_REMOVE_ENABLED)).lower()
+    cfg["processing"]["shadow_detect_threshold"] = str(settings.get("shadow_detect_threshold", DEFAULT_SHADOW_DETECT_THRESHOLD))
+    cfg["processing"]["shadow_detect_ratio"] = str(settings.get("shadow_detect_ratio", DEFAULT_SHADOW_DETECT_RATIO))
+    cfg["processing"]["shadow_coarse_blend_color"] = str(settings.get("shadow_coarse_blend_color", DEFAULT_SHADOW_COARSE_BLEND_COLOR))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
+    cfg["processing"]["pipeline_preset"]        = settings.get("pipeline_preset",        DEFAULT_PIPELINE_PRESET)
+    cfg["processing"]["pipeline_steps_enabled"] = settings.get("pipeline_steps_enabled", DEFAULT_PIPELINE_STEPS_ENABLED)
 
     target = _get_path(path)
     os.makedirs(os.path.dirname(target), exist_ok=True)

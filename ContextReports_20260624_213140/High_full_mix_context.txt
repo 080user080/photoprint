@@ -31,6 +31,12 @@ processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
 scaner\scaner.py
+tests\results
+tests\test_images
+tests\README.md
+tests\conftest.py
+tests\gui_tester.py
+tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -41,6 +47,7 @@ utils\win_drop.py
 README.md
 main.py
 requirements.txt
+shadow_remove_gui.py
 status.md
 
 ============================================================
@@ -7073,6 +7080,757 @@ if __name__ == "__main__":
     window.show()
     sys.exit(app.exec())
 ```
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
+
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
+
+
+============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
+============================================================
+# Автоматизований тестувальник GUI для PhotoPrint
+
+Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
+
+## Структура
+
+```
+tests/
+├── gui_tester.py          # Ядро тестувальника (GUITester клас)
+├── requirements.txt       # Залежності для тестів
+├── README.md             # Цей файл
+├── scenarios/            # Сценарії тестів
+│   ├── test_autofix_toggle.py
+│   └── test_perspective_auto.py
+├── test_images/          # Тестові зображення
+├── expected/             # Очікувані результати
+├── results/              # Результати тестів (скріншоти)
+└── logs/                 # Логи додатка
+```
+
+## Встановлення
+
+1. Встановіть залежності:
+```bash
+pip install -r tests/requirements.txt
+```
+
+## Використання
+
+### Запуск окремого тесту
+
+```bash
+python tests/scenarios/test_autofix_toggle.py
+python tests/scenarios/test_perspective_auto.py
+```
+
+### Створення нового сценарію
+
+1. Створіть новий файл в `tests/scenarios/`
+2. Імпортуйте GUITester:
+```python
+from tests.gui_tester import GUITester
+```
+
+3. Створіть функцію тесту:
+```python
+def test_my_feature():
+    tester = GUITester("gui/main.py")
+    tester.setup_directories()
+    tester.launch_app()
+    tester.wait(3)
+    tester.activate_window(title="PhotoPrint")
+    # Ваші дії...
+    tester.close_app()
+    return True
+```
+
+## GUITester API
+
+### Методи
+
+- `launch_app()` - Запускає GUI додаток через subprocess
+- `activate_window(title)` - Активує вікно за назвою
+- `type_text(text)` - Вставляє текст в активне вікно
+- `press_key(key)` - Натискає клавішу
+- `click_at(x, y)` - Клікає мишкою по координатах
+- `wait(seconds)` - Чекає заданий час
+- `screenshot(filename)` - Зберігає скріншот вікна
+- `compare_images(actual, expected, tolerance)` - Порівнює зображення
+- `close_app()` - Закриває GUI додаток
+- `setup_directories()` - Створює необхідні директорії
+- `clear_logs()` - Очищає логи перед тестом
+- `read_logs()` - Читає логи після тесту
+
+## TODO
+
+- [ ] Реалізувати завантаження зображень через drag & drop
+- [ ] Реалізувати перемикання елементів через координати
+- [ ] Додати більше сценаріїв тестів
+- [ ] Інтеграція з pytest
+- [ ] CI/CD інтеграція
+
+## Примітки
+
+- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
+- Не залежить від внутрішньої структури GUI
+- Працює як реальний користувач
+- Потрібно щоб GUI було відкрито і видимим під час тестів
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
+============================================================
+```python
+"""
+conftest — додає шлях до кореня проєкту для імпорту processing/* та core/*.
+"""
+import sys
+import os
+import pytest
+
+# Додаємо корінь photoprint-main до sys.path
+_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+
+@pytest.fixture
+def test_image_path() -> str:
+    """Повертає шлях до тестового JPG-зображення."""
+    return os.path.join(_project_root, "tests", "test_images", "0 (1).jpg")
+
+
+# Маркер для GUI-тестів, що потребують реальний desktop
+def pytest_configure(config):
+    config.addinivalue_line("markers", "gui: Тести, що потребують реальний desktop з GUI (Windows)")
+
+
+@pytest.fixture
+def gui_tester():
+    """Фікстура для GUITester з desktop-режимом ( реальний Windows desktop)."""
+    from tests.gui_tester import GUITester
+    tester = GUITester("main.py", debug_mode=False)
+    tester.setup_directories()
+    yield tester
+    tester.close_app()
+
+```
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
+============================================================
+```python
+"""Автоматизований тестувальник GUI для PhotoPrint"""
+import json
+import subprocess
+import time
+import sys
+import os
+import ctypes
+import threading
+from pathlib import Path
+from typing import Optional, Tuple, List, Dict
+
+
+class GUITester:
+    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
+
+    # Файли для зберігання геометрії віджетів
+    WIDGETS_DEBUG_JSON = Path("tests/results/widgets_debug.json")
+
+    def __init__(self, app_path: str, venv_python: Optional[str] = None,
+                 debug_mode: bool = False):
+        self.app_path = app_path  # шлях до скрипта запуску GUI
+        self.venv_python = venv_python  # шлях до python у venv (опціонально)
+        self.process: Optional[subprocess.Popen] = None  # subprocess process
+        self.output_thread: Optional[threading.Thread] = None  # потік для читання виводу
+        self.test_images_dir = Path("tests/test_images")
+        self.expected_dir = Path("tests/expected")
+        self.results_dir = Path("tests/results")
+        self.logs_dir = Path("tests/logs")
+        self._hwnd: Optional[int] = None  # дескриптор вікна
+        self.debug_mode = debug_mode
+        self._widget_cache: Optional[Dict[str, dict]] = None  # кеш геометрії віджетів
+
+    def launch_app(self) -> bool:
+        """Запускає GUI додаток через subprocess"""
+        python = self.venv_python or sys.executable
+        try:
+            env = os.environ.copy()
+            if self.debug_mode:
+                env["PHOTOPRINT_DEBUG_WIDGETS"] = "1"
+            self.process = subprocess.Popen(
+                [python, self.app_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                cwd=str(Path(self.app_path).parent),
+                env=env,
+            )
+
+            # Читання виводу в окремому потоці
+            def read_output():
+                for line in self.process.stdout:
+                    try:
+                        if line.strip():
+                            print(f"[GUI] {line}", end='')
+                    except UnicodeDecodeError:
+                        pass  # Пропускаємо помилки кодування
+
+            self.output_thread = threading.Thread(target=read_output, daemon=True)
+            self.output_thread.start()
+            print(f"[OK] Додаток запущено: {self.app_path}")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Помилка запуску додатка: {e}")
+            return False
+
+    def activate_window(self, title: str, max_retries: int = 5, retry_delay: float = 1.0) -> bool:
+        """Активує вікно за назвою (через Windows API) з повторними спробами"""
+        try:
+            import win32gui
+            import win32con
+
+            for attempt in range(max_retries):
+                def callback(hwnd, hwnd_list):
+                    if win32gui.IsWindowVisible(hwnd) and title in win32gui.GetWindowText(hwnd):
+                        hwnd_list.append(hwnd)
+                    return True
+
+                hwnd_list = []
+                win32gui.EnumWindows(callback, hwnd_list)
+
+                if hwnd_list:
+                    self._hwnd = hwnd_list[0]
+                    win32gui.SetForegroundWindow(self._hwnd)
+                    win32gui.ShowWindow(self._hwnd, win32con.SW_RESTORE)
+                    print(f"[OK] Вікно активовано: {title} (hwnd={self._hwnd})")
+                    return True
+                else:
+                    if attempt < max_retries - 1:
+                        print(f"[RETRY] Вікно '{title}' не знайдено, спроба {attempt+1}/{max_retries}...")
+                        time.sleep(retry_delay)
+
+            print(f"[ERROR] Вікно не знайдено після {max_retries} спроб: {title}")
+            return False
+        except ImportError:
+            print("[ERROR] Встановіть pywin32: pip install pywin32")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка активації вікна: {e}")
+            return False
+
+    def type_text(self, text: str) -> bool:
+        """Вставляє текст в активне вікно"""
+        try:
+            import pyautogui
+            pyautogui.write(text, interval=0.01)
+            print(f"[OK] Текст вставлено: {text}")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка вставки тексту: {e}")
+            return False
+
+    def press_key(self, key: str) -> bool:
+        """Натискає клавішу"""
+        try:
+            import pyautogui
+            pyautogui.press(key)
+            print(f"[OK] Клавіша натиснута: {key}")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка натискання клавіші: {e}")
+            return False
+
+    def click_at(self, x: int, y: int) -> bool:
+        """Клікає мишкою по координатах"""
+        try:
+            import pyautogui
+            pyautogui.click(x, y)
+            print(f"[OK] Клік виконано: ({x}, {y})")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка кліку: {e}")
+            return False
+
+    def wait(self, seconds: float) -> None:
+        """Чекає заданий час"""
+        print(f"[WAIT] Зачекайте {seconds} секунд...")
+        time.sleep(seconds)
+
+    def screenshot(self, filename: str) -> bool:
+        """Зберігає скріншот вікна"""
+        try:
+            import pyautogui
+            screenshot = pyautogui.screenshot()
+            screenshot.save(filename)
+            print(f"[OK] Скріншот збережено: {filename}")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка скріншоту: {e}")
+            return False
+
+    def compare_images(self, actual_path: str, expected_path: str, tolerance: int = 5) -> bool:
+        """Порівнює два зображення через OpenCV"""
+        try:
+            import cv2
+            import numpy as np
+
+            img1 = cv2.imread(str(actual_path))
+            img2 = cv2.imread(str(expected_path))
+
+            if img1 is None or img2 is None:
+                print(f"[ERROR] Не вдалося завантажити зображення")
+                return False
+
+            # Перевіряємо розміри
+            if img1.shape != img2.shape:
+                print(f"[ERROR] Розміри зображень не співпадають")
+                return False
+
+            # Порівнюємо пікселі з допуском
+            diff = np.abs(img1.astype(int) - img2.astype(int))
+            max_diff = np.max(diff)
+
+            if max_diff <= tolerance:
+                print(f"[OK] Зображення співпадають (max diff: {max_diff})")
+                return True
+            else:
+                print(f"[ERROR] Зображення не співпадають (max diff: {max_diff})")
+                return False
+
+        except ImportError:
+            print("[ERROR] Встановіть opencv-python: pip install opencv-python")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка порівняння: {e}")
+            return False
+
+    def close_app(self) -> None:
+        """Закриває GUI додаток"""
+        if self.process:
+            print("[CLOSE] Закриття програми...")
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        self._widget_cache = None
+
+    # ------------------------------------------------------------------
+    # Методи для роботи з objectName віджетів
+    # ------------------------------------------------------------------
+
+    def load_widget_geometries(self) -> Dict[str, dict]:
+        """Завантажує геометрію віджетів з JSON-файлу (debug dump)."""
+        if self._widget_cache is not None:
+            return self._widget_cache
+        json_path = self.WIDGETS_DEBUG_JSON
+        if not json_path.exists():
+            print(f"[WARN] Файл геометрії віджетів не знайдено: {json_path}")
+            print("[INFO] Запустіть додаток з PHOTOPRINT_DEBUG_WIDGETS=1")
+            self._widget_cache = {}
+            return self._widget_cache
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                self._widget_cache = json.load(f)
+            print(f"[OK] Завантажено геометрію {len(self._widget_cache)} віджетів")
+            return self._widget_cache
+        except Exception as e:
+            print(f"[ERROR] Помилка читання JSON віджетів: {e}")
+            self._widget_cache = {}
+            return self._widget_cache
+
+    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
+        """Повертає глобальну геометрію віджета за objectName."""
+        widgets = self.load_widget_geometries()
+        if object_name not in widgets:
+            print(f"[WARN] Віджет з objectName='{object_name}' не знайдено")
+            print(f"[INFO] Доступні: {', '.join(sorted(widgets.keys()))}")
+            return None
+        return widgets[object_name]
+
+    def click_widget(self, object_name: str) -> bool:
+        """Клікає по центру віджета, знайденого за objectName."""
+        geom = self.get_widget_geometry(object_name)
+        if geom is None:
+            return False
+        cx = geom["x"] + geom["width"] // 2
+        cy = geom["y"] + geom["height"] // 2
+        try:
+            import pyautogui
+            pyautogui.click(cx, cy)
+            print(f"[OK] Клік по віджету '{object_name}': ({cx}, {cy})")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка кліку по віджету '{object_name}': {e}")
+            return False
+
+    def get_status_text(self) -> Optional[str]:
+        """Повертає текст статусного рядка (objectName='status_label')."""
+        # Не використовуємо get_widget_geometry бо текст не зберігається в JSON
+        # Використовуємо win32gui для пошуку тексту вікна
+        return None
+
+    def wait_for_widget(self, object_name: str, timeout: float = 10.0,
+                        poll_interval: float = 0.5) -> Optional[Dict[str, int]]:
+        """Чекає поки віджет з'явиться у debug dump."""
+        start = time.time()
+        self._widget_cache = None  # скидаємо кеш щоб перечитати
+        while time.time() - start < timeout:
+            geom = self.get_widget_geometry(object_name)
+            if geom is not None:
+                return geom
+            time.sleep(poll_interval)
+        print(f"[WARN] Віджет '{object_name}' не з'явився за {timeout}с")
+        return None
+
+    def setup_directories(self) -> None:
+        """Створює необхідні директорії"""
+        self.test_images_dir.mkdir(parents=True, exist_ok=True)
+        self.expected_dir.mkdir(parents=True, exist_ok=True)
+        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        print("[OK] Директорії створено")
+
+    def clear_logs(self) -> None:
+        """Очищає логи перед тестом"""
+        if self.logs_dir.exists():
+            for log_file in self.logs_dir.iterdir():
+                try:
+                    log_file.unlink()
+                    print(f"[OK] Видалено лог: {log_file.name}")
+                except Exception as e:
+                    print(f"[ERROR] Помилка видалення {log_file.name}: {e}")
+
+    # ------------------------------------------------------------------
+    # Розширені методи для взаємодії з GUI
+    # ------------------------------------------------------------------
+
+    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Повертає координати вікна (left, top, right, bottom)"""
+        try:
+            import win32gui
+            if self._hwnd:
+                rect = win32gui.GetWindowRect(self._hwnd)
+                print(f"[OK] Координати вікна: {rect}")
+                return rect
+            else:
+                print("[ERROR] Вікно не активовано (hwnd=None)")
+                return None
+        except Exception as e:
+            print(f"[ERROR] Помилка отримання координат: {e}")
+            return None
+
+    def drag_drop_files(self, file_paths: List[str]) -> bool:
+        """Імітує Drag & Drop файлів у вікно додатка через WM_DROPFILES"""
+        try:
+            import win32gui
+            import win32con
+            import win32api
+
+            if not self._hwnd:
+                print("[ERROR] Вікно не активовано. Спочатку викличте activate_window()")
+                return False
+
+            # Створюємо DROPFILES структуру
+            # Формат: DROPFILES struct + список шляхів (double-null terminated)
+            import struct
+
+            # Кодуємо шляхи в wide string з подвійним null-термінатором
+            paths_bytes = b""
+            for p in file_paths:
+                paths_bytes += p.encode("utf-16-le") + b"\x00\x00"
+            paths_bytes += b"\x00\x00"  # подвійний null-термінатор
+
+            # DROPFILES структура: 20 байт
+            # pt (POINT x,y) = 8 байт, fNC = 4, fWide = 4
+            offset_to_paths = 20  # sizeof(DROPFILES)
+            dropfiles = struct.pack(
+                "IIIii",
+                offset_to_paths,  # offset to file list
+                0,                 # pt.x (drop point - не важливо)
+                0,                 # pt.y
+                0,                 # fNC (не клієнтська область)
+                1                  # fWide = 1 (Unicode)
+            )
+
+            data = dropfiles + paths_bytes
+
+            # Виділяємо глобальну пам'ять
+            GMEM_MOVEABLE = 0x0002
+            hGlobal = win32api.GlobalAlloc(GMEM_MOVEABLE, len(data))
+            if not hGlobal:
+                print("[ERROR] Не вдалося виділити пам'ять для DROPFILES")
+                return False
+
+            pGlobal = win32api.GlobalLock(hGlobal)
+            if not pGlobal:
+                print("[ERROR] Не вдалося заблокувати пам'ять")
+                win32api.GlobalFree(hGlobal)
+                return False
+
+            # Копіюємо дані
+            import ctypes
+            ctypes.memmove(pGlobal, data, len(data))
+            win32api.GlobalUnlock(hGlobal)
+
+            # Відправляємо WM_DROPFILES
+            WM_DROPFILES = 0x0233
+            win32gui.PostMessage(self._hwnd, WM_DROPFILES, hGlobal, 0)
+
+            print(f"[OK] Drag & Drop виконано: {len(file_paths)} файл(ів)")
+            return True
+
+        except ImportError:
+            print("[ERROR] Встановіть pywin32: pip install pywin32")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка Drag & Drop: {e}")
+            return False
+
+    def click_button_by_text(self, text: str) -> bool:
+        """Знаходить кнопку за текстом і клікає на неї (через розрахунок координат для PyQt6)"""
+        # Маппінг кнопок до їх позицій (відсотки від розміру вікна)
+        # Layout: кнопки в ряд на ~70% висоти вікна, починаючи з ~25% ширини
+        # Порядок: Auto Fix, Друк, Пропустити, Друкувати все, Зберегти, Налаштування
+        button_map = {
+            "auto fix":      (0.28, 0.70),
+            "друк":          (0.38, 0.70),
+            "пропустити":    (0.48, 0.70),
+            "друкувати все": (0.58, 0.70),
+            "зберегти":      (0.68, 0.70),
+            "налаштування":  (0.78, 0.70),
+            # Кнопки управління чергою (ліва панель)
+            "додати файли":  (0.07, 0.88),
+            "додати папку":  (0.07, 0.92),
+            "очистити чергу": (0.07, 0.96),
+            # Кнопки перспективи та різне (нижній ряд під слайдерами)
+            "авто-перспектива":   (0.32, 0.88),
+            "ручна перспектива":  (0.46, 0.88),
+            "скинути перспективу": (0.60, 0.88),
+            "скинути слайдери":   (0.74, 0.88),
+        }
+
+        key = text.lower().strip()
+        if key not in button_map:
+            print(f"[ERROR] Невідома кнопка: {text}")
+            print(f"[INFO] Доступні кнопки: {', '.join(button_map.keys())}")
+            return False
+
+        rel_x, rel_y = button_map[key]
+        return self._click_relative(rel_x, rel_y, label=f"кнопка '{text}'")
+
+    def set_checkbox(self, text: str, checked: bool = True) -> bool:
+        """Знаходить чекбокс за текстом і встановлює його стан (через координати для PyQt6)"""
+        checkbox_map = {
+            "чорно-білий": (0.27, 0.88),
+            "ч/б":         (0.27, 0.88),
+        }
+
+        key = text.lower().strip()
+        if key not in checkbox_map:
+            print(f"[ERROR] Невідомий чекбокс: {text}")
+            return False
+
+        rel_x, rel_y = checkbox_map[key]
+        return self._click_relative(rel_x, rel_y, label=f"чекбокс '{text}'")
+
+    def _click_relative(self, rel_x: float, rel_y: float, label: str = "") -> bool:
+        """Клікає по відносних координатах вікна (0.0-1.0)"""
+        rect = self.find_window_rect()
+        if not rect:
+            return False
+
+        left, top, right, bottom = rect
+        win_width = right - left
+        win_height = bottom - top
+
+        abs_x = int(left + win_width * rel_x)
+        abs_y = int(top + win_height * rel_y)
+
+        try:
+            import pyautogui
+            pyautogui.click(abs_x, abs_y)
+            desc = f" ({label})" if label else ""
+            print(f"[OK] Клік по відносних координатах{desc}: ({rel_x:.2f}, {rel_y:.2f}) -> ({abs_x}, {abs_y})")
+            return True
+        except Exception as e:
+            print(f"[ERROR] Помилка кліку: {e}")
+            return False
+
+    def hotkey(self, *keys: str) -> bool:
+        """Натискає комбінацію клавіш (наприклад hotkey('ctrl', 's'))"""
+        try:
+            import pyautogui
+            pyautogui.hotkey(*keys)
+            print(f"[OK] Комбінація клавіш: {'+'.join(keys)}")
+            return True
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка комбінації клавіш: {e}")
+            return False
+
+    def drag_slider(self, slider_label: str, value: float) -> bool:
+        """Встановлює значення слайдера за назвою (через відносні координати вікна)"""
+        # Маппінг слайдерів до позицій (rel_y, row, start_x_fraction)
+        # Ряд 1 (y~0.78): Тіні, Яскравість, Контраст
+        # Ряд 2 (y~0.82): Різкість, HDR
+        slider_map = {
+            "тіні":        {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
+            "тени":        {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
+            "shadow":      {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
+            "яскравість":  {"y": 0.78, "x_start": 0.38, "x_end": 0.52},
+            "brightness":  {"y": 0.78, "x_start": 0.38, "x_end": 0.52},
+            "контраст":    {"y": 0.78, "x_start": 0.54, "x_end": 0.68},
+            "contrast":    {"y": 0.78, "x_start": 0.54, "x_end": 0.68},
+            "різкість":    {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
+            "різкість":   {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
+            "sharpness":   {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
+            "sharpen":     {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
+            "hdr":         {"y": 0.82, "x_start": 0.38, "x_end": 0.52},
+        }
+
+        key = slider_label.lower().strip()
+        if key not in slider_map:
+            print(f"[ERROR] Невідомий слайдер: {slider_label}")
+            print(f"[INFO] Доступні слайдери: {', '.join(set(slider_map.keys()))}")
+            return False
+
+        info = slider_map[key]
+        # Нормалізуємо value до 0.0-1.0 діапазону слайдера
+        # Для слайдерів з від'ємними значеннями (яскравість, контраст) - value 0.5 = нейтральне
+        rel_x = info["x_start"] + (info["x_end"] - info["x_start"]) * value
+        rel_y = info["y"]
+
+        return self._click_relative(rel_x, rel_y, label=f"слайдер '{slider_label}'={value}")
+
+    def screenshot_window(self, filename: str) -> bool:
+        """Зберігає скріншот тільки вікна додатка"""
+        try:
+            import win32gui
+            import pyautogui
+            from PIL import Image
+
+            if not self._hwnd:
+                print("[ERROR] Вікно не активовано")
+                return False
+
+            rect = win32gui.GetWindowRect(self._hwnd)
+            left, top, right, bottom = rect
+            width = right - left
+            height = bottom - top
+
+            # Робимо повний скріншот і обрізаємо
+            screenshot = pyautogui.screenshot()
+            cropped = screenshot.crop((left, top, right, bottom))
+            cropped.save(filename)
+            print(f"[OK] Скріншот вікна збережено: {filename} ({width}x{height})")
+            return True
+
+        except ImportError:
+            print("[ERROR] Встановіть pyautogui, Pillow, pywin32")
+            return False
+        except Exception as e:
+            print(f"[ERROR] Помилка скріншоту вікна: {e}")
+            return False
+
+    def get_window_text(self) -> Optional[str]:
+        """Повертає заголовок вікна"""
+        try:
+            import win32gui
+            if self._hwnd:
+                return win32gui.GetWindowText(self._hwnd)
+            return None
+        except Exception:
+            return None
+
+    def list_child_widgets(self) -> List[dict]:
+        """Перелічує всі дочірні віджети вікна (для дебагу)"""
+        try:
+            import win32gui
+            widgets = []
+
+            def enum_child_callback(hwnd, _):
+                cls = win32gui.GetClassName(hwnd)
+                text = win32gui.GetWindowText(hwnd)
+                rect = win32gui.GetWindowRect(hwnd)
+                widgets.append({
+                    "hwnd": hwnd,
+                    "class": cls,
+                    "text": text,
+                    "rect": rect,
+                })
+                return True
+
+            if self._hwnd:
+                win32gui.EnumChildWindows(self._hwnd, enum_child_callback, None)
+
+            print(f"[OK] Знайдено {len(widgets)} дочірніх віджетів")
+            for w in widgets:
+                print(f"  hwnd={w['hwnd']} cls={w['class']} text='{w['text']}' rect={w['rect']}")
+
+            return widgets
+
+        except ImportError:
+            print("[ERROR] Встановіть pywin32: pip install pywin32")
+            return []
+        except Exception as e:
+            print(f"[ERROR] Помилка переліку віджетів: {e}")
+            return []
+
+    def read_logs(self) -> None:
+        """Читає логи після тесту"""
+        print("\n" + "=" * 60)
+        print("ЛОГИ:")
+        print("=" * 60)
+
+        if self.logs_dir.exists():
+            for log_file in self.logs_dir.iterdir():
+                print(f"\n[FILE] {log_file.name}:")
+                print("-" * 40)
+                try:
+                    content = log_file.read_text(encoding='utf-8')
+                    if content:
+                        print(content)
+                    else:
+                        print("(пустий)")
+                except Exception as e:
+                    print(f"[ERROR] Помилка читання {log_file.name}: {e}")
+        else:
+            print("[ERROR] Папка логів не існує")
+
+```
+
+============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
+============================================================
+pyautogui>=0.9.54
+pywin32>=306
+opencv-python>=4.8.0
+pytest>=7.4.0
+
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -8103,6 +8861,546 @@ Pillow>=10.0
 pillow-heif>=0.13
 PyQt6>=6.5
 rawpy>=0.27
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
+============================================================
+```python
+"""
+shadow_remove_gui.py
+Standalone GUI for shadow removal from document images.
+Dependencies: opencv-python, numpy, Pillow (pip install opencv-python numpy Pillow)
+"""
+
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+import threading
+import os
+
+try:
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageTk
+except ImportError as e:
+    import sys
+    print(f"Missing dependency: {e}")
+    print("Install with: pip install opencv-python numpy Pillow")
+    sys.exit(1)
+
+
+# ─────────────────────────────────────────────
+#  Shadow Removal Algorithm
+# ─────────────────────────────────────────────
+
+COARSE_TARGET_SIDE = 48
+PHOTO_COLOR_STD_THRESHOLD = 52   # raised from 30 — less paranoid about colour docs
+HSV_SATURATION_RATIO = 0.20
+LAPLACIAN_BLUR_THRESHOLD = 10
+RANGE_L_THRESHOLD = 210
+
+
+def _auto_kernel_size(image: np.ndarray) -> int:
+    h, w = image.shape[:2]
+    short = min(h, w)
+    k = int(short * 0.15)
+    if k % 2 == 0:
+        k += 1
+    return max(51, min(k, 301))
+
+
+def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+    )
+    background = cv2.morphologyEx(gray, cv2.MORPH_CLOSE, kernel)
+    return background
+
+
+def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
+    h, w = gray.shape
+    scale = COARSE_TARGET_SIDE / min(h, w)
+    small = cv2.resize(gray, (max(1, int(w * scale)), max(1, int(h * scale))),
+                       interpolation=cv2.INTER_AREA)
+    coarse = cv2.resize(small, (w, h), interpolation=cv2.INTER_LINEAR)
+    return coarse
+
+
+def _local_std_map(gray: np.ndarray, ksize: int = 15) -> np.ndarray:
+    gray_f = gray.astype(np.float32)
+    mean = cv2.blur(gray_f, (ksize, ksize))
+    mean_sq = cv2.blur(gray_f ** 2, (ksize, ksize))
+    variance = np.maximum(mean_sq - mean ** 2, 0)
+    return np.sqrt(variance)
+
+
+def _detect_shadow(image: np.ndarray) -> bool:
+    """Returns True if shadow is detected and removal should proceed."""
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+
+    std_a = float(np.std(a_ch))
+    std_b = float(np.std(b_ch))
+    if std_a > PHOTO_COLOR_STD_THRESHOLD or std_b > PHOTO_COLOR_STD_THRESHOLD:
+        return False  # likely a colour photo
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    saturated_ratio = float(np.mean(hsv[:, :, 1] > 50))
+    if saturated_ratio > HSV_SATURATION_RATIO:
+        return False  # high-saturation content (passport guilloché, etc.)
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    if laplacian_var < LAPLACIAN_BLUR_THRESHOLD:
+        return False  # too blurry to process
+
+    range_l = int(l_ch.max()) - int(l_ch.min())
+    if range_l > RANGE_L_THRESHOLD:
+        return False  # extreme dynamic range — likely not a simple shadow
+
+    std_map = _local_std_map(gray)
+    gradient_score = float(np.mean(std_map))
+    return gradient_score > 3.0
+
+
+def remove_shadow(image: np.ndarray,
+                  kernel_size: int = 0,
+                  coarse_pass: bool = True) -> np.ndarray:
+    """
+    Remove gradient shadows from a document image.
+
+    Parameters
+    ----------
+    image       : BGR numpy array
+    kernel_size : morphological kernel size (0 = auto)
+    coarse_pass : whether to apply the downsample second pass
+
+    Returns
+    -------
+    Corrected BGR numpy array
+    """
+    if kernel_size == 0:
+        kernel_size = _auto_kernel_size(image)
+
+    channels = cv2.split(image)
+    result_channels = []
+
+    for ch in channels:
+        # Pass 1 – morphological closing background
+        bg1 = _create_background_model(ch, kernel_size)
+        normed = cv2.divide(ch, bg1, scale=255)
+
+        if coarse_pass:
+            # Pass 2 – coarse downsample background
+            bg2 = _create_coarse_background(normed)
+            bg2 = np.clip(bg2, 1, 255).astype(np.uint8)
+            normed = cv2.divide(normed, bg2, scale=255)
+
+        result_channels.append(normed)
+
+    return cv2.merge(result_channels)
+
+
+def auto_remove_shadow(image: np.ndarray,
+                       force: bool = False) -> tuple[np.ndarray, bool]:
+    """
+    Automatically detect and remove shadows.
+
+    Returns (processed_image, shadow_was_detected)
+    If force=True, skips detection and always processes.
+    """
+    if force or _detect_shadow(image):
+        return remove_shadow(image), True
+    return image.copy(), False
+
+
+# ─────────────────────────────────────────────
+#  GUI
+# ─────────────────────────────────────────────
+
+PREVIEW_MAX = 520   # max pixels for preview panel
+
+
+def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
+    h, w = img_bgr.shape[:2]
+    scale = min(PREVIEW_MAX / w, PREVIEW_MAX / h, 1.0)
+    if scale < 1.0:
+        img_bgr = cv2.resize(img_bgr,
+                             (int(w * scale), int(h * scale)),
+                             interpolation=cv2.INTER_AREA)
+    rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+    return ImageTk.PhotoImage(Image.fromarray(rgb))
+
+
+class ShadowRemoverApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Shadow Remover")
+        self.resizable(False, False)
+        self.configure(bg="#1e1e2e")
+
+        self._src_path: str | None = None
+        self._src_img: np.ndarray | None = None
+        self._result_img: np.ndarray | None = None
+
+        # Keep photo references alive
+        self._tk_src: ImageTk.PhotoImage | None = None
+        self._tk_res: ImageTk.PhotoImage | None = None
+
+        self._build_ui()
+
+    # ── UI construction ──────────────────────────────────────────────
+
+    def _build_ui(self):
+        PAD = 12
+        BG = "#1e1e2e"
+        PANEL = "#2a2a3e"
+        ACC = "#7c6af7"
+        FG = "#cdd6f4"
+        ENTRY_BG = "#313244"
+
+        style = ttk.Style(self)
+        style.theme_use("clam")
+        style.configure("TFrame", background=BG)
+        style.configure("Panel.TFrame", background=PANEL)
+        style.configure("TLabel", background=BG, foreground=FG,
+                        font=("Segoe UI", 10))
+        style.configure("Title.TLabel", background=BG, foreground=FG,
+                        font=("Segoe UI", 13, "bold"))
+        style.configure("Sub.TLabel", background=PANEL, foreground=FG,
+                        font=("Segoe UI", 9, "bold"))
+        style.configure("Status.TLabel", background=BG, foreground="#a6adc8",
+                        font=("Segoe UI", 9))
+        style.configure("Accent.TButton", background=ACC, foreground="#ffffff",
+                        font=("Segoe UI", 10, "bold"), padding=(10, 6))
+        style.map("Accent.TButton",
+                  background=[("active", "#6a58e0"), ("disabled", "#44475a")])
+        style.configure("Ghost.TButton", background=PANEL, foreground=FG,
+                        font=("Segoe UI", 9), padding=(8, 5),
+                        relief="flat", borderwidth=0)
+        style.map("Ghost.TButton",
+                  background=[("active", "#3a3a5c")])
+        style.configure("TCheckbutton", background=BG, foreground=FG,
+                        font=("Segoe UI", 10))
+        style.configure("TScale", background=BG, troughcolor=ENTRY_BG,
+                        sliderlength=18)
+        style.configure("TProgressbar", troughcolor=ENTRY_BG,
+                        background=ACC, thickness=6)
+
+        # ── Top bar ──
+        top = ttk.Frame(self, style="TFrame", padding=(PAD, PAD, PAD, 4))
+        top.grid(row=0, column=0, sticky="ew")
+        ttk.Label(top, text="Shadow Remover", style="Title.TLabel").pack(side="left")
+        ttk.Label(top, text="document shadow correction",
+                  style="Status.TLabel").pack(side="left", padx=8)
+
+        # ── Main area ──
+        main = ttk.Frame(self, style="TFrame", padding=(PAD, 0, PAD, PAD))
+        main.grid(row=1, column=0)
+
+        # Left column – controls
+        left = ttk.Frame(main, style="Panel.TFrame", padding=12)
+        left.grid(row=0, column=0, sticky="ns", padx=(0, PAD))
+
+        # Input section
+        ttk.Label(left, text="ВХІДНИЙ ФАЙЛ", style="Sub.TLabel").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        self._src_var = tk.StringVar(value="не обрано")
+        src_entry = tk.Entry(left, textvariable=self._src_var,
+                             width=32, state="readonly",
+                             bg=ENTRY_BG, fg=FG, relief="flat",
+                             readonlybackground=ENTRY_BG, bd=0,
+                             insertbackground=FG, font=("Segoe UI", 9))
+        src_entry.grid(row=1, column=0, sticky="ew", pady=(0, 2))
+        ttk.Button(left, text="Огляд…", style="Ghost.TButton",
+                   command=self._pick_input).grid(row=1, column=1, padx=(4, 0))
+
+        # Output section
+        ttk.Label(left, text="ВИХІДНИЙ ФАЙЛ", style="Sub.TLabel").grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(12, 4))
+
+        self._dst_var = tk.StringVar(value="не обрано")
+        dst_entry = tk.Entry(left, textvariable=self._dst_var,
+                             width=32, state="readonly",
+                             bg=ENTRY_BG, fg=FG, relief="flat",
+                             readonlybackground=ENTRY_BG, bd=0,
+                             insertbackground=FG, font=("Segoe UI", 9))
+        dst_entry.grid(row=3, column=0, sticky="ew", pady=(0, 2))
+        ttk.Button(left, text="Огляд…", style="Ghost.TButton",
+                   command=self._pick_output).grid(row=3, column=1, padx=(4, 0))
+
+        # Separator
+        ttk.Separator(left, orient="horizontal").grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=14)
+
+        # Options
+        ttk.Label(left, text="НАЛАШТУВАННЯ", style="Sub.TLabel").grid(
+            row=5, column=0, columnspan=2, sticky="w", pady=(0, 8))
+
+        # Mode
+        ttk.Label(left, text="Режим:", background=PANEL, foreground=FG,
+                  font=("Segoe UI", 9)).grid(row=6, column=0, sticky="w")
+        self._mode_var = tk.StringVar(value="auto")
+        mode_frame = ttk.Frame(left, style="Panel.TFrame")
+        mode_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 10))
+        for txt, val in [("Авто", "auto"), ("Завжди", "always"), ("Вимкнено", "off")]:
+            tk.Radiobutton(mode_frame, text=txt, variable=self._mode_var,
+                           value=val, bg=PANEL, fg=FG, selectcolor="#44475a",
+                           activebackground=PANEL, activeforeground=FG,
+                           font=("Segoe UI", 9), bd=0,
+                           command=self._on_options_change).pack(side="left", padx=(0, 8))
+
+        # Kernel
+        ttk.Label(left, text="Ядро морфології (0 = авто):",
+                  background=PANEL, foreground=FG,
+                  font=("Segoe UI", 9)).grid(row=8, column=0, columnspan=2, sticky="w")
+        kernel_row = ttk.Frame(left, style="Panel.TFrame")
+        kernel_row.grid(row=9, column=0, columnspan=2, sticky="ew", pady=(2, 10))
+
+        self._kernel_var = tk.IntVar(value=0)
+        self._kernel_label = ttk.Label(kernel_row, text="0 (авто)",
+                                       background=PANEL, foreground=ACC,
+                                       font=("Segoe UI", 9, "bold"))
+        self._kernel_label.pack(side="right")
+        ttk.Scale(kernel_row, from_=0, to=301, variable=self._kernel_var,
+                  orient="horizontal", length=160,
+                  command=self._on_kernel_change).pack(side="left")
+
+        # Coarse pass
+        self._coarse_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(left, text="Другий прохід (coarse downsample)",
+                       variable=self._coarse_var,
+                       bg=PANEL, fg=FG, selectcolor="#44475a",
+                       activebackground=PANEL, activeforeground=FG,
+                       font=("Segoe UI", 9), bd=0,
+                       command=self._on_options_change).grid(
+            row=10, column=0, columnspan=2, sticky="w", pady=(0, 4))
+
+        # Progress bar
+        self._progress = ttk.Progressbar(left, mode="indeterminate", length=270)
+        self._progress.grid(row=11, column=0, columnspan=2,
+                            sticky="ew", pady=(14, 6))
+
+        # Status
+        self._status_var = tk.StringVar(value="Оберіть вхідний файл")
+        ttk.Label(left, textvariable=self._status_var,
+                  style="Status.TLabel", wraplength=270).grid(
+            row=12, column=0, columnspan=2, sticky="w")
+
+        # Action buttons
+        btn_row = ttk.Frame(left, style="Panel.TFrame")
+        btn_row.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(16, 0))
+
+        self._run_btn = ttk.Button(btn_row, text="▶  Обробити",
+                                   style="Accent.TButton",
+                                   command=self._run_threaded,
+                                   state="disabled")
+        self._run_btn.pack(side="left")
+
+        self._save_btn = ttk.Button(btn_row, text="💾  Зберегти",
+                                    style="Ghost.TButton",
+                                    command=self._save_result,
+                                    state="disabled")
+        self._save_btn.pack(side="left", padx=(8, 0))
+
+        # Right column – previews
+        right = ttk.Frame(main, style="TFrame")
+        right.grid(row=0, column=1, sticky="n")
+
+        preview_top = ttk.Frame(right, style="TFrame")
+        preview_top.pack()
+
+        # Before
+        before_box = ttk.Frame(preview_top, style="Panel.TFrame", padding=8)
+        before_box.grid(row=0, column=0, padx=(0, 6))
+        ttk.Label(before_box, text="ДО", style="Sub.TLabel").pack()
+        self._before_canvas = tk.Canvas(before_box, width=PREVIEW_MAX,
+                                        height=PREVIEW_MAX,
+                                        bg="#181825", highlightthickness=0)
+        self._before_canvas.pack(pady=(4, 0))
+
+        # After
+        after_box = ttk.Frame(preview_top, style="Panel.TFrame", padding=8)
+        after_box.grid(row=0, column=1)
+        ttk.Label(after_box, text="ПІСЛЯ", style="Sub.TLabel").pack()
+        self._after_canvas = tk.Canvas(after_box, width=PREVIEW_MAX,
+                                       height=PREVIEW_MAX,
+                                       bg="#181825", highlightthickness=0)
+        self._after_canvas.pack(pady=(4, 0))
+
+        # Size info
+        self._size_var = tk.StringVar(value="")
+        ttk.Label(right, textvariable=self._size_var,
+                  style="Status.TLabel").pack(pady=(6, 0))
+
+    # ── Callbacks ────────────────────────────────────────────────────
+
+    def _on_kernel_change(self, _=None):
+        v = self._kernel_var.get()
+        # snap to odd
+        if v > 0 and v % 2 == 0:
+            v += 1
+            self._kernel_var.set(v)
+        label = f"{v} (авто)" if v == 0 else str(v)
+        self._kernel_label.config(text=label)
+
+    def _on_options_change(self):
+        pass  # reserved for live preview in future
+
+    def _pick_input(self):
+        path = filedialog.askopenfilename(
+            title="Вхідний файл",
+            filetypes=[("Зображення", "*.jpg *.jpeg *.png *.bmp *.tiff *.tif *.webp"),
+                       ("Всі файли", "*.*")])
+        if not path:
+            return
+        img = cv2.imread(path)
+        if img is None:
+            messagebox.showerror("Помилка", f"Не вдалося відкрити:\n{path}")
+            return
+        self._src_path = path
+        self._src_img = img
+        self._result_img = None
+
+        # Suggest output path
+        base, ext = os.path.splitext(path)
+        self._dst_var.set(f"{base}_no_shadow{ext}")
+
+        short = os.path.basename(path)
+        self._src_var.set(short if len(short) <= 36 else "…" + short[-33:])
+
+        h, w = img.shape[:2]
+        self._size_var.set(f"{w} × {h} px")
+        self._show_preview_before(img)
+        self._clear_after_canvas()
+
+        self._run_btn.config(state="normal")
+        self._save_btn.config(state="disabled")
+        self._status_var.set("Готово до обробки")
+
+    def _pick_output(self):
+        init = self._dst_var.get()
+        if init in ("не обрано", ""):
+            init = None
+        path = filedialog.asksaveasfilename(
+            title="Зберегти як",
+            initialfile=os.path.basename(init) if init else "output.jpg",
+            defaultextension=".jpg",
+            filetypes=[("JPEG", "*.jpg *.jpeg"),
+                       ("PNG", "*.png"),
+                       ("BMP", "*.bmp"),
+                       ("TIFF", "*.tiff *.tif"),
+                       ("Всі файли", "*.*")])
+        if path:
+            self._dst_var.set(path)
+
+    def _show_preview_before(self, img: np.ndarray):
+        self._tk_src = _fit_image_for_preview(img)
+        self._before_canvas.delete("all")
+        self._place_image(self._before_canvas, self._tk_src)
+
+    def _show_preview_after(self, img: np.ndarray):
+        self._tk_res = _fit_image_for_preview(img)
+        self._after_canvas.delete("all")
+        self._place_image(self._after_canvas, self._tk_res)
+
+    def _clear_after_canvas(self):
+        self._after_canvas.delete("all")
+        self._tk_res = None
+
+    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
+        cw, ch = PREVIEW_MAX, PREVIEW_MAX
+        iw, ih = photo.width(), photo.height()
+        canvas.create_image((cw - iw) // 2, (ch - ih) // 2,
+                            anchor="nw", image=photo)
+
+    # ── Processing ───────────────────────────────────────────────────
+
+    def _run_threaded(self):
+        self._run_btn.config(state="disabled")
+        self._save_btn.config(state="disabled")
+        self._progress.start(12)
+        self._status_var.set("Обробка…")
+        thread = threading.Thread(target=self._process, daemon=True)
+        thread.start()
+
+    def _process(self):
+        try:
+            img = self._src_img
+            mode = self._mode_var.get()
+            kernel = self._kernel_var.get()
+            if kernel > 0 and kernel % 2 == 0:
+                kernel += 1
+            coarse = self._coarse_var.get()
+
+            if mode == "off":
+                result, detected = img.copy(), False
+            elif mode == "always":
+                result = remove_shadow(img, kernel_size=kernel, coarse_pass=coarse)
+                detected = True
+            else:  # auto
+                result, detected = auto_remove_shadow(img, force=False)
+                if detected and kernel != 0:
+                    result = remove_shadow(img, kernel_size=kernel, coarse_pass=coarse)
+
+            self._result_img = result
+            status = ("✅ Тіні виявлено та прибрано" if detected
+                      else "ℹ️ Тіней не виявлено (авто режим пропустив)")
+            if mode == "off":
+                status = "⏭ Обробку вимкнено"
+
+            self.after(0, lambda: self._finish(status))
+        except Exception as exc:
+            self.after(0, lambda: self._error(str(exc)))
+
+    def _finish(self, status: str):
+        self._progress.stop()
+        self._status_var.set(status)
+        self._show_preview_after(self._result_img)
+        self._run_btn.config(state="normal")
+        self._save_btn.config(state="normal")
+
+    def _error(self, msg: str):
+        self._progress.stop()
+        self._status_var.set(f"❌ Помилка: {msg}")
+        self._run_btn.config(state="normal")
+        messagebox.showerror("Помилка обробки", msg)
+
+    # ── Saving ───────────────────────────────────────────────────────
+
+    def _save_result(self):
+        if self._result_img is None:
+            messagebox.showwarning("Немає результату", "Спочатку запустіть обробку.")
+            return
+
+        dst = self._dst_var.get()
+        if not dst or dst == "не обрано":
+            self._pick_output()
+            dst = self._dst_var.get()
+        if not dst or dst == "не обрано":
+            return
+
+        ext = os.path.splitext(dst)[1].lower()
+        params = []
+        if ext in (".jpg", ".jpeg"):
+            params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+
+        ok = cv2.imwrite(dst, self._result_img, params)
+        if ok:
+            self._status_var.set(f"✅ Збережено: {os.path.basename(dst)}")
+        else:
+            messagebox.showerror("Помилка", f"Не вдалося зберегти:\n{dst}")
+
+
+# ─────────────────────────────────────────────
+#  Entry point
+# ─────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = ShadowRemoverApp()
+    app.mainloop()
+
+```
 
 ============================================================
 Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\status.md

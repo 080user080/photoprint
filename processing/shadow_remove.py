@@ -113,6 +113,13 @@ COARSE_TARGET_SIDE = 48        # короткостороння thumbnail-роз
 COARSE_BLUR_SIGMA = 2.0        # sigma додаткового згладжування thumbnail'у
 COARSE_DIVIDE_EPSILON = 1.0    # мінус до background щоб уникнути ділення на 0
 
+# Константи для захисту від артефактів чорних точок
+L_MIN_CLAMP = 5                # мінімальне значення L перед діленням щоб уникнути артефактів
+
+# Константи для диференційованої обробки чб vs кольорових документів
+COARSE_BLEND_COLOR = 0.0       # сила другого проходу для кольорових (0 = вимкнено)
+KERNEL_COLOR_MULTIPLIER = 1.5  # множник ядра першого проходу для кольорових
+
 # Константи для детекції тіней
 SHADOW_DETECT_PERCENTILE = 5   # нижній перцентиль для детекції
 SHADOW_DETECT_THRESHOLD = 80   # поріг L-каналу: якщо p5 < threshold — є тіні
@@ -120,9 +127,6 @@ SHADOW_RATIO_THRESHOLD = 0.3  # мінімальне відношення p5/p95
 
 # Константи для захисних механізмів
 MIN_IMAGE_SIDE = 100           # мінімальний розмір сторони для обробки
-PHOTO_COLOR_STD_THRESHOLD = 30  # поріг std каналів A/B: вище → фото
-HSV_SATURATION_THRESHOLD = 50   # поріг S-каналу HSV для детекції кольорових областей
-HSV_SATURATION_RATIO = 0.15     # якщо >15% пікселів мають S > 50 → фото/гільйош
 LAPLACIAN_BLUR_THRESHOLD = 10.0 # якщо дисперсія Laplacian < 10 → занадто розмите
 
 
@@ -209,7 +213,13 @@ def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
     return background
 
 
-def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = True) -> np.ndarray:
+def remove_shadow(
+    image: np.ndarray,
+    kernel_size: int = 0,
+    coarse_pass: bool = True,
+    is_color_document: bool = False,
+    coarse_blend: float = COARSE_BLEND_COLOR,
+) -> np.ndarray:
     """
     Видаляє градієнтні тіні з документа через background estimation.
 
@@ -233,6 +243,10 @@ def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = T
                       великих тіней. За замовчуванням True. Вимкніть,
                       якщо точно знаєте, що тіні завжди дрібні/локальні
                       і хочете заощадити обчислення.
+        is_color_document: Якщо True — застосовує множник KERNEL_COLOR_MULTIPLIER
+                           до kernel_size і пропускає другий прохід.
+        coarse_blend: Сила блендингу другого проходу для кольорових документів.
+                      0.0 = другий прохід вимкнено для кольорових.
 
     Returns:
         Оброблене BGR зображення без градієнтних тіней
@@ -245,12 +259,19 @@ def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = T
     if kernel_size == 0:
         kernel_size = _auto_kernel_size(image)
 
+    # Множник ядра для кольорових документів
+    if is_color_document:
+        kernel_size = int(round(kernel_size * KERNEL_COLOR_MULTIPLIER))
+
     # Гарантуємо непарність та мінімальний розмір для морфології
     kernel_size = max(kernel_size | 1, MORPH_KERNEL_MIN)
 
     # Конвертуємо в LAB для роботи з каналом яскравості
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Запобігаємо артефактам чорних точок: L=0 після ділення дає кольоровий піксель
+    l_ch = np.maximum(l_ch, L_MIN_CLAMP)
 
     # --- Прохід 1: морфологічне закриття + легке згладжування ---
     background = _create_background_model(l_ch, kernel_size)
@@ -264,11 +285,21 @@ def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = T
 
     # --- Прохід 2: грубе виправлення залишкової широкої нерівномірності ---
     if coarse_pass and COARSE_PASS_ENABLED:
-        coarse_bg = _create_coarse_background(l_norm)
-        l_f2 = l_norm.astype(np.float32)
-        coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
-        l_norm2 = cv2.divide(l_f2, coarse_bg_f, scale=DIVIDE_SCALE)
-        l_norm = np.clip(l_norm2, 0.0, 255.0).astype(np.uint8)
+        # Для кольорових документів: якщо coarse_blend == 0 — пропускаємо другий прохід
+        if is_color_document and coarse_blend <= 0.0:
+            pass
+        else:
+            coarse_bg = _create_coarse_background(l_norm)
+            l_f2 = l_norm.astype(np.float32)
+            coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
+            l_norm2 = cv2.divide(l_f2, coarse_bg_f, scale=DIVIDE_SCALE)
+            l_norm_coarse = np.clip(l_norm2, 0.0, 255.0).astype(np.uint8)
+            if is_color_document and coarse_blend > 0.0:
+                # Блендинг для кольорових: змішуємо результат першого і другого проходу
+                l_norm = cv2.addWeighted(l_norm, 1.0 - coarse_blend, l_norm_coarse, coarse_blend, 0)
+                l_norm = np.clip(l_norm, 0.0, 255.0).astype(np.uint8)
+            else:
+                l_norm = l_norm_coarse
 
     # Збираємо LAB назад
     merged = cv2.merge([l_norm, a_ch, b_ch])
@@ -277,18 +308,24 @@ def remove_shadow(image: np.ndarray, kernel_size: int = 0, coarse_pass: bool = T
     return result
 
 
-def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def auto_remove_shadow(
+    image: np.ndarray,
+    is_color_document: bool = False,
+    coarse_blend: float = COARSE_BLEND_COLOR,
+    detect_threshold: float = SHADOW_DETECT_THRESHOLD,
+    detect_ratio: float = SHADOW_RATIO_THRESHOLD,
+) -> tuple[np.ndarray, bool]:
     """
     Автоматичне видалення тіней: спочатку перевіряє чи є тіні,
     потім застосовує remove_shadow якщо потрібно.
 
     Повертає (результат, чи_були_тіні).
     """
-    has_shadow = _detect_shadow(image)
+    has_shadow = _detect_shadow(image, threshold=detect_threshold, ratio=detect_ratio)
     if not has_shadow:
         return image.copy(), False
 
-    result = remove_shadow(image)
+    result = remove_shadow(image, is_color_document=is_color_document, coarse_blend=coarse_blend)
     return result, True
 
 
@@ -318,18 +355,21 @@ def _auto_kernel_size(image: np.ndarray) -> int:
     return kernel
 
 
-def _detect_shadow(image: np.ndarray) -> bool:
+def _detect_shadow(
+    image: np.ndarray,
+    threshold: float = SHADOW_DETECT_THRESHOLD,
+    ratio: float = SHADOW_RATIO_THRESHOLD,
+) -> bool:
     """
-    Виявляє наявність тіней на зображенні.
+    Виявляє наявність нерівномірного освітлення (тіней) на зображенні.
 
-    Багаторівнева перевірка:
-    1. Захисний фільтр: не обробляємо фото (std A/B > 30).
-    2. Захисний фільтр: не обробляємо документи з гільйошем/насиченим
-       кольором (S-канал HSV > 50 більше ніж у 15% пікселів).
-    3. Захисний фільтр: не обробляємо сильно розмиті зображення
-       (дисперсія Laplacian < 10), бо shadow_remove може створити артефакти.
-    4. Основна перевірка: якщо нижній перцентиль L-каналу значно
-       темніший за верхній — є тіні.
+    Дві перевірки:
+    1. Зображення не надто розмите (Laplacian var >= порогу).
+    2. Є темні ділянки з великим перепадом яскравості (p5/95 < ratio).
+
+    Тип документа (фото/кольоровий/чб) визначається зовні і не впливає на
+    детекцію тіней — ця функція відповідає тільки на питання "чи є
+    нерівне освітлення".
     """
     h, w = image.shape[:2]
     if min(h, w) < MIN_IMAGE_SIDE:
@@ -337,41 +377,18 @@ def _detect_shadow(image: np.ndarray) -> bool:
 
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l = lab[:, :, 0]
-    a = lab[:, :, 1]
-    b = lab[:, :, 2]
 
-    # Рівень 1: Перевіряємо чи це фото (багато кольору)
-    std_a = float(np.std(a))
-    std_b = float(np.std(b))
-    if std_a > PHOTO_COLOR_STD_THRESHOLD or std_b > PHOTO_COLOR_STD_THRESHOLD:
-        return False
-
-    # Рівень 2: Перевіряємо насиченість HSV — детектуємо гільйош, паспорти
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    s = hsv[:, :, 1]
-    saturated_ratio = float(np.count_nonzero(s > HSV_SATURATION_THRESHOLD)) / (h * w)
-    if saturated_ratio > HSV_SATURATION_RATIO:
-        return False
-
-    # Рівень 3: Перевіряємо розмитість — занадто розмиті зображення не обробляємо
+    # Перевірка 1: зображення не надто розмите
     laplacian_var = float(cv2.Laplacian(l, cv2.CV_64F).var())
     if laplacian_var < LAPLACIAN_BLUR_THRESHOLD:
         return False
 
-    # Рівень 4: Основна перевірка на тіні через перцентилі L-каналу
+    # Перевірка 2: основна — є темні ділянки з великим перепадом яскравості
     p_low = float(np.percentile(l, SHADOW_DETECT_PERCENTILE))
     p_high = float(np.percentile(l, 100 - SHADOW_DETECT_PERCENTILE))
 
-    # Тіні є якщо:
-    # 1. Нижній перцентиль дуже темний (p5 < 80)
-    # 2. Різниця між низом та верхом значна (p5/p95 < 0.3)
-    # 3. Діапазон не занадто великий (тінь vs рябий фон)
-    if p_low < SHADOW_DETECT_THRESHOLD:
-        ratio = p_low / max(p_high, 1.0)
-        # Перевіряємо що діапазон не занадто широкий (рябий фон дає широкий діапазон)
-        range_l = p_high - p_low
-        if range_l > 200:  # Занадто широкий діапазон — скоріше рябий фон, не тінь
-            return False
-        return ratio < SHADOW_RATIO_THRESHOLD
+    if p_low < threshold:
+        ratio_val = p_low / max(p_high, 1.0)
+        return ratio_val < ratio
 
     return False
