@@ -608,6 +608,8 @@
     "tests/unit/test_shadow_remove_large.py",
     "tests/unit/test_sharpen.py",
     "tests/unit/test_text_mask.py",
-    "TODO.md"
+    "TODO.md",
+    "status.md",
+    "task.md"
   ]
 }

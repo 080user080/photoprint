@@ -47,7 +47,11 @@ CORNER_COUNT = 4
 PADDING_RATIO = 0.06  # 6% від розміру з кожного боку
 
 # ---- Нові константи (PRIO 2) ----
-PARTIAL_SKEW_THRESHOLD_RATIO = 0.01  # 1% від ширини/висоти документа
+# PARTIAL_SKEW_THRESHOLD_RATIO визначає чутливість детекції "кривих" сторін.
+# 0.03 (3%) — для документа 800px поріг ~24px.
+# Значення 0.01 (1%) було надто чутливим: шум детекції кутів (>8px)
+# спричиняв хибне спрацювання warp на рівних документах.
+PARTIAL_SKEW_THRESHOLD_RATIO = 0.03  # 3% від ширини/висоти документа
 
 # ---- Нові константи (PRIO 3) ----
 
@@ -257,6 +261,12 @@ def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
     """
     Третя спроба (fallback) — беремо найбільший контур та його bounding box.
     Працює навіть коли документ не ідеальний прямокутник.
+
+    Валідація:
+    - Пропорції: aspect ratio >= 1.1 (документ має бути прямокутним, не квадратом)
+    - Площа: не менше MIN_DOCUMENT_AREA_RATIO від кадру
+    - Bounding box не займає > MAX_BORDER_AREA_RATIO площі кадру
+    - Якщо bounding box торкається краю кадру з 2+ сторін — відхиляємо (фон/стіл)
     """
     blurred = cv2.GaussianBlur(gray, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA)
     edges = cv2.Canny(blurred, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
@@ -279,15 +289,28 @@ def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
 
     largest = max(candidates, key=cv2.contourArea)
     x, y, bw, bh = cv2.boundingRect(largest)
+    box_area = bw * bh
+
+    # Перевірка: якщо bounding box займає > 92% кадру — це не документ, а фон
+    if box_area > image_area * MAX_BORDER_AREA_RATIO:
+        return None
 
     # Валідація пропорцій
     aspect = max(bw, bh) / max(min(bw, bh), 1)
-    if aspect > MAX_ASPECT_RATIO or aspect < 1.2:  # Документ має бути "прямокутним"
+    if aspect > MAX_ASPECT_RATIO or aspect < 1.1:  # документ має бути прямокутним
         return None
 
     # Валідація площі
-    box_area = bw * bh
     if box_area < image_area * MIN_DOCUMENT_AREA_RATIO:
+        return None
+
+    # Перевірка: якщо bounding box торкається краю кадру з 2+ сторін — це не документ
+    touches_top = y <= BORDER_MARGIN_PX
+    touches_bottom = (y + bh) >= (h - BORDER_MARGIN_PX)
+    touches_left = x <= BORDER_MARGIN_PX
+    touches_right = (x + bw) >= (w - BORDER_MARGIN_PX)
+    sides_touched = sum([touches_top, touches_bottom, touches_left, touches_right])
+    if sides_touched >= 2:
         return None
 
     # Повертаємо 4 кути bounding box
@@ -434,10 +457,41 @@ def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
     Повертає {"top": bool, "bottom": bool, "left": bool, "right": bool} —
     True, якщо відповідна пара кутів відхиляється від "прямої" сторони
     більше ніж на PARTIAL_SKEW_THRESHOLD_RATIO від розміру документа.
+
+    Захисні перевірки:
+    - Всі 4 кути мають бути різні (мінімальна відстань між будь-якими двома > 10px)
+    - Площа квадрилатераля має бути > мінімально допустимої
+    - Якщо перевірки не пройдено — повертається {top: False, bottom: False, left: False, right: False}
     """
     tl, tr, br, bl = pts
-    width = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl), 1.0)
-    height = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr), 1.0)
+
+    # Захисна перевірка: чи всі 4 кути різні
+    distances = [
+        np.linalg.norm(tl - tr),
+        np.linalg.norm(tl - br),
+        np.linalg.norm(tl - bl),
+        np.linalg.norm(tr - br),
+        np.linalg.norm(tr - bl),
+        np.linalg.norm(br - bl),
+    ]
+    min_dist = min(distances)
+    if min_dist < 10.0:
+        # Кути збігаються або майже збігаються — невалідний документ
+        return {"top": False, "bottom": False, "left": False, "right": False}
+
+    # Захисна перевірка: площа квадрилатераля
+    quad_area = 0.5 * abs(
+        tl[0] * tr[1] + tr[0] * br[1] + br[0] * bl[1] + bl[0] * tl[1]
+        - (tr[0] * tl[1] + br[0] * tr[1] + bl[0] * br[1] + tl[0] * bl[1])
+    )
+    w = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl), 1.0)
+    h = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr), 1.0)
+    if quad_area < MIN_DOCUMENT_AREA_RATIO * w * h:
+        # Площа занадто мала для документа
+        return {"top": False, "bottom": False, "left": False, "right": False}
+
+    width = w
+    height = h
     thr_w = width * PARTIAL_SKEW_THRESHOLD_RATIO
     thr_h = height * PARTIAL_SKEW_THRESHOLD_RATIO
     return {

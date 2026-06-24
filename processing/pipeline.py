@@ -298,34 +298,34 @@ def run_perspective_auto_smart(
     Розумна авто-перспектива з deskew.
 
     Логіка:
-    - Вимірює кут нахилу (skew)
     - Шукає кути документа
-    - Якщо знайдено викривлення перспективи — warp + deskew
-    - Якщо тільки нахил — тільки deskew
-    - Якщо нічого — без змін
+    - Якщо знайдено викривлення перспективи — warp, потім вимірює кут на результаті warp і deskew
+    - Якщо тільки нахил (кути є без перспективи) — тільки deskew на оригіналі
+    - Якщо кутів немає — вимірює кут на оригіналі і deskew
+    - Якщо нічого не знайдено — без змін
 
     Returns:
         (result, status_message)
     """
-    # 1. Виміряти кут
-    angle = deskew_module.measure_skew_angle(image)
-
-    # 2. Спробувати знайти кути документа
+    # 1. Спробувати знайти кути документа
     corners = perspective.auto_detect_corners(image)
 
     if corners is not None:
-        # 3. Перевірити чи є викривлення перспективи
+        # 2. Перевірити чи є викривлення перспективи
         skewed = perspective.detect_skewed_sides(corners)
         has_skewed = any(skewed.values())
 
         if has_skewed:
-            # Warp + deskew
+            # Warp
             result = perspective.apply_correction(image, corners)
+            # Вимірюємо кут НА РЕЗУЛЬТАТІ warp (кут вже інший)
+            angle = deskew_module.measure_skew_angle(result)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
                 result = deskew_module.apply_deskew(result, angle)
             return result, "перспектива виправлена + deskew"
         else:
-            # Тільки deskew (якщо потрібно)
+            # Тільки deskew на оригіналі (якщо потрібно)
+            angle = deskew_module.measure_skew_angle(image)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
                 result = deskew_module.apply_deskew(image, angle)
                 return result, "deskew (нахил виправлено)"
@@ -333,6 +333,7 @@ def run_perspective_auto_smart(
                 return image.copy(), "перспектива не потребує корекції"
     else:
         # Кути не знайдено — тільки deskew (якщо потрібно)
+        angle = deskew_module.measure_skew_angle(image)
         if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
             result = deskew_module.apply_deskew(image, angle)
             return result, "deskew (нахил виправлено)"

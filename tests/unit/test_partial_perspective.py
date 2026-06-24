@@ -41,9 +41,9 @@ class TestDetectSkewedSides:
         assert bool(skew["right"]) is False
 
     def test_left_skewed(self):
-        """Ліва сторона крива."""
+        """Ліва сторона крива (зміщення 15px > порогу 3% = 12px)."""
         pts = np.array([
-            [10, 0],       # TL — зміщено вправо
+            [15, 0],       # TL — зміщено вправо на 15px
             [400, 0],      # TR
             [400, 300],    # BR
             [0, 300],      # BL
@@ -65,18 +65,18 @@ class TestDetectSkewedSides:
         assert bool(skew["bottom"]) is True
 
     def test_all_skewed(self):
-        """Всі 4 сторони криві."""
+        """Всі 4 сторони криві (зміщення 25-30px > порогу 3% = ~10px)."""
         pts = np.array([
-            [10, 10],      # TL
-            [390, 5],      # TR
-            [395, 295],    # BR
-            [5, 290],      # BL
+            [40, 30],      # TL
+            [360, 5],      # TR
+            [330, 270],    # BR
+            [10, 295],     # BL
         ], dtype=np.float32)
         skew = perspective.detect_skewed_sides(pts)
         assert all(skew.values())
 
     def test_small_skew_below_threshold(self):
-        """Дуже мале відхилення не вважається кривим (< 1%)."""
+        """Дуже мале відхилення не вважається кривим (< 3% порогу)."""
         pts = np.array([
             [0, 2],        # TL — відхилення 2px при висоті 1000px = 0.2%
             [400, 0],      # TR
@@ -84,7 +84,7 @@ class TestDetectSkewedSides:
             [0, 1000],     # BL
         ], dtype=np.float32)
         skew = perspective.detect_skewed_sides(pts)
-        assert bool(skew["top"]) is False  # 2px < 4px (1% of 400)
+        assert bool(skew["top"]) is False  # 2px < 12px (3% of 400)
 
 
 # ---------------------------------------------------------------------------

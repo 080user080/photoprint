@@ -564,7 +564,7 @@ class MainWindow(QMainWindow):
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
-                    use_perspective=False,  # вимикаємо авто-перспективу в pipeline, бо застосовуємо вручну
+                    use_perspective=s.get("auto_perspective", False),
                     partial_perspective=s.get("partial_perspective", False),
                     bw_binary=s.get("bw_binary", False),
                     classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
@@ -687,17 +687,18 @@ class MainWindow(QMainWindow):
         if self._orig is None or self._base is None:
             return
         self._base_for_perspective = self._base.copy()
+        # Детектуємо кути ДО корекції — на оригінальному _base
+        corners_before = pipeline.detect_corners(self._base)
         # Smart perspective з deskew
         result, status = pipeline.run_perspective_auto_smart(self._base, self._settings)
         self._base = result.copy()
         self._processed = result
         self._preview.set_before(image_utils.make_preview(result))
         self._preview.set_after(image_utils.make_preview(result))
-        # Спробуємо знайти кути для ручного редагування
-        corners = pipeline.detect_corners(self._base)
-        if corners is not None:
-            self._perspective_corners = corners.copy()
-            self._show_perspective_points(corners, status)
+        # Використовуємо corners_before для відображення точок
+        if corners_before is not None:
+            self._perspective_corners = corners_before.copy()
+            self._show_perspective_points(corners_before, status)
         else:
             self._perspective_corners = None
             self._set_status(status)

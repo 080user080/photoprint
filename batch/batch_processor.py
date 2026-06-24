@@ -150,7 +150,7 @@ class BatchProcessor:
                         sharpen_strength=s.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH),
                         hdr_strength=s.get("hdr_strength", DEFAULT_HDR_STRENGTH),
                         use_hdr=s.get("hdr_in_autofix", True),
-                        use_perspective=s.get("auto_perspective", True),
+                        use_perspective=s.get("auto_perspective", False),
                         bw_binary=s.get("bw_binary", False),
                         classify_bw_std_thresh=s.get("classify_bw_std_thresh", DEFAULT_CLASSIFY_BW_STD_THRESH),
                         classify_edge_ratio_min=s.get("classify_edge_ratio_min", DEFAULT_CLASSIFY_EDGE_RATIO_MIN),
