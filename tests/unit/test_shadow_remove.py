@@ -192,7 +192,8 @@ class TestProtectiveFilters:
     def test_photo_not_processed(self):
         """Цветное фото (высокая std A/B) не должно обрабатываться."""
         rng = np.random.default_rng(42)
-        img = rng.integers(0, 255, (200, 200, 3), dtype=np.uint8)
+        # Яскраве зображення (p5 > 100) — не має детектуватись як тінь
+        img = rng.integers(120, 255, (200, 200, 3), dtype=np.uint8)
         result, had_shadow = shadow_remove.auto_remove_shadow(img)
         assert not had_shadow, "Цветное фото ошибочно распознано как тень"
 

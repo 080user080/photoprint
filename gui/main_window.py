@@ -923,8 +923,9 @@ class MainWindow(QMainWindow):
 
     def _on_auto_progress(self, cur: int, total: int, fname: str):
         self._progress.setValue(cur)
-        self._queue.mark_current(cur - 1)
-        self._set_status(f"Обробка {cur}/{total}: {fname}")
+        # При паралельній обробці не знаємо точний індекс —
+        # просто оновлюємо статус без позначення конкретного рядка
+        self._set_status(f"Оброблено {cur}/{total}: {fname}")
 
     def _on_auto_error(self, idx: int, fname: str, msg: str):
         self._queue.mark_error(idx)

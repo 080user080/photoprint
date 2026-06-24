@@ -5,6 +5,8 @@ GUI не звертається до _index напряму — тільки че
 """
 
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed, Future
 from typing import Callable
 import numpy as np
 
@@ -21,6 +23,15 @@ DEFAULT_CLASSIFY_BW_STD_THRESH = 20.0
 DEFAULT_CLASSIFY_EDGE_RATIO_MIN = 0.03
 DEFAULT_CLASSIFY_LINE_COUNT_MIN = 3
 DEFAULT_SHADOW_HIGHLIGHT_STRENGTH = 0.0
+
+# Константи для паралельної обробки
+DEFAULT_WORKER_THREADS = 4   # fallback якщо не передано через settings
+PRINT_LOCK_TIMEOUT = 30.0    # секунд максимум чекати на принтер
+
+# Обмеження RAM: не більше ніж MAX_RAM_RATIO від доступної
+RAM_GUARD_ENABLED = True
+MAX_RAM_RATIO = 0.6   # використовуємо максимум 60% RAM
+BYTES_PER_WORKER_ESTIMATE = 150 * 1024 * 1024  # 150MB на потік (вхід + вихід + pipeline)
 
 
 class BatchProcessor:
@@ -69,6 +80,31 @@ class BatchProcessor:
         return self._index
 
     # ------------------------------------------------------------------
+    # Memory guard
+    # ------------------------------------------------------------------
+
+    def _safe_worker_count(self, requested: int) -> int:
+        """
+        Зменшує кількість потоків якщо доступної RAM недостатньо.
+        Якщо psutil не встановлено — повертає requested без змін.
+        """
+        if not RAM_GUARD_ENABLED:
+            return requested
+        try:
+            import psutil
+            available = psutil.virtual_memory().available
+            max_by_ram = max(1, int(available * MAX_RAM_RATIO / BYTES_PER_WORKER_ESTIMATE))
+            safe = min(requested, max_by_ram)
+            if safe < requested:
+                self._logger.info(
+                    f"RAM guard: знижено потоки {requested}→{safe} "
+                    f"(доступно {available // 1024 // 1024}MB)"
+                )
+            return safe
+        except ImportError:
+            return requested
+
+    # ------------------------------------------------------------------
     # Авто-режим
     # ------------------------------------------------------------------
 
@@ -78,18 +114,32 @@ class BatchProcessor:
         on_error:    Callable[[int, str, str], None] | None = None,
     ) -> int:
         """
-        Обробляє всі файли: Auto Fix → друк.
+        Паралельна обробка файлів через ThreadPoolExecutor.
+        Фаза 1: завантаження + pipeline — паралельно (N потоків).
+        Фаза 2: друк — послідовно в порядку черги (щоб зберегти порядок).
+
         on_progress(current_1based, total, filename)
         on_error(index, filename, message)
         Повертає кількість успішно надрукованих.
         """
         s = self.settings
+        n_workers = self._safe_worker_count(
+            s.get("worker_threads", DEFAULT_WORKER_THREADS)
+        )
         printed = 0
+        total = self.total
 
-        for i, path in enumerate(self._files):
+        # Лічильник для thread-safe прогресу
+        progress_lock = threading.Lock()
+        progress_counter = [0]   # список щоб мутабельний у closure
+
+        def _process_one(idx: int, path: str):
+            """
+            Виконується у потоці ThreadPoolExecutor.
+            Повертає (idx, path, processed_image) або кидає виняток.
+            НЕ виконує друк — він залишається у головному потоці.
+            """
             filename = os.path.basename(path)
-            if on_progress:
-                on_progress(i + 1, self.total, filename)
             image = None
             processed = None
             try:
@@ -107,10 +157,66 @@ class BatchProcessor:
                         classify_line_count_min=s.get("classify_line_count_min", DEFAULT_CLASSIFY_LINE_COUNT_MIN),
                         shadow_highlight_strength=s.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH),
                         autofix_contrast=s.get("autofix_contrast", 0.15),
+                        settings=s,
                     )
                 else:
-                    processed = image
+                    processed = image.copy()
+
+                # Зберігаємо якщо потрібно
                 self._maybe_save(processed, path)
+
+                # Thread-safe оновлення прогресу
+                with progress_lock:
+                    progress_counter[0] += 1
+                    cur = progress_counter[0]
+                if on_progress:
+                    on_progress(cur, total, filename)
+
+                return idx, path, processed
+
+            finally:
+                # Явне звільнення пам'яті після обробки
+                if image is not None:
+                    del image
+                # processed НЕ видаляємо — він потрібен для друку
+
+        # --- Фаза 1: паралельна обробка ---
+        # results_map: idx -> (path, processed_image | Exception)
+        results_map: dict[int, tuple[str, object]] = {}
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            future_to_idx: dict[Future, int] = {
+                executor.submit(_process_one, i, path): i
+                for i, path in enumerate(self._files)
+            }
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                path = self._files[idx]
+                filename = os.path.basename(path)
+                try:
+                    result_idx, result_path, processed = future.result()
+                    results_map[idx] = (result_path, processed)
+                except Exception as exc:
+                    self._logger.error(
+                        f"Помилка обробки файлу {filename}: {exc}", exc_info=True
+                    )
+                    if on_error:
+                        on_error(idx, filename, str(exc))
+                    results_map[idx] = (path, exc)
+
+        # --- Фаза 2: послідовний друк у порядку черги ---
+        for i in range(total):
+            if i not in results_map:
+                continue
+            path, result = results_map[i]
+            filename = os.path.basename(path)
+
+            if isinstance(result, Exception):
+                continue   # вже повідомили через on_error
+
+            processed = result
+            try:
                 printer_module.print_image(
                     processed,
                     printer_name=s.get("printer_name", ""),
@@ -118,18 +224,16 @@ class BatchProcessor:
                 )
                 printed += 1
             except Exception as exc:
-                self._logger.error(f"Помилка обробки файлу {filename}: {exc}", exc_info=True)
+                self._logger.error(
+                    f"Помилка друку файлу {filename}: {exc}", exc_info=True
+                )
                 if on_error:
                     on_error(i, filename, str(exc))
             finally:
-                # Явне звільнення пам'яті: видаляємо великі масиви після кожного файлу
-                # щоб вони не накопичувались у циклі
-                if image is not None:
-                    del image
-                if processed is not None and processed is not image:
-                    del processed
+                del processed
+                results_map[i] = (path, None)   # звільняємо пам'ять
 
-        self._index = self.total
+        self._index = total
         return printed
 
     # ------------------------------------------------------------------

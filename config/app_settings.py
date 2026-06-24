@@ -37,6 +37,15 @@ DEFAULT_SHADOW_DETECT_RATIO = 0.3
 DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
 DEFAULT_SHADOW_BGR_MODE = False
 
+# Константи для паралельної обробки
+import os as _os
+
+DEFAULT_WORKER_THREADS = min(_os.cpu_count() or 4, 8)
+# Для Ryzen 7 7700: cpu_count()=16, обмежуємо 8 щоб не вичерпати RAM
+# (кожен потік тримає в пам'яті 1 повноформатне зображення ~20-50MB)
+DEFAULT_MAX_WORKER_THREADS = 16
+DEFAULT_MIN_WORKER_THREADS = 1
+
 # Константи для пресетів стратегій
 DEFAULT_PIPELINE_PRESET = "doc_bw"
 DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,hdr,sharpen,grayscale,white_background"
@@ -89,6 +98,10 @@ def load(path=None) -> dict:
         "shadow_detect_ratio":       cfg.getfloat("processing",   "shadow_detect_ratio",       fallback=DEFAULT_SHADOW_DETECT_RATIO),
         "shadow_coarse_blend_color": cfg.getfloat("processing",   "shadow_coarse_blend_color", fallback=DEFAULT_SHADOW_COARSE_BLEND_COLOR),
         "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
+        "worker_threads": cfg.getint(
+            "processing", "worker_threads",
+            fallback=DEFAULT_WORKER_THREADS
+        ),
         # Пресети стратегій
         "pipeline_preset":        cfg.get("processing", "pipeline_preset",        fallback=DEFAULT_PIPELINE_PRESET),
         "pipeline_steps_enabled": cfg.get("processing", "pipeline_steps_enabled", fallback=DEFAULT_PIPELINE_STEPS_ENABLED),
@@ -144,6 +157,9 @@ def save(settings: dict, path=None):
         settings.get("shadow_bgr_mode", DEFAULT_SHADOW_BGR_MODE)
     ).lower()
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
+    cfg["processing"]["worker_threads"] = str(
+        settings.get("worker_threads", DEFAULT_WORKER_THREADS)
+    )
     cfg["processing"]["pipeline_preset"]        = settings.get("pipeline_preset",        DEFAULT_PIPELINE_PRESET)
     cfg["processing"]["pipeline_steps_enabled"] = settings.get("pipeline_steps_enabled", DEFAULT_PIPELINE_STEPS_ENABLED)
 

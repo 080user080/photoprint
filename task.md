@@ -58,7 +58,7 @@ elif step_key == "shadow_remove":
                            "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 ```
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md
 
 ---
 
@@ -142,7 +142,7 @@ def auto_remove_shadow(
 ) -> tuple[np.ndarray, bool]:
 ```
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md
 
 ---
 
@@ -163,7 +163,7 @@ SHADOW_RATIO_THRESHOLD = 0.3   →   SHADOW_RATIO_THRESHOLD = 0.45
 Вищий `ratio` (0.45 замість 0.30) означає що менший перепад яскравості
 вже вважається тінню.
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md
 
 ---
 
@@ -189,7 +189,7 @@ cfg["processing"]["shadow_bgr_mode"] = str(
 ).lower()
 ```
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md
 
 ---
 
@@ -214,7 +214,7 @@ self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
 "shadow_bgr_mode": self._cb_shadow_bgr_mode.isChecked(),
 ```
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md
 
 ---
 
@@ -227,4 +227,4 @@ self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
 4. Переконатися що в лозі з'явився рядок "тіні видалено (примусово)"
 5. Перемкнути "BGR-алгоритм" у Налаштуваннях → повторити → порівняти результати
 
-- [ ] Відмітити виконання в TASK.md
+- [x] Відмітити виконання в TASK.md

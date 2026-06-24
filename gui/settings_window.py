@@ -10,9 +10,11 @@ from PyQt6.QtWidgets import (
     QComboBox, QListWidget, QListWidgetItem, QStackedWidget,
     QScrollArea
 )
+import os as _os
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import Qt
 from config import app_settings
+from config.app_settings import DEFAULT_WORKER_THREADS
 
 # Константи для layout
 WINDOW_MIN_WIDTH = 1100
@@ -388,6 +390,10 @@ class SettingsWindow(QWidget):
         _set_spinbox_minw(self._spin_shadow_coarse_blend)
         form.addRow("2-й прохід для кольорових (0=вимк, 1=повний):", self._spin_shadow_coarse_blend)
 
+        self._cb_shadow_bgr_mode = QCheckBox()
+        form.addRow("BGR-алгоритм (краще для деяких документів):",
+                    self._cb_shadow_bgr_mode)
+
         return box
 
     def _page_classify(self) -> QWidget:
@@ -549,6 +555,20 @@ class SettingsWindow(QWidget):
         self._cb_minimize_to_tray = QCheckBox("Згортати в трей при закритті")
         mode_form.addRow(self._cb_minimize_to_tray)
 
+        self._spin_worker_threads = QSpinBox()
+        self._spin_worker_threads.setRange(1, _os.cpu_count() or 16)
+        self._spin_worker_threads.setToolTip(
+            f"Кількість паралельних потоків обробки.\n"
+            f"Ваш процесор: {_os.cpu_count()} логічних ядер.\n"
+            f"Рекомендовано: {min(_os.cpu_count() or 4, 8)} "
+            f"(більше = швидше, але більше RAM)"
+        )
+        _set_spinbox_minw(self._spin_worker_threads)
+        mode_form.addRow(
+            f"Потоків обробки (1–{_os.cpu_count() or 16}):",
+            self._spin_worker_threads
+        )
+
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -581,6 +601,7 @@ class SettingsWindow(QWidget):
         self._spin_shadow_detect_threshold.setValue(s.get("shadow_detect_threshold", 80.0))
         self._spin_shadow_detect_ratio.setValue(s.get("shadow_detect_ratio", 0.3))
         self._spin_shadow_coarse_blend.setValue(s.get("shadow_coarse_blend_color", 0.0))
+        self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -612,6 +633,10 @@ class SettingsWindow(QWidget):
         self._cb_default_auto.setChecked(s.get("default_mode", "auto") == "auto")
         self._cb_minimize_to_tray.setChecked(s.get("minimize_to_tray", False))
 
+        self._spin_worker_threads.setValue(
+            s.get("worker_threads", DEFAULT_WORKER_THREADS)
+        )
+
         # Пресет стратегії
         preset = s.get("pipeline_preset", "doc_bw")
         enabled_str = s.get("pipeline_steps_enabled", "")
@@ -630,6 +655,7 @@ class SettingsWindow(QWidget):
             "shadow_detect_threshold":   self._spin_shadow_detect_threshold.value(),
             "shadow_detect_ratio":       self._spin_shadow_detect_ratio.value(),
             "shadow_coarse_blend_color": self._spin_shadow_coarse_blend.value(),
+            "shadow_bgr_mode":           self._cb_shadow_bgr_mode.isChecked(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
@@ -655,6 +681,7 @@ class SettingsWindow(QWidget):
             "pipeline_steps_enabled":  ",".join(self._preset_widget.get_enabled_steps()),
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
+            "worker_threads": self._spin_worker_threads.value(),
         }
 
     def _save(self):
