@@ -575,6 +575,8 @@
     "voices/default"
   ],
   "46b2fd6b87b322e9c7094e366c9fd32471ce6745": [
+    "scaner",
+    "scaner/scaner.py",
     "tests/scenarios",
     "tests/scenarios/debug_widgets.py",
     "tests/scenarios/test_autofix_toggle.py",

@@ -120,10 +120,13 @@ L_MIN_CLAMP = 5                # мінімальне значення L пер�
 COARSE_BLEND_COLOR = 0.0       # сила другого проходу для кольорових (0 = вимкнено)
 KERNEL_COLOR_MULTIPLIER = 1.5  # множник ядра першого проходу для кольорових
 
+# Константи для BGR-алгоритму (обробка трьох каналів окремо)
+BGR_MODE_DEFAULT = False       # якщо True — обробляє кожен канал BGR окремо
+
 # Константи для детекції тіней
 SHADOW_DETECT_PERCENTILE = 5   # нижній перцентиль для детекції
-SHADOW_DETECT_THRESHOLD = 80   # поріг L-каналу: якщо p5 < threshold — є тіні
-SHADOW_RATIO_THRESHOLD = 0.3  # мінімальне відношення p5/p95 для визнання тіней
+SHADOW_DETECT_THRESHOLD = 100  # поріг L-каналу: якщо p5 < threshold — є тіні
+SHADOW_RATIO_THRESHOLD = 0.45  # мінімальне відношення p5/p95 для визнання тіней
 
 # Константи для захисних механізмів
 MIN_IMAGE_SIDE = 100           # мінімальний розмір сторони для обробки
@@ -213,12 +216,48 @@ def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
     return background
 
 
+def _remove_shadow_bgr(
+    image: np.ndarray,
+    kernel_size: int = 0,
+    coarse_pass: bool = True,
+) -> np.ndarray:
+    """
+    Видаляє тіні через морфологічну обробку кожного BGR-каналу окремо.
+    Алгоритм з shadow_remove_gui.py — дає кращі результати для деяких
+    типів документів з рівномірним кольоровим фоном.
+    """
+    if kernel_size == 0:
+        kernel_size = _auto_kernel_size(image)
+    kernel_size = max(kernel_size | 1, MORPH_KERNEL_MIN)
+
+    channels = cv2.split(image)
+    result_channels = []
+
+    for ch in channels:
+        ch = np.maximum(ch, L_MIN_CLAMP)
+        bg = _create_background_model(ch, kernel_size)
+        bg_f = bg.astype(np.float32) + DIVIDE_EPSILON
+        normed = cv2.divide(ch.astype(np.float32), bg_f, scale=DIVIDE_SCALE)
+        normed = np.clip(normed, 0.0, 255.0).astype(np.uint8)
+
+        if coarse_pass and COARSE_PASS_ENABLED:
+            coarse_bg = _create_coarse_background(normed)
+            coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
+            normed2 = cv2.divide(normed.astype(np.float32), coarse_bg_f, scale=DIVIDE_SCALE)
+            normed = np.clip(normed2, 0.0, 255.0).astype(np.uint8)
+
+        result_channels.append(normed)
+
+    return cv2.merge(result_channels)
+
+
 def remove_shadow(
     image: np.ndarray,
     kernel_size: int = 0,
     coarse_pass: bool = True,
     is_color_document: bool = False,
     coarse_blend: float = COARSE_BLEND_COLOR,
+    bgr_mode: bool = BGR_MODE_DEFAULT,
 ) -> np.ndarray:
     """
     Видаляє градієнтні тіні з документа через background estimation.
@@ -247,10 +286,16 @@ def remove_shadow(
                            до kernel_size і пропускає другий прохід.
         coarse_blend: Сила блендингу другого проходу для кольорових документів.
                       0.0 = другий прохід вимкнено для кольорових.
+        bgr_mode: Якщо True — використовує _remove_shadow_bgr (обробка кожного
+                  BGR-каналу окремо) замість стандартного LAB-алгоритму.
 
     Returns:
         Оброблене BGR зображення без градієнтних тіней
     """
+    # Якщо bgr_mode — використовуємо BGR-алгоритм
+    if bgr_mode:
+        return _remove_shadow_bgr(image, kernel_size=kernel_size, coarse_pass=coarse_pass)
+
     # Захисний механізм: не обробляємо занадто малі зображення
     h, w = image.shape[:2]
     if min(h, w) < MIN_IMAGE_SIDE:
@@ -314,6 +359,7 @@ def auto_remove_shadow(
     coarse_blend: float = COARSE_BLEND_COLOR,
     detect_threshold: float = SHADOW_DETECT_THRESHOLD,
     detect_ratio: float = SHADOW_RATIO_THRESHOLD,
+    bgr_mode: bool = BGR_MODE_DEFAULT,
 ) -> tuple[np.ndarray, bool]:
     """
     Автоматичне видалення тіней: спочатку перевіряє чи є тіні,
@@ -325,7 +371,12 @@ def auto_remove_shadow(
     if not has_shadow:
         return image.copy(), False
 
-    result = remove_shadow(image, is_color_document=is_color_document, coarse_blend=coarse_blend)
+    result = remove_shadow(
+        image,
+        is_color_document=is_color_document,
+        coarse_blend=coarse_blend,
+        bgr_mode=bgr_mode,
+    )
     return result, True
 
 

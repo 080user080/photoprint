@@ -35,6 +35,7 @@ DEFAULT_SHADOW_REMOVE_ENABLED = True
 DEFAULT_SHADOW_DETECT_THRESHOLD = 80.0
 DEFAULT_SHADOW_DETECT_RATIO = 0.3
 DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
+DEFAULT_SHADOW_BGR_MODE = False
 
 # Константи для пресетів стратегій
 DEFAULT_PIPELINE_PRESET = "doc_bw"
@@ -87,6 +88,7 @@ def load(path=None) -> dict:
         "shadow_detect_threshold":   cfg.getfloat("processing",   "shadow_detect_threshold",   fallback=DEFAULT_SHADOW_DETECT_THRESHOLD),
         "shadow_detect_ratio":       cfg.getfloat("processing",   "shadow_detect_ratio",       fallback=DEFAULT_SHADOW_DETECT_RATIO),
         "shadow_coarse_blend_color": cfg.getfloat("processing",   "shadow_coarse_blend_color", fallback=DEFAULT_SHADOW_COARSE_BLEND_COLOR),
+        "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
         # Пресети стратегій
         "pipeline_preset":        cfg.get("processing", "pipeline_preset",        fallback=DEFAULT_PIPELINE_PRESET),
         "pipeline_steps_enabled": cfg.get("processing", "pipeline_steps_enabled", fallback=DEFAULT_PIPELINE_STEPS_ENABLED),
@@ -138,6 +140,9 @@ def save(settings: dict, path=None):
     cfg["processing"]["shadow_detect_threshold"] = str(settings.get("shadow_detect_threshold", DEFAULT_SHADOW_DETECT_THRESHOLD))
     cfg["processing"]["shadow_detect_ratio"] = str(settings.get("shadow_detect_ratio", DEFAULT_SHADOW_DETECT_RATIO))
     cfg["processing"]["shadow_coarse_blend_color"] = str(settings.get("shadow_coarse_blend_color", DEFAULT_SHADOW_COARSE_BLEND_COLOR))
+    cfg["processing"]["shadow_bgr_mode"] = str(
+        settings.get("shadow_bgr_mode", DEFAULT_SHADOW_BGR_MODE)
+    ).lower()
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
     cfg["processing"]["pipeline_preset"]        = settings.get("pipeline_preset",        DEFAULT_PIPELINE_PRESET)
     cfg["processing"]["pipeline_steps_enabled"] = settings.get("pipeline_steps_enabled", DEFAULT_PIPELINE_STEPS_ENABLED)

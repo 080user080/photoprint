@@ -132,31 +132,46 @@ def run_autofix(
         if _steps_enabled is not None and step_key not in _steps_enabled:
             continue
 
-        if step_key == "shadow_remove":
-            if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
-                is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
-                shadow_mode = settings.get("shadow_remove_mode", "auto") if settings else "auto"
-                coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
-                detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
-                detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
+        elif step_key == "shadow_remove":
+            shadow_mode = settings.get("shadow_remove_mode", "auto") if settings else "auto"
+            coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
+            detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
+            detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
+            is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
+            use_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
 
-                if shadow_mode == "always":
-                    result = shadow_remove.remove_shadow(result, is_color_document=is_color, coarse_blend=coarse_blend)
-                    log_entries.append({"step": "shadow_remove", "applied": True, "detail": "тіні видалено (примусово)"})
-                else:
+            if shadow_mode == "always":
+                # Примусово — для будь-якого типу документа
+                result = shadow_remove.remove_shadow(
+                    result,
+                    is_color_document=is_color,
+                    coarse_blend=coarse_blend,
+                    bgr_mode=use_bgr_mode,
+                )
+                log_entries.append({"step": "shadow_remove", "applied": True,
+                                    "detail": "тіні видалено (примусово)"})
+            elif shadow_mode == "never":
+                pass  # нічого не робимо
+            else:  # auto — тільки для документів, не для фото
+                if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
                         is_color_document=is_color,
                         coarse_blend=coarse_blend,
                         detect_threshold=detect_threshold,
                         detect_ratio=detect_ratio,
+                        bgr_mode=use_bgr_mode,
                     )
                     if had_shadow:
-                        log_entries.append({"step": "shadow_remove", "applied": True, "detail": "тіні видалено"})
-                # Висвітлення тіней — додаткове підсвічування
-                if shadow_highlight_strength > EPSILON:
-                    result = shadow_highlight.apply_shadow_highlight(result, strength=shadow_highlight_strength)
-                    log_entries.append({"step": "shadow_highlight", "applied": True, "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
+                        log_entries.append({"step": "shadow_remove", "applied": True,
+                                           "detail": "тіні видалено"})
+            # Висвітлення тіней — додаткове підсвічування (залишається як є)
+            if shadow_highlight_strength > EPSILON:
+                result = shadow_highlight.apply_shadow_highlight(
+                    result, strength=shadow_highlight_strength
+                )
+                log_entries.append({"step": "shadow_highlight", "applied": True,
+                                   "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 
         elif step_key == "perspective":
             if use_perspective:

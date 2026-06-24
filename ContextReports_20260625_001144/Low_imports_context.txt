@@ -19,6 +19,7 @@ logs
 processing\__init__.py
 processing\autofix.py
 processing\brightness_contrast.py
+processing\deskew.py
 processing\detail_map.py
 processing\diagnostics.py
 processing\doc_classifier.py
@@ -30,13 +31,10 @@ processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
-scaner\scaner.py
 tests\results
 tests\test_images
-tests\README.md
 tests\conftest.py
 tests\gui_tester.py
-tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -44,11 +42,8 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
 shadow_remove_gui.py
-status.md
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
@@ -200,7 +195,7 @@ class ControlsPanel(QWidget):
   from pathlib import Path
   from typing import Optional, Dict, Any
   import numpy
-  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu
+  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox, QListWidget
   from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
   from PyQt6.QtGui import QIcon
   from gui.preview import PreviewPanel
@@ -232,6 +227,7 @@ class MainWindow(QMainWindow):
     def _load_window_geometry(self):
     def _save_window_geometry(self):
     def resizeEvent(self, event):
+    def _on_shadow_mode_changed(self, index: int):
     def _on_settings_saved(self, s: dict):
     def _open_settings(self):
     def _on_files_added(self, paths: list[str]):
@@ -242,7 +238,6 @@ class MainWindow(QMainWindow):
     def _restore_file_settings(self, path: str):
     def _on_queue_selection(self, path: str):
     def _do_autofix(self):
-    def _do_full_auto(self):
     def _do_autofix_classic(self):
     def _on_controls_changed(self, vals: dict):
     def _do_auto_brightness(self):
@@ -267,6 +262,7 @@ class MainWindow(QMainWindow):
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
     def _set_status(self, text: str):
+    def _show_log(self, log_entries: list[dict]):
     def _dump_widget_geometries(self) -> None:
 
 ============================================================
@@ -343,15 +339,32 @@ class QueueView(QListWidget):
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\settings_window.py
 ============================================================
 Імпорти:
-  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox, QListWidget, QListWidgetItem, QStackedWidget, QScrollArea
   from PyQt6.QtCore import pyqtSignal
+  from PyQt6.QtCore import Qt
   from config import app_settings
 
 Сутності:
+class StrategyPresetWidget(QWidget):
+    def __init__(self, parent):
+    def _on_preset_changed(self, index):
+    def get_preset(self) -> str:
+    def get_enabled_steps(self) -> list[str]:
+    def set_state(self, preset: str, enabled: list[str] | None):
+def _make_scroll_page(widget: QWidget) -> QWidget:
+def _set_spinbox_minw(spin):
 class SettingsWindow(QWidget):
     def __init__(self, parent):
     def _qt_tool_flag():
     def _build_ui(self):
+    def _page_autofix(self) -> QWidget:
+    def _page_shadow_remove(self) -> QWidget:
+    def _page_classify(self) -> QWidget:
+    def _page_autosharp(self) -> QWidget:
+    def _page_brightness_contrast(self) -> QWidget:
+    def _page_strategy(self) -> QWidget:
+    def _page_format_save(self) -> QWidget:
+    def _page_printer_mode(self) -> QWidget:
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -403,6 +416,17 @@ def auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: flo
 def to_grayscale(image: np.ndarray) -> np.ndarray:
 def _make_brightness_lut(shift: float) -> np.ndarray:
 def _make_contrast_lut(alpha: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\deskew.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+
+Сутності:
+def measure_skew_angle(image: np.ndarray) -> float:
+def apply_deskew(image: np.ndarray, angle: float) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
@@ -510,16 +534,17 @@ def _apply_clahe(gray: np.ndarray) -> np.ndarray:
   from typing import Optional
   import cv2
   import numpy
-  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background
+  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew
 
 Сутності:
 class DocType(str, Enum):
 def run_contrast_advanced(image: np.ndarray, value: float, mode: str) -> np.ndarray:
-def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str) -> tuple[np.ndarray, str]:
+def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str, settings: Optional[dict]) -> tuple[np.ndarray, str, list[dict]]:
 def run_sharpen(image: np.ndarray, strength: float) -> np.ndarray:
 def run_auto_sharpen(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
 def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> str:
 def run_hdr(image: np.ndarray, strength: float, adaptive: bool) -> np.ndarray:
+def run_perspective_auto_smart(image: np.ndarray, settings: dict | None) -> tuple[np.ndarray, str]:
 def run_perspective_auto(image: np.ndarray, partial: bool) -> tuple[np.ndarray, bool]:
 def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool) -> np.ndarray:
 def detect_corners(image: np.ndarray) -> np.ndarray | None:
@@ -530,8 +555,6 @@ def run_auto_contrast(image: np.ndarray, percentile_low: float, percentile_high:
 def run_grayscale(image: np.ndarray) -> np.ndarray:
 def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
 def _apply_auto_white_background(image: np.ndarray, doc_type: str) -> tuple[np.ndarray, bool]:
-def _compute_adaptive_params(diag) -> dict:
-def run_full_auto(image: np.ndarray, settings: dict, dry_run: bool) -> tuple[np.ndarray, str, dict]:
 def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool, contrast_mode: str) -> np.ndarray:
 
 ============================================================
@@ -555,10 +578,10 @@ def auto_shadow_highlight(image: np.ndarray, percentile_low: float, max_strength
 Сутності:
 def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
 def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
-def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
-def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool, is_color_document: bool, coarse_blend: float) -> np.ndarray:
+def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float) -> tuple[np.ndarray, bool]:
 def _auto_kernel_size(image: np.ndarray) -> int:
-def _detect_shadow(image: np.ndarray) -> bool:
+def _detect_shadow(image: np.ndarray, threshold: float, ratio: float) -> bool:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\sharpen.py
@@ -596,75 +619,9 @@ def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
 Сутності:
 def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
 def make_background_white(image: np.ndarray, background_uniformity: float, detail_density: float) -> tuple[np.ndarray, bool]:
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\scaner\scaner.py
-============================================================
-Імпорти:
-  import sys
-  import os
-  import json
-  import ast
-  import hashlib
-  from pathlib import Path
-  from typing import List, Optional, Dict, Set, Tuple, Any
-  from datetime import datetime
-  from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QModelIndex, QSortFilterProxyModel, QStandardPaths, QSettings, QByteArray, QItemSelectionModel
-  from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
-  from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QGroupBox, QTreeView, QPlainTextEdit, QProgressDialog, QMessageBox, QLabel, QSplitter, QScrollArea, QMenu, QStyle, QHeaderView, QComboBox
-
-Сутності:
-def get_function_signature(node: ast.FunctionDef) -> str:
-def get_class_signature(node: ast.ClassDef) -> str:
-def extract_docstring(node) -> Optional[str]:
-def extract_full_docstring(node) -> Optional[str]:
-class ScannerWorker(QObject):
-    def __init__(self, root: Path, show_system: bool, include_docs: bool, include_other_text: bool):
-    def run(self):
-class GeneratorWorker(QObject):
-    def __init__(self, selected_files: List[str], root: Path, configs: List[dict]):
-    def run(self):
-    def _process_file(self, file_path: Path, config: dict) -> str:
-    def _process_py(self, file_path: Path, config: dict) -> str:
-    def _process_text(self, file_path: Path) -> str:
-class MainWindow(QMainWindow):
-    def __init__(self):
-    def init_ui(self):
-    def browse_project(self):
-    def scan_project(self):
-    def on_scan_finished(self, file_paths: List[str], dir_structure: dict):
-    def build_tree(self, dir_structure: dict):
-    def on_expand_toggled(self, checked: bool):
-    def on_selection_combo_changed(self, index: int):
-    def apply_saved_selection(self):
-    def on_item_changed(self, item: QStandardItem):
-    def _set_children_checkstate(self, item: QStandardItem, state: Qt.CheckState):
-    def _update_parent_checkstate(self, parent: QStandardItem):
-    def filter_tree(self, text: str):
-    def on_tree_context_menu(self, pos):
-    def _set_all_checkstate(self, state: Qt.CheckState):
-    def _invert_checkstates(self):
-    def _invert_children(self, item: QStandardItem):
-    def _update_all_parents(self, item: QStandardItem):
-    def _get_current_detail(self) -> str:
-    def _generate_filename(self) -> str:
-    def choose_output_file(self):
-    def generate_report(self):
-    def on_generation_finished(self, results: List[dict], user_output_path: Optional[str], is_batch: bool):
-    def _get_checked_files(self) -> List[str]:
-    def _collect_checked(self, item: QStandardItem, result: List[str]):
-    def copy_to_clipboard(self):
-    def save_settings(self):
-    def restore_settings(self):
-    def closeEvent(self, event):
-    def _load_exclusions(self) -> Dict[str, List[str]]:
-    def _save_exclusions(self):
-    def _collect_unchecked(self, item: QStandardItem, result: List[str]):
 # Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
 
 # Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
-
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
 
 
 ============================================================
@@ -724,8 +681,6 @@ class GUITester:
     def get_window_text(self) -> Optional[str]:
     def list_child_widgets(self) -> List[dict]:
     def read_logs(self) -> None:
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -819,8 +774,6 @@ def _read_drop_files(hdrop_int: int) -> list[str]:
 class DropEventFilter(QAbstractNativeEventFilter):
     def __init__(self, callback):
     def nativeEventFilter(self, event_type, message):
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
@@ -834,8 +787,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
 
 Сутності:
 def main():
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
@@ -871,4 +822,3 @@ class ShadowRemoverApp(tk.Tk):
     def _finish(self, status: str):
     def _error(self, msg: str):
     def _save_result(self):
-# Пропущено (low деталізація): D:\Python\Print_COPY\photoprint\photoprint-main\status.md

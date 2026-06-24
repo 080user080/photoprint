@@ -19,6 +19,7 @@ logs
 processing\__init__.py
 processing\autofix.py
 processing\brightness_contrast.py
+processing\deskew.py
 processing\detail_map.py
 processing\diagnostics.py
 processing\doc_classifier.py
@@ -30,13 +31,10 @@ processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
-scaner\scaner.py
 tests\results
 tests\test_images
-tests\README.md
 tests\conftest.py
 tests\gui_tester.py
-tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -44,11 +42,8 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
 shadow_remove_gui.py
-status.md
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: full_doc)
@@ -233,7 +228,7 @@ class ControlsPanel(QWidget):
   from pathlib import Path
   from typing import Optional, Dict, Any
   import numpy
-  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu
+  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox, QListWidget
   from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
   from PyQt6.QtGui import QIcon
   from gui.preview import PreviewPanel
@@ -276,6 +271,8 @@ class MainWindow(QMainWindow):
         """Зберігає розмір вікна та ширину черги в налаштуваннях."""
     def resizeEvent(self, event):
         """Перевизначення resizeEvent для збереження розміру вікна."""
+    def _on_shadow_mode_changed(self, index: int):
+        """Зміна режиму видалення тіней через ComboBox."""
     def _on_settings_saved(self, s: dict):
     def _open_settings(self):
     def _on_files_added(self, paths: list[str]):
@@ -290,7 +287,6 @@ class MainWindow(QMainWindow):
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
     def _do_autofix(self):
-    def _do_full_auto(self):
     def _do_autofix_classic(self):
     def _on_controls_changed(self, vals: dict):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
@@ -298,7 +294,7 @@ class MainWindow(QMainWindow):
     def _do_auto_contrast(self):
     def _do_auto_sharpen(self):
     def _do_persp_auto(self):
-        """Авто-детекція перспективи з fallback до ручного режиму."""
+        """Авто-детекція перспективи з deskew та fallback до ручного режиму."""
     def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
         """Показує 4 точки перспективи на прев'ю (на базовому зображенні _base)."""
     def _do_persp_manual_fallback(self):
@@ -324,6 +320,8 @@ class MainWindow(QMainWindow):
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
     def _set_status(self, text: str):
+    def _show_log(self, log_entries: list[dict]):
+        """Показує лог кроків обробки у віджеті списку."""
     def _dump_widget_geometries(self) -> None:
         """Записує геометрію всіх віджетів з objectName у JSON для GUITester."""
 
@@ -406,16 +404,44 @@ class QueueView(QListWidget):
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\settings_window.py
 ============================================================
 Імпорти:
-  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox, QListWidget, QListWidgetItem, QStackedWidget, QScrollArea
   from PyQt6.QtCore import pyqtSignal
+  from PyQt6.QtCore import Qt
   from config import app_settings
 
 Сутності:
+class StrategyPresetWidget(QWidget):
+    """Віджет вибору пресета стратегії обробки."""
+    def __init__(self, parent):
+    def _on_preset_changed(self, index):
+    def get_preset(self) -> str:
+    def get_enabled_steps(self) -> list[str]:
+    def set_state(self, preset: str, enabled: list[str] | None):
+def _make_scroll_page(widget: QWidget) -> QWidget:
+    """Загорнути віджет у QScrollArea всередині QWidget."""
+def _set_spinbox_minw(spin):
+    """Встановити мінімальну ширину для спін-бокса."""
 class SettingsWindow(QWidget):
     """Вікно налаштувань. Зміни набирають силу після натискання Зберегти."""
     def __init__(self, parent):
     def _qt_tool_flag():
     def _build_ui(self):
+    def _page_autofix(self) -> QWidget:
+        """Сторінка Auto Fix — основні параметри обробки."""
+    def _page_shadow_remove(self) -> QWidget:
+        """Сторінка видалення тіней."""
+    def _page_classify(self) -> QWidget:
+        """Сторінка класифікації документів."""
+    def _page_autosharp(self) -> QWidget:
+        """Сторінка авто-різкості."""
+    def _page_brightness_contrast(self) -> QWidget:
+        """Сторінка яскравість/контраст."""
+    def _page_strategy(self) -> QWidget:
+        """Сторінка стратегії обробки."""
+    def _page_format_save(self) -> QWidget:
+        """Сторінка формату виходу та збереження."""
+    def _page_printer_mode(self) -> QWidget:
+        """Сторінка принтера та режиму запуску."""
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -505,6 +531,32 @@ def to_grayscale(image: np.ndarray) -> np.ndarray:
 (щоб подальший pipeline не ламався)."""
 def _make_brightness_lut(shift: float) -> np.ndarray:
 def _make_contrast_lut(alpha: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\deskew.py
+============================================================
+Імпорти:
+  import numpy
+  import cv2
+
+Сутності:
+def measure_skew_angle(image: np.ndarray) -> float:
+    """Вимірює кут нахилу документа за допомогою HoughLinesP.
+
+1. Зменшує зображення до DESKEW_RESIZE_MAX по більшій стороні
+2. Конвертує в grayscale
+3. Adaptive threshold (THRESH_BINARY_INV) для виділення тексту
+4. HoughLinesP для пошуку ліній
+5. Обчислює кути кожної лінії
+6. Фільтрує кути в діапазоні -45..45 градусів
+7. Повертає медіану кутів або 0.0 якщо ліній менше 3
+
+Returns:
+    Кут нахилу в градусах (додатний = проти годинникової стрілки)."""
+def apply_deskew(image: np.ndarray, angle: float) -> np.ndarray:
+    """Повертає зображення на заданий кут з білим фоном.
+
+Якщо |angle| < DESKEW_MIN_ANGLE — повертає копію без змін."""
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
@@ -823,7 +875,7 @@ Returns:
   from typing import Optional
   import cv2
   import numpy
-  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background
+  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew
 
 Сутності:
 class DocType(str, Enum):
@@ -832,9 +884,12 @@ def run_contrast_advanced(image: np.ndarray, value: float, mode: str) -> np.ndar
     """Застосовує контраст вибраним методом.
 mode: "linear", "percentile", "s_curve", "adaptive".
 Для нелінійних методів використовується тільки додатна сила (0..1)."""
-def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str) -> tuple[np.ndarray, str]:
+def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str, settings: Optional[dict]) -> tuple[np.ndarray, str, list[dict]]:
     """Повний автоматичний pipeline з авто-визначенням типу документа.
-Повертає (результат, статус_повідомлення).
+Повертає (результат, статус_повідомлення, список_кроків).
+
+Кожен елемент списку_кроків — dict:
+    {"step": str, "applied": bool, "detail": str}
 
 Типи:
   bw_document   — чб документ (без HDR, grayscale/bw, сильний контраст)
@@ -847,7 +902,8 @@ bw_binary — чи застосовувати адаптивну бінариз�
 shadow_highlight_strength — сила висвітлення тіней (0-2.0).
 output_color_mode — формат виходу: "auto" (за типом), "color", "grayscale", "binary".
 adaptive_hdr — якщо True, використовує hdr.apply_adaptive для фото-документів.
-contrast_mode — метод контрасту ("linear", "percentile", "s_curve", "adaptive")."""
+contrast_mode — метод контрасту ("linear", "percentile", "s_curve", "adaptive").
+settings — словник налаштувань для параметрів видалення тіней."""
 def run_sharpen(image: np.ndarray, strength: float) -> np.ndarray:
     """Тільки різкість."""
 def run_auto_sharpen(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
@@ -858,6 +914,18 @@ def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float,
 def run_hdr(image: np.ndarray, strength: float, adaptive: bool) -> np.ndarray:
     """Тільки HDR tone mapping.
 adaptive: якщо True — використовує hdr.apply_adaptive з text_mask."""
+def run_perspective_auto_smart(image: np.ndarray, settings: dict | None) -> tuple[np.ndarray, str]:
+    """Розумна авто-перспектива з deskew.
+
+Логіка:
+- Вимірює кут нахилу (skew)
+- Шукає кути документа
+- Якщо знайдено викривлення перспективи — warp + deskew
+- Якщо тільки нахил — тільки deskew
+- Якщо нічого — без змін
+
+Returns:
+    (result, status_message)"""
 def run_perspective_auto(image: np.ndarray, partial: bool) -> tuple[np.ndarray, bool]:
     """Тільки авто-перспектива.
 Повертає (результат, знайдено).
@@ -887,20 +955,6 @@ detail_density на АКТУАЛЬНОМУ image (а не на застаріл�
 в майбутньому в одному з двох місць.
 
 Не застосовується до фото."""
-def _compute_adaptive_params(diag) -> dict:
-    """Обчислює індивідуальні параметри обробки на основі діагностики (Крок 4).
-Повертає словник з параметрами для run_full_auto."""
-def run_full_auto(image: np.ndarray, settings: dict, dry_run: bool) -> tuple[np.ndarray, str, dict]:
-    """Універсальний адаптивний Full Auto pipeline (Крок 4).
-Аналізує зображення через diagnostics.diagnose, обчислює індивідуальні
-параметри через _compute_adaptive_params і застосовує тільки потрібні
-корекції з адаптивною силою.
-
-Кожне зображення отримує власні параметри: noise_floor, hdr_strength,
-sharpen_strength, contrast_strength, brightness, shadow_remove.
-
-Параметр dry_run=True — тільки діагностика, нічого не застосовувати.
-Повертає (result, status_message, applied_steps)."""
 def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool, contrast_mode: str) -> np.ndarray:
     """Застосовує всі ручні корекції в правильному порядку.
 
@@ -993,7 +1047,7 @@ Args:
 
 Returns:
     Груба модель фону (uint8, 2D), того ж розміру що l_channel."""
-def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool, is_color_document: bool, coarse_blend: float) -> np.ndarray:
     """Видаляє градієнтні тіні з документа через background estimation.
 
 Метод (два проходи):
@@ -1016,10 +1070,14 @@ Args:
                   великих тіней. За замовчуванням True. Вимкніть,
                   якщо точно знаєте, що тіні завжди дрібні/локальні
                   і хочете заощадити обчислення.
+    is_color_document: Якщо True — застосовує множник KERNEL_COLOR_MULTIPLIER
+                       до kernel_size і пропускає другий прохід.
+    coarse_blend: Сила блендингу другого проходу для кольорових документів.
+                  0.0 = другий прохід вимкнено для кольорових.
 
 Returns:
     Оброблене BGR зображення без градієнтних тіней"""
-def auto_remove_shadow(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float) -> tuple[np.ndarray, bool]:
     """Автоматичне видалення тіней: спочатку перевіряє чи є тіні,
 потім застосовує remove_shadow якщо потрібно.
 
@@ -1033,17 +1091,16 @@ def _auto_kernel_size(image: np.ndarray) -> int:
 MORPH_CLOSE по суті no-op'ом (модель фону стає майже константою) —
 компенсацію великих тіней понад цю межу бере на себе прохід 2
 (_create_coarse_background), а не подальше зростання цього ядра."""
-def _detect_shadow(image: np.ndarray) -> bool:
-    """Виявляє наявність тіней на зображенні.
+def _detect_shadow(image: np.ndarray, threshold: float, ratio: float) -> bool:
+    """Виявляє наявність нерівномірного освітлення (тіней) на зображенні.
 
-Багаторівнева перевірка:
-1. Захисний фільтр: не обробляємо фото (std A/B > 30).
-2. Захисний фільтр: не обробляємо документи з гільйошем/насиченим
-   кольором (S-канал HSV > 50 більше ніж у 15% пікселів).
-3. Захисний фільтр: не обробляємо сильно розмиті зображення
-   (дисперсія Laplacian < 10), бо shadow_remove може створити артефакти.
-4. Основна перевірка: якщо нижній перцентиль L-каналу значно
-   темніший за верхній — є тіні."""
+Дві перевірки:
+1. Зображення не надто розмите (Laplacian var >= порогу).
+2. Є темні ділянки з великим перепадом яскравості (p5/95 < ratio).
+
+Тип документа (фото/кольоровий/чб) визначається зовні і не впливає на
+детекцію тіней — ця функція відповідає тільки на питання "чи є
+нерівне освітлення"."""
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\sharpen.py
@@ -1131,166 +1188,9 @@ def make_background_white(image: np.ndarray, background_uniformity: float, detai
 
 Повертає:
     (модифіковане_зображення, чи_була_заміна)"""
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\scaner\scaner.py
-============================================================
-Імпорти:
-  import sys
-  import os
-  import json
-  import ast
-  import hashlib
-  from pathlib import Path
-  from typing import List, Optional, Dict, Set, Tuple, Any
-  from datetime import datetime
-  from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QModelIndex, QSortFilterProxyModel, QStandardPaths, QSettings, QByteArray, QItemSelectionModel
-  from PyQt6.QtGui import QStandardItemModel, QStandardItem, QIcon, QAction
-  from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLineEdit, QFileDialog, QCheckBox, QRadioButton, QButtonGroup, QGroupBox, QTreeView, QPlainTextEdit, QProgressDialog, QMessageBox, QLabel, QSplitter, QScrollArea, QMenu, QStyle, QHeaderView, QComboBox
-
-Сутності:
-def get_function_signature(node: ast.FunctionDef) -> str:
-def get_class_signature(node: ast.ClassDef) -> str:
-def extract_docstring(node) -> Optional[str]:
-def extract_full_docstring(node) -> Optional[str]:
-class ScannerWorker(QObject):
-    def __init__(self, root: Path, show_system: bool, include_docs: bool, include_other_text: bool):
-    def run(self):
-class GeneratorWorker(QObject):
-    def __init__(self, selected_files: List[str], root: Path, configs: List[dict]):
-    def run(self):
-    def _process_file(self, file_path: Path, config: dict) -> str:
-    def _process_py(self, file_path: Path, config: dict) -> str:
-    def _process_text(self, file_path: Path) -> str:
-class MainWindow(QMainWindow):
-    def __init__(self):
-    def init_ui(self):
-    def browse_project(self):
-    def scan_project(self):
-    def on_scan_finished(self, file_paths: List[str], dir_structure: dict):
-    def build_tree(self, dir_structure: dict):
-    def on_expand_toggled(self, checked: bool):
-    def on_selection_combo_changed(self, index: int):
-    def apply_saved_selection(self):
-    def on_item_changed(self, item: QStandardItem):
-    def _set_children_checkstate(self, item: QStandardItem, state: Qt.CheckState):
-    def _update_parent_checkstate(self, parent: QStandardItem):
-    def filter_tree(self, text: str):
-    def on_tree_context_menu(self, pos):
-    def _set_all_checkstate(self, state: Qt.CheckState):
-    def _invert_checkstates(self):
-    def _invert_children(self, item: QStandardItem):
-    def _update_all_parents(self, item: QStandardItem):
-    def _get_current_detail(self) -> str:
-    def _generate_filename(self) -> str:
-    def choose_output_file(self):
-    def generate_report(self):
-    def on_generation_finished(self, results: List[dict], user_output_path: Optional[str], is_batch: bool):
-    def _get_checked_files(self) -> List[str]:
-    def _collect_checked(self, item: QStandardItem, result: List[str]):
-    def copy_to_clipboard(self):
-    def save_settings(self):
-    def restore_settings(self):
-    def closeEvent(self, event):
-    def _load_exclusions(self) -> Dict[str, List[str]]:
-    def _save_exclusions(self):
-    def _collect_unchecked(self, item: QStandardItem, result: List[str]):
 # Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
 
 # Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
-
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
-============================================================
-# Автоматизований тестувальник GUI для PhotoPrint
-
-Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
-
-## Структура
-
-```
-tests/
-├── gui_tester.py          # Ядро тестувальника (GUITester клас)
-├── requirements.txt       # Залежності для тестів
-├── README.md             # Цей файл
-├── scenarios/            # Сценарії тестів
-│   ├── test_autofix_toggle.py
-│   └── test_perspective_auto.py
-├── test_images/          # Тестові зображення
-├── expected/             # Очікувані результати
-├── results/              # Результати тестів (скріншоти)
-└── logs/                 # Логи додатка
-```
-
-## Встановлення
-
-1. Встановіть залежності:
-```bash
-pip install -r tests/requirements.txt
-```
-
-## Використання
-
-### Запуск окремого тесту
-
-```bash
-python tests/scenarios/test_autofix_toggle.py
-python tests/scenarios/test_perspective_auto.py
-```
-
-### Створення нового сценарію
-
-1. Створіть новий файл в `tests/scenarios/`
-2. Імпортуйте GUITester:
-```python
-from tests.gui_tester import GUITester
-```
-
-3. Створіть функцію тесту:
-```python
-def test_my_feature():
-    tester = GUITester("gui/main.py")
-    tester.setup_directories()
-    tester.launch_app()
-    tester.wait(3)
-    tester.activate_window(title="PhotoPrint")
-    # Ваші дії...
-    tester.close_app()
-    return True
-```
-
-## GUITester API
-
-### Методи
-
-- `launch_app()` - Запускає GUI додаток через subprocess
-- `activate_window(title)` - Активує вікно за назвою
-- `type_text(text)` - Вставляє текст в активне вікно
-- `press_key(key)` - Натискає клавішу
-- `click_at(x, y)` - Клікає мишкою по координатах
-- `wait(seconds)` - Чекає заданий час
-- `screenshot(filename)` - Зберігає скріншот вікна
-- `compare_images(actual, expected, tolerance)` - Порівнює зображення
-- `close_app()` - Закриває GUI додаток
-- `setup_directories()` - Створює необхідні директорії
-- `clear_logs()` - Очищає логи перед тестом
-- `read_logs()` - Читає логи після тесту
-
-## TODO
-
-- [ ] Реалізувати завантаження зображень через drag & drop
-- [ ] Реалізувати перемикання елементів через координати
-- [ ] Додати більше сценаріїв тестів
-- [ ] Інтеграція з pytest
-- [ ] CI/CD інтеграція
-
-## Примітки
-
-- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
-- Не залежить від внутрішньої структури GUI
-- Працює як реальний користувач
-- Потрібно щоб GUI було відкрито і видимим під час тестів
 
 
 ============================================================
@@ -1380,15 +1280,6 @@ class GUITester:
         """Перелічує всі дочірні віджети вікна (для дебагу)"""
     def read_logs(self) -> None:
         """Читає логи після тесту"""
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
-============================================================
-pyautogui>=0.9.54
-pywin32>=306
-opencv-python>=4.8.0
-pytest>=7.4.0
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -1550,165 +1441,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
 
 ============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-============================================================
-# PhotoPrint
-
-Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
-
-## Функціональність
-
-- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
-- **Інтелектуальна авто-обробка:**
-  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
-  - Авто-яскравість на основі гістограми (5-95% перцентилів)
-  - Авто-контраст з адаптивними порогами
-  - Авто-різкість на основі аналізу blur (Laplacian variance)
-  - Авто-детекція перспективи з fallback
-- **Ручне коригування:**
-  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
-  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
-  - Скидання: Скинути перспективу, Скинути слайдери
-- **Пакетна обробка:** Авто та ручний режими для черги файлів
-- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
-- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
-- **Друк:** Відправка на принтер (priPrinter або інший)
-- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
-
-## Встановлення
-
-```bash
-pip install -r requirements.txt
-```
-
-## Запуск
-
-```bash
-python main.py
-```
-
-## Структура проєкту
-
-```
-photoprint/
-├── main.py                    # Точка входу
-├── requirements.txt
-├── status.md                  # Статус розробки та план
-├── README.md                  # Цей файл
-│
-├── config/
-│   ├── settings.ini           # Конфігураційний файл
-│   └── app_settings.py        # Читання/запис налаштувань
-│
-├── core/
-│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
-│   ├── saver.py               # Збереження JPG
-│   └── printer.py             # Відправка на принтер
-│
-├── processing/
-│   ├── autofix.py             # Pipeline для різних типів документів
-│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
-│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
-│   ├── hdr.py                 # HDR tone mapping
-│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
-│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
-│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
-│   ├── perspective.py         # Авто + ручна перспективна корекція
-│   └── pipeline.py            # Єдина точка входу для GUI
-│
-├── batch/
-│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
-│
-├── gui/
-│   ├── main_window.py         # Головне вікно
-│   ├── preview.py             # Прев'ю До/Після
-│   ├── queue_view.py          # Черга файлів з Drag & Drop
-│   ├── controls.py            # Слайдери та кнопки керування
-│   └── settings_window.py     # Вікно налаштувань
-│
-└── utils/
-    ├── file_utils.py          # Робота з файлами
-    ├── image_utils.py         # Утиліти numpy/OpenCV
-    ├── logger.py              # Логування
-    └── win_drop.py            # Windows Drag & Drop
-```
-
-## Використання
-
-### Базовий робочий процес
-
-1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
-2. **Оберіть режим:** **Авто** або **Ручний**
-3. **Авто режим:**
-   - Натисніть "Друкувати все"
-   - Програма автоматично класифікує, обробить і надрукує всі файли
-4. **Ручний режим:**
-   - Переглядайте кожне фото по черзі
-   - Використовуйте "Auto Fix" для автоматичної корекції
-   - Або налаштуйте вручну через слайдери
-   - Натисніть "Друк" або "Пропустити"
-
-### Слайдери
-
-- **Тіні (0.0-2.0):** Висвітлення темних областей
-- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
-- **Контраст (-1.0-1.0):** Зміна контрасту
-- **Різкість (0.0-1.0):** Збільшення різкості
-- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
-
-### Кнопки авто-корекції
-
-- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
-- **Авто контраст:** Автоматичне вирівнювання контрасту
-- **Авто різкість:** Автоматична різкість на основі аналізу blur
-
-### Перспектива
-
-- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
-- **Ручна перспектива:** Ручне встановлення 4 кутів документа
-- **Скинути перспективу:** Повернення до оригінальної перспективи
-
-### Налаштування
-
-Файл `config/settings.ini` — текстовий, редагується блокнотом.
-Або через кнопку **⚙ Налаштування** у програмі.
-
-**Доступні налаштування:**
-- Пороги класифікації документів
-- Сила авто-різкості та поріг blur
-- Параметри авто-яскравості/контрасту (перцентилі)
-- Налаштування бінаризації для ч-б документів
-- Якість JPG при збереженні
-- Папка для збереження оброблених файлів
-- Назва принтера за замовчуванням
-- Вікно програми (розмір, позиція)
-
-## Стан розробки
-
-Детальний статус розробки дивіться у файлі [status.md](status.md).
-
-**Фаза 1 (завершено):**
-- ✅ Авто-обробка з класифікацією документів
-- ✅ Окремі pipeline для ч-б, кольорових документів та фото
-- ✅ Авто-видалення градієнтних тіней (blur/divide)
-- ✅ Авто-яскравість, авто-контраст, авто-різкість
-- ✅ Авто-детекція перспективи
-- ✅ Запам'ятовування ручних корекцій
-- ✅ Логування
-
-**Фаза 2 (наступний пріоритет):**
-- Адаптивний HDR для фото документів
-- Юніт-тести
-- Оптимізація пам'яті
-- Підтримка RAW-форматів
-- Трей-режим
-
-## Ліцензія
-
-Проект розробляється для особистого використання.
-
-
-============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
 Імпорти:
@@ -1720,16 +1452,6 @@ photoprint/
 
 Сутності:
 def main():
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-============================================================
-opencv-python>=4.8
-numpy>=1.24
-Pillow>=10.0
-pillow-heif>=0.13
-PyQt6>=6.5
-rawpy>=0.27
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
@@ -1781,810 +1503,3 @@ class ShadowRemoverApp(tk.Tk):
     def _finish(self, status: str):
     def _error(self, msg: str):
     def _save_result(self):
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\status.md
-============================================================
-# PhotoPrint — Статус та план розвитку
-
-## Призначення
-
-Програма для автоматичної (за потреби — ручної) підготовки неякісних фотографій та зображень документів до друку.
-
-**Що обробляється:**
-- Фото документів, зняті з перспективою, з поганим освітленням, розмиті або з низькою контрастністю
-- Сканоподібні зображення, які потребують авто-корекції: перспектива, яскравість, контраст, різкість
-
-**Що пропускається без обробки:**
-- DOCX, XLSX, PDF та інші офісні файли — відправляються на принтер за замовчуванням (priPrinter) напряму
-
-**Поточний режим роботи:**
-- GUI-додаток з чергою файлів, прев'ю До/Після та двома режимами: Авто та Ручний
-- Пакетна обробка зображень у фоновому потоці
-- Відправка на друк через системний принтер (Windows: ShellExecute / mspaint, Linux/Mac: lp)
-
-## Мета
-
-Створити **віртуальний принтер**, який:
-1. Отримує будь-який друкований документ із будь-якої програми
-2. Автоматично визначає, чи потребує зображення обробки
-3. Застосовує оптимальні корекції без участі користувача
-4. Перенаправляє результат на фізичний принтер за замовчуванням (priPrinter)
-
-**Кінцевий результат:** користувач натискає «Друк» у Word, браузері чи іншій програмі — а PhotoPrint у фоні вирішує, що робити, і видає готовий документ на друк.
-
-## Поточний статус
-
-- [x] Базовий GUI (PyQt6) з чергою, прев'ю, слайдерами
-- [x] Підтримка форматів: JPG, PNG, WEBP, TIFF, HEIC
-- [x] Авто-обробка: LAB → CLAHE → Normalize → Sharpen
-- [x] Ручна корекція: тіні (0.0-2.0), яскравість, контраст, різкість, HDR, перспектива (4 точки), ч/б
-- [x] Пакетна обробка в окремому потоці
-- [x] Відправка на друк через priPrinter / системний принтер
-- [x] Конфігурація через INI-файл
-- [x] GUI layout: слайдери вниз в два ряди, кнопки в один ряд під прев'ю
-- [x] Resizable черга файлів (150-500px)
-- [x] Збереження window geometry (розмір вікна, ширина черги)
-- [x] Type hints в GUI модулях (main_window, controls, queue_view)
-- [x] Окрема кнопка скидання перспективи
-- [x] Скидання слайдерів з оновленням прев'ю та збереженням для файлу
-- [ ] Віртуальний принтер (не реалізовано, зарезервовано місце)
-- [ ] Автоматична маршрутизація: зображення → обробка, офісні файли → прямий друк
-- [ ] Автозапуск як системна служба / фоновий процес
-
-## Пріоритети розвитку (актуальні)
-
-### 0. Автоматизований тестувальник GUI (НАЙВИЩИЙ ПРІОРИТЕТ)
-- Автоматизація тестування GUI через зовнішнє керування (клавіатура/мишка)
-- Архітектура: Ядро (Core) + Сценарії (Scenarios)
-- Підтримка кліків, натискань кнопок, введення тексту, скріншотів, перевірки результатів
-
-#### Статус реалізації:
-- ✅ Створено структуру директорій (tests/test_images, tests/expected, tests/results, tests/logs, tests/scenarios)
-- ✅ Реалізовано ядро GUITester в tests/gui_tester.py
-- ✅ Створено базові сценарії (test_autofix_toggle.py, test_perspective_auto.py)
-- ✅ Додано requirements.txt (pyautogui, pywin32, opencv-python, pytest)
-- ✅ Створено README.md з документацією
-- ⏸️ TODO: Реалізувати завантаження зображень через drag & drop
-- ⏸️ TODO: Реалізувати кліки по елементах через координати
-- ⏸️ TODO: Додати більше сценаріїв тестів
-- ⏸️ TODO: Інтеграція з pytest
-- ⏸️ TODO: CI/CD інтеграція
-
-#### Архітектура:
-
-**Частина 1: Ядро (Core) - tests/gui_tester.py**
-
-```python
-"""Автоматизований тестувальник GUI для PhotoPrint"""
-import subprocess
-import time
-import os
-import sys
-import threading
-from pathlib import Path
-
-class GUITester:
-    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
-
-    def __init__(self, app_path, venv_python=None):
-        self.app_path = app_path  # шлях до скрипта запуску GUI
-        self.venv_python = venv_python  # шлях до python у venv (опціонально)
-        self.process = None  # subprocess process
-        self.output_thread = None  # потік для читання виводу
-        self.test_images_dir = Path("tests/test_images")
-        self.expected_dir = Path("tests/expected")
-        self.results_dir = Path("tests/results")
-        self.logs_dir = Path("tests/logs")
-
-    def launch_app(self):
-        """Запускає GUI додаток через subprocess"""
-        python = self.venv_python or sys.executable
-        self.process = subprocess.Popen(
-            [python, self.app_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            cwd=str(Path(self.app_path).parent)
-        )
-
-        # Читання виводу в окремому потоці
-        def read_output():
-            for line in self.process.stdout:
-                try:
-                    if line.strip():
-                        print(f"[GUI] {line}", end='')
-                except UnicodeDecodeError:
-                    pass
-
-        self.output_thread = threading.Thread(target=read_output, daemon=True)
-        self.output_thread.start()
-
-    def activate_window(self, title):
-        """Активує вікно за назвою (через Windows API)"""
-        try:
-            from functions.aaa_voice_input import activate_window_by_title
-            result = activate_window_by_title(title=title)
-            print(f"✅ Вікно активовано: {result}")
-            return result
-        except Exception as e:
-            print(f"❌ Помилка активації вікна: {e}")
-            return False
-
-    def type_text(self, text):
-        """Вставляє текст в активне вікно"""
-        try:
-            from functions.tools_mouse_keyboard import keyboard_type
-            result = keyboard_type(text=text)
-            print(f"✅ Текст вставлено: {result}")
-            return result
-        except Exception as e:
-            print(f"❌ Помилка вставки тексту: {e}")
-            return False
-
-    def press_key(self, key):
-        """Натискає клавішу"""
-        try:
-            from functions.tools_mouse_keyboard import keyboard_press
-            result = keyboard_press(key=key)
-            print(f"✅ Клавіша натиснута: {result}")
-            return result
-        except Exception as e:
-            print(f"❌ Помилка натискання клавіші: {e}")
-            return False
-
-    def click_at(self, x, y):
-        """Клікає мишкою по координатах"""
-        try:
-            from functions.tools_mouse_keyboard import mouse_click
-            result = mouse_click(x=x, y=y)
-            print(f"✅ Клік виконано: {result}")
-            return result
-        except Exception as e:
-            print(f"❌ Помилка кліку: {e}")
-            return False
-
-    def wait(self, seconds):
-        """Чекає заданий час"""
-        print(f"⏳ Зачекайте {seconds} секунд...")
-        time.sleep(seconds)
-
-    def screenshot(self, filename):
-        """Зберігає скріншот вікна"""
-        try:
-            from functions.tools_mouse_keyboard import take_screenshot
-            result = take_screenshot(filename=filename)
-            print(f"✅ Скріншот збережено: {result}")
-            return result
-        except Exception as e:
-            print(f"❌ Помилка скріншоту: {e}")
-            return False
-
-    def compare_images(self, actual_path, expected_path, tolerance=5):
-        """Порівнює два зображення через OpenCV"""
-        try:
-            import cv2
-            import numpy as np
-
-            img1 = cv2.imread(str(actual_path))
-            img2 = cv2.imread(str(expected_path))
-
-            if img1 is None or img2 is None:
-                print(f"❌ Не вдалося завантажити зображення")
-                return False
-
-            # Перевіряємо розміри
-            if img1.shape != img2.shape:
-                print(f"❌ Розміри зображень не співпадають")
-                return False
-
-            # Порівнюємо пікселі з допуском
-            diff = np.abs(img1.astype(int) - img2.astype(int))
-            max_diff = np.max(diff)
-
-            if max_diff <= tolerance:
-                print(f"✅ Зображення співпадають (max diff: {max_diff})")
-                return True
-            else:
-                print(f"❌ Зображення не співпадають (max diff: {max_diff})")
-                return False
-
-        except Exception as e:
-            print(f"❌ Помилка порівняння: {e}")
-            return False
-
-    def close_app(self):
-        """Закриває GUI додаток"""
-        if self.process:
-            print("❌ Закриття програми...")
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-
-    def setup_directories(self):
-        """Створює необхідні директорії"""
-        self.test_images_dir.mkdir(parents=True, exist_ok=True)
-        self.expected_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-
-    def clear_logs(self):
-        """Очищає логи перед тестом"""
-        if self.logs_dir.exists():
-            for log_file in self.logs_dir.iterdir():
-                try:
-                    log_file.unlink()
-                    print(f"✅ Видалено лог: {log_file.name}")
-                except Exception as e:
-                    print(f"❌ Помилка видалення {log_file.name}: {e}")
-
-    def read_logs(self):
-        """Читає логи після тесту"""
-        print("\n" + "=" * 60)
-        print("ЛОГИ:")
-        print("=" * 60)
-
-        if self.logs_dir.exists():
-            for log_file in self.logs_dir.iterdir():
-                print(f"\n📄 {log_file.name}:")
-                print("-" * 40)
-                try:
-                    content = log_file.read_text(encoding='utf-8')
-                    if content:
-                        print(content)
-                    else:
-                        print("(пустий)")
-                except Exception as e:
-                    print(f"❌ Помилка читання {log_file.name}: {e}")
-        else:
-            print("❌ Папка логів не існує")
-```
-
-**Частина 2: Сценарії (Scenarios) - tests/scenarios/*.py**
-
-```python
-# tests/scenarios/test_autofix_toggle.py
-def test_autofix_toggle(tester):
-    """Тест перемикання автофікс чекбоксу"""
-    print("=" * 60)
-    print("Тест: перемикання автофікс чекбоксу")
-    print("=" * 60)
-
-    # 1. Налаштування
-    tester.setup_directories()
-    tester.clear_logs()
-
-    # 2. Запуск додатка
-    print("🚀 Запуск PhotoPrint...")
-    tester.launch_app()
-    tester.wait(2)
-
-    # 3. Активація вікна
-    print("🔓 Активація вікна PhotoPrint...")
-    tester.activate_window(title="PhotoPrint")
-    tester.wait(0.5)
-
-    # 4. Завантаження тестового зображення (через drag & drop або меню)
-    # TODO: реалізувати завантаження через клавіатуру/мишку
-    print("📁 Завантаження тестового зображення...")
-    # tester.type_text("path/to/image.jpg")
-    # tester.press_key("Enter")
-    tester.wait(1)
-
-    # 5. Перемикання автофікс (клік по чекбоксу або комбінація клавіш)
-    print("🔄 Перемикання автофікс...")
-    # tester.click_at(x=100, y=200)  # координати чекбоксу
-    tester.wait(0.5)
-
-    # 6. Збереження скріншоту
-    screenshot_path = tester.results_dir / "autofix_toggle.png"
-    tester.screenshot(str(screenshot_path))
-
-    # 7. Закриття
-    tester.close_app()
-
-    # 8. Перевірка результатів
-    print("\n" + "=" * 60)
-    print("ТЕСТ ЗАВЕРШЕНО")
-    print("=" * 60)
-
-    return True
-
-# tests/scenarios/test_perspective_auto.py
-def test_perspective_auto(tester):
-    """Тест авто-перспективи"""
-    print("=" * 60)
-    print("Тест: авто-перспектива")
-    print("=" * 60)
-
-    tester.setup_directories()
-    tester.clear_logs()
-
-    print("🚀 Запуск PhotoPrint...")
-    tester.launch_app()
-    tester.wait(2)
-
-    print("🔓 Активація вікна PhotoPrint...")
-    tester.activate_window(title="PhotoPrint")
-    tester.wait(0.5)
-
-    print("📁 Завантаження тестового зображення з перспективою...")
-    # TODO: завантажити test_images/perspective_sample.jpg
-    tester.wait(1)
-
-    print("🔲 Клік на кнопку авто-перспектива...")
-    # tester.click_at(x=300, y=400)  # координати кнопки
-    tester.wait(2)
-
-    screenshot_path = tester.results_dir / "perspective_auto.png"
-    tester.screenshot(str(screenshot_path))
-
-    # Порівняння з очікуваним результатом
-    expected_path = tester.expected_dir / "perspective_expected.jpg"
-    if expected_path.exists():
-        tester.compare_images(screenshot_path, expected_path, tolerance=10)
-
-    tester.close_app()
-
-    print("\n" + "=" * 60)
-    print("ТЕСТ ЗАВЕРШЕНО")
-    print("=" * 60)
-
-    return True
-
-# tests/scenarios/test_slider_adjustment.py
-def test_slider_adjustment(tester):
-    """Тест слайдерів"""
-    print("=" * 60)
-    print("Тест: налаштування слайдерів")
-    print("=" * 60)
-
-    tester.setup_directories()
-    tester.clear_logs()
-
-    print("🚀 Запуск PhotoPrint...")
-    tester.launch_app()
-    tester.wait(2)
-
-    print("🔓 Активація вікна PhotoPrint...")
-    tester.activate_window(title="PhotoPrint")
-    tester.wait(0.5)
-
-    print("📁 Завантаження тестового зображення...")
-    # TODO: завантажити test_images/sample.jpg
-    tester.wait(1)
-
-    print("🎚️ Встановлення яскравості на 0.5...")
-    # TODO: клік по слайдеру та переміщення
-    tester.wait(0.5)
-
-    screenshot_path = tester.results_dir / "slider_brightness.png"
-    tester.screenshot(str(screenshot_path))
-
-    tester.close_app()
-
-    print("\n" + "=" * 60)
-    print("ТЕСТ ЗАВЕРШЕНО")
-    print("=" * 60)
-
-    return True
-```
-
-#### План реалізації:
-
-**Крок 1: Базове ядро (Core)**
-- Реалізувати GUITester клас
-- Підтримка запуску GUI через subprocess
-- Активація вікна за назвою (Windows API)
-- Вставка тексту та натискання клавіш
-- Кліки мишкою по координатах
-- Збереження скріншотів
-- Порівняння зображень (OpenCV)
-
-**Крок 2: Розширення ядра**
-- Drag & drop завантаження файлів
-- Навігація по меню через клавіатуру
-- Пошук елементів по координатах/кольору
-- Очікування подій/тайм-аути
-- Логування дій та результатів
-- Читання логів додатка
-
-**Крок 3: Базові сценарії**
-- test_autofix_toggle.py - перемикання автофікс
-- test_perspective_auto.py - авто-перспектива
-- test_perspective_manual.py - ручна перспектива
-- test_slider_adjustment.py - слайдери
-- test_grayscale_toggle.py - ч/б режим
-- test_reset_buttons.py - скидання
-
-**Крок 4: Сценарії для захисту оригіналу**
-- test_original_immutability.py - перевірка незмінності оригіналу
-- test_before_preview_unchanged.py - прев'ю "До" не змінюється
-- test_all_functions_no_modify_orig.py - всі функції не змінюють оригінал
-
-**Крок 5: Сценарії для часткової перспективи**
-- test_partial_perspective_detection.py - детекція кривої сторони
-- test_partial_perspective_warp.py - частковий warp
-- test_full_vs_partial_perspective.py - порівняння повної та часткової
-
-**Крок 6: Інфраструктура**
-- Тестові зображення (tests/test_images/)
-- Очікувані результати (tests/expected/)
-- Результати тестів (tests/results/)
-- Логи додатка (tests/logs/)
-- Запуск всіх тестів (pytest)
-
-**Крок 7: Інтеграція в CI/CD**
-- Автоматичний запуск тестів при комміті
-- Звіти про результати
-- Скріншоти при невдачах
-
-#### Технології:
-- subprocess для запуску GUI
-- Windows API для активації вікна
-- pyautogui або custom functions для клавіатури/мишки
-- OpenCV для порівняння зображень
-- pytest для запуску тестів
-
-#### Очікуваний результат:
-- Автоматичне тестування всіх GUI функцій
-- Виявлення регресій при змінах
-- Документація роботи через сценарії
-- Швидка перевірка нових функцій
-- Незалежність від внутрішньої структури GUI
-
-### 0.1 Часткова корекція перспективи (ВИСОКИЙ ПРІОРИТЕТ)
-- Вирівнювання тільки однієї сторони документа, не чіпаючи інші
-- Визначення рівної сторони (горизонтальної чи вертикальної)
-- Визначення кривої сторони через різницю координат
-- Частковий warp тільки для кривої сторони
-- Збереження інших сторін без змін
-
-#### План реалізації:
-
-**Крок 1: Визначення рівної сторони**
-- Порівняти різницю Y для верху і низу (горизонтальність)
-- Порівняти різницю X для лівої і правої сторони (вертикальність)
-- Сторона з меншою різницею вважається рівною
-
-**Крок 2: Визначення кривої сторони**
-- Якщо top_diff > bottom_diff → кривий верх
-- Якщо bottom_diff > top_diff → кривий низ
-- Якщо left_diff > right_diff → крива ліва сторона
-- Якщо right_diff > left_diff → крива права сторона
-
-**Крок 3: Частковий warp для кривої сторони**
-- Вирівнюємо тільки криву сторону (усереднюємо координати)
-- Інші сторони залишаємо без змін
-- Застосовуємо getPerspectiveTransform з новими точками
-
-**Крок 4: Інтеграція в GUI**
-- Додати перемикач: "Повна перспектива" / "Часткова перспектива"
-- В ручному режимі — автоматично визначати криву сторону
-- В авто режимі — застосовувати часткову корекцію за замовчуванням
-
-**Крок 5: Валідація**
-- Поріг різниці координат для визначення "кривої" сторони (наприклад, 10px)
-- Перевірка на випадки коли всі сторони рівні (не застосовувати корекцію)
-- Перевірка на випадки коли всі сторони криві (повна перспектива)
-
-#### Очікуваний результат:
-- Документ вирівнюється тільки там де це потрібно
-- Не деформується частина документа яка вже рівна
-- Менше артефактів при корекції перспективи
-
-### 0.1 Захист оригіналу від змін (ВИСОКИЙ ПРІОРИТЕТ)
-- Оригінальне зображення (_orig) не має змінюватися жодною функцією
-- Прев'ю "До" (before preview) має завжди показувати оригінал без змін
-- Всі корекції застосовуються тільки до _base та _processed
-- Забезпечити immutability оригіналу на рівні коду
-
-#### План перевірки всіх функцій:
-
-**Крок 1: Аудит функцій в main_window.py**
-- Перевірити всі методи які викликають `self._preview.set_before()`
-- Перевірити чи не змінюється `self._orig` в жодному місці
-- Перевірити чи не передається `_orig` в pipeline для модифікації
-
-**Крок 2: Аудит функцій в pipeline.py**
-- Перевірити чи всі функції повертають нове зображення, а не модифікують вхідне
-- Перевірити чи немає in-place операцій які змінюють оригінал
-
-**Крок 3: Аудит функцій в processing модулях**
-- Перевірити всі функції обробки на immutability
-- Додати .copy() там де це потрібно для захисту від змін
-
-**Крок 4: Додати тести для immutability**
-- Написати тести які перевіряють що вхідне зображення не змінюється
-- Порівнювати вхідне зображення до і після виклику функції
-
-**Крок 5: Додати захист на рівні коду**
-- Розглянути використання @dataclass(frozen=True) або інших механізмів immutability
-- Додати assert або логування якщо оригінал змінюється
-
-#### Очікуваний результат:
-- Оригінал завжди незмінний
-- Прев'ю "До" завжди показує оригінал
-- Користувач може будь-коли повернутися до оригіналу через скидання
-
-### 1. Збереження максимальної якості
-- Усі операції на оригінальному розмірі (без downsample до обробки)
-- Прев'ю тільки для відображення в GUI, обробка на повному розмірі
-- Оптимізація пам'яті для великих зображень (streaming по частинах)
-
-### 2. Автоматичне визначення яскравості
-- Аналіз гістограми для визначення недоливу/перелиття
-- Авто-корекція до оптимального діапазону (5-95% перцентилів)
-
-### 3. Автоматичне визначення контрасту
-- Аналіз розподілу яскравості для виявлення низькоконтрастних зображень
-- Авто-контрастна корекція з адаптивними порогами (5-95% перцентилів)
-
-### 4. Автоматичне визначення різкості
-- Аналіз частот (FFT або Laplacian variance) для виявлення розмитості
-- Авто-різкість на основі виміряного blur-фактора
-
-### 5. HDR для документів
-- Поточний HDR працює добре для фото, але погано для документів
-- Проблема: при переході світла додає чорного в світлих частинах → негативно для друку
-- Потрібно:
-  - Визначати тип зображення: документ (чорний текст на білому фоні) чи фото
-  - Для ч-б документів: чорні букви на білому фоні (пріоритет)
-  - Для кольорових документів на іншому фоні (грамоти, посвідчення, паспорти): адаптивна обробка
-  - Для фото: використовувати поточний HDR
-
-### 6. Визначення типу документа
-- Розпізнавання: чорнобілий документ (телефон фотографує з шумами, не контрастно) чи документ на неоднотонному фоні
-- Для ч-б документів: бінаризація, чорні букви на білому фоні (як стандартний офісний документ)
-- Передбачити можливість кольорових документів (білі/червоні на іншому фоні)
-- Чорне по білому — пріоритет
-
-### 7. Всі налаштування в GUI
-- Всі параметри (масштаби, пороги, коефіцієнти) мають бути доступні через GUI
-- Немає потреби переписувати код для зміни налаштувань
-- Можливість експорту/імпорту профілів налаштувань
-
-### 8. Запам'ятовування ручних корекцій по файлу (середній пріорітет)
-- У ручному режимі при переключенні між файлами черги — зберігати налаштування яскравості, контрасту, різкості, HDR, перспективи для кожного файлу окремо
-- При поверненні до файлу — відновлювати його останні налаштування
-- Скидання по кнопці «Скинути всі» — тільки для поточного файлу
-
-### 9. Авто-детекція перспективи з fallback
-- Автоматичне знаходження документа на фоні та виправлення перспективи
-- Fallback для документів без чітких контурів (наприклад, блідий документ на блідому фоні)
-- Можливість ручної корекції, якщо авто не спрацювало
-
-## План розвитку
-
-### Фаза 1 — Покращення авто-обробки (завершено, за винятком адаптивного HDR)
-- [x] Збереження максимальної якості (обробка на повному розмірі)
-- [x] Авто-яскравість на основі гістограми (5-95% перцентилів)
-- [x] Авто-контраст з адаптивними порогами (5-95% перцентилів)
-- [x] Авто-різкість на основі аналізу blur (Laplacian variance → пропорційна корекція)
-- [x] Визначення типу документа (ч-б / кольоровий / фото) — на основі std(a,b) у LAB + edge density + Hough lines
-- [x] Окремий pipeline для ч-б документів (без HDR, grayscale + опціональна бінаризація)
-- [x] Окремий pipeline для кольорових документів (без HDR, збереження кольорів)
-- [x] Окремий pipeline для фото (повний: CLAHE + HDR + Sharpen)
-- [ ] Окремий pipeline для фото документів (з адаптивним HDR) — відкладено до Фази 2
-- [x] Всі налаштування в GUI (пороги класифікації, авто-різкість, процентилі, бінаризація ЧБ)
-- [x] Запам'ятовування ручних корекцій по файлу черги (brightness, contrast, sharpen, hdr, grayscale)
-- [x] Логування помилок та дій
-- [x] Авто-детекція перспективи з fallback
-- [x] Авто-видалення градієнтних тіней (background estimation: blur/divide)
-
-### Фаза 2 — Стабілізація та оптимізація (наступний пріоритет)
-
-#### 2.1 Адаптивний HDR для фото документів
-- [ ] Дослідити алгоритми адаптивного HDR для документів з текстом
-- [ ] Реалізувати детектор текстових областей (щоб не застосовувати HDR до тексту)
-- [ ] Додати налаштування сили адаптивного HDR в GUI
-- [ ] Тестування на реальних фото документах
-
-#### 2.2 Юніт-тести
-- [ ] Написати тести для processing/pipeline.py (run_autofix, run_manual_adjustments)
-- [ ] Написати тести для processing/doc_classifier.py (classify)
-- [ ] Написати тести для processing/brightness_contrast.py (auto_brightness, auto_contrast)
-- [ ] Написати тести для processing/sharpen.py (measure_sharpness, auto_apply)
-- [ ] Написати тести для core/loader.py (load)
-- [ ] Написати тести для core/saver.py (save)
-- [ ] Написати тести для utils/file_utils.py (filter_supported, collect_images_from_folder)
-- [ ] Налаштувати CI/CD для автоматичного запуску тестів
-
-#### 2.3 Оптимізація пам'яті
-- [ ] Дослідити споживання пам'яті при великих чергах (100+ файлів)
-- [ ] Реалізувати streaming обробку для великих зображень (по частинах)
-- [ ] Додати можливість обмеження кількості завантажених зображень у черзі
-- [ ] Оптимізувати прев'ю (використовувати кешування)
-
-#### 2.4 Підтримка RAW-форматів
-- [ ] Дослідити бібліотеки для RAW (rawpy, imageio)
-- [ ] Додати підтримку CR2, NEF, ARW у core/loader.py
-- [ ] Додати налаштування якості конвертації RAW → JPG
-- [ ] Тестування на реальних RAW файлах
-
-#### 2.5 Трей-режим
-- [ ] Дослідити PyQt6 SystemTrayIcon
-- [ ] Реалізувати мінімізацію в трей при закритті вікна
-- [ ] Додати контекстне меню в трей (Відкрити, Вихід)
-- [ ] Реалізувати фонову обробку без GUI
-- [ ] Додати налаштування "Запускати в трей"
-
-#### 2.6 Експорт/імпорт профілів налаштувань
-- ~~Додати кнопку "Експорт профілю" у вікно налаштувань~~ (непотрібно)
-- ~~Додати кнопку "Імпорт профілю" у вікно налаштувань~~ (непотрібно)
-- ~~Реалізувати збереження налаштувань у JSON файл~~ (непотрібно)
-- ~~Реалізувати завантаження налаштувань з JSON файлу~~ (непотрібно)
-- ~~Валідація імпортованих налаштувань~~ (непотрібно)
-
-### Фаза 3 — Віртуальний принтер (зарезервовано, поки не на часі)
-- [ ] Дослідити платформні механізми віртуальних принтерів:
-  - Windows: Print Monitor / Port Monitor (RedMon, pdfcmon) або XPS Drv
-  - Альтернатива: збереження в спільну папку + файловий watcher
-- [ ] Реалізувати мінімальний віртуальний принтер «PhotoPrint»
-- [ ] Перехоплення друку: отримання XPS/EMF/PDF з системного спулера
-- [ ] Конвертація отриманого друку в растр → pipeline → друк на фізичний принтер
-- [ ] Тихий режим: без GUI, обробка у фоні, трей-іконка для статусу
-
-### Фаза 4 — Повна автоматизація (після Фази 3)
-- [ ] Встановлення як системна служба Windows (Windows Service)
-- [ ] Автозапуск при завантаженні системи
-- [ ] Налаштування правил обробки по користувачу / по додатку
-- [ ] Моніторинг черги друку, статистика, сповіщення про помилки
-- [ ] Оновлення OTA або через інсталятор
-
-### Фаза 5 — Далека перспектива (priPrinter інтеграція)
-- [ ] Дослідити можливість управління priPrinter через реєстр Windows
-- [ ] Інтеграція з priPrinter для точнішого керування друком (якщо буде доступно)
-
-## Архітектура майбутнього віртуального принтера
-
-```
-[Будь-який додаток] → [Системний друк] → [Віртуальний принтер PhotoPrint]
-                                                          │
-                                                          ▼
-                                            ┌─────────────────────────────┐
-                                            │  Аналіз типу документа      │
-                                            │  • Зображення → обробка     │
-                                            │  • Офісний → прямий друк    │
-                                            │  • PDF → прямий друк       │
-                                            └─────────────────────────────┘
-                                                          │
-                                                          ▼
-                                            ┌─────────────────────────────┐
-                                            │  Визначення типу:           │
-                                            │  • Ч-б документ → бінаризація│
-                                            │  • Кольоровий документ → адаптивний│
-                                            │  • Фото → HDR + sharpen      │
-                                            └─────────────────────────────┘
-                                                          │
-                                                          ▼
-                                            ┌─────────────────────────────┐
-                                            │  Pipeline (autofix)           │
-                                            │  perspective → LAB → CLAHE  │
-                                            │  → (опційно HDR) → sharpen   │
-                                            └─────────────────────────────┘
-                                                          │
-                                                          ▼
-                                            [Фізичний принтер за замовчування]
-                                            (priPrinter або інший)
-```
-
-## Короткострокові наступні кроки (Фаза 2)
-
-1. **Адаптивний HDR для фото документів** (пріоритет 1)
-   - Дослідити алгоритми (детектор тексту, адаптивна сила)
-   - Реалізувати та протестувати
-
-2. **Юніт-тести** (пріоритет 2)
-   - Написати тести для critical модулів
-   - Налаштувати pytest
-
-3. **Оптимізація пам'яті** (пріоритет 3)
-   - Профілювання для великих черг
-   - Streaming обробка
-
-4. **Підтримка RAW** (пріоритет 4)
-   - rawpy/imageio інтеграція
-   - Тестування
-
-5. **Трей-режим** (пріоритет 5)
-   - SystemTrayIcon
-   - Фонова обробка
-
-6. ~~Експорт/імпорт профілів налаштувань~~ (непотрібно)
-
-7. ~~Інсталятор~~ (непотрібно)
-
----
-
-## План покращення автоматичної перспективи
-
-### Проблеми поточної реалізації
-
-1. **AdaptiveThreshold з `BINARY_INV`** — працює тільки коли документ світліший за фон
-2. **Немає fallback** — якщо не знайшло 4 кути, повертає `None`
-3. **Немає resize перед аналізом** — великі зображення = повільно + шум
-4. **Немає перевірки пропорцій** — може знайти "документ" 1:50 (лінію)
-5. **Немає Canny як альтернативи** — для кольорових фонів Canny краще
-
-### План реалізації
-
-#### Крок 1: Resize для швидкості та стабільності
-- Максимальний розмір для аналізу: 800px
-- Масштабування координат назад після пошуку
-
-#### Крок 2: Множинні методи детекції
-- **Спроба 1**: Adaptive Threshold (для ч-б документів)
-  - Пробуємо обидва: `THRESH_BINARY` і `THRESH_BINARY_INV`
-- **Спроба 2**: Canny Edge Detection (для кольорових/фото)
-- **Спроба 3**: Fallback — bounding box найбільшого контуру
-
-#### Крок 3: Валідація знайденого документа
-- Площа > 5% від зображення
-- Пропорції адекватні (не більше 5:1)
-- Перевірка кутів (опціонально)
-
-#### Крок 4: Покращена морфологія
-- `MORPH_CLOSE` для з'єднання розірваних країв
-- Оптимальні розміри ядер
-
-### Очікуваний результат
-- Працює на кольорових документах з рябим фоном
-- Працює на темних документах на світлому фоні
-- Fallback коли документ не ідеальний прямокутник
-- Швидкість навіть на великих фото
-
----
-
-*Останнє оновлення: 2026-05-01*
-
-## Резюме виконаної роботи (Фаза 1)
-
-**Завершено:**
-- ✅ Вся функціональність авто-обробки реалізована
-- ✅ Класифікація документів (ч-б / кольоровий / фото) працює
-- ✅ Окремі pipeline для кожного типу документів
-- ✅ Всі налаштування доступні через GUI
-- ✅ Запам'ятовування ручних корекцій по файлу
-- ✅ Логування реалізовано у всіх модулях
-- ✅ Авто-детекція перспективи з fallback
-- ✅ Виправлено помилку sh_strength у main_window.py
-- ✅ Виправлено перезапис оригінальних файлів при друку (зберігається з суфіксом _edited)
-- ✅ Виправлено скидання слайдерів (тепер скидає всі застосовані корекції)
-- ✅ Виправлено помилку adaptiveThreshold (BGR → grayscale конвертація)
-- ✅ Реалізовано авто-видалення градієнтних тіней (shadow_remove.py)
-- ✅ Виправлено артефакт чорного контуру при видаленні великих градієнтних тіней (рука/телефон у кадрі) — додано другий, downsample-based прохід оцінки фону в `shadow_remove.py` (2026-06-18)
-
-**Виправлення авто перспективи (2026-04-29):**
-- ✅ Додано дебаг логування в perspective.py (auto_detect_corners, _detect_corners_impl, apply_correction)
-- ✅ Виправлено чорну рамку → біла рамка (borderValue=(255, 255, 255) в warpPerspective)
-- ✅ Дозволено тягнути точки перспективи за межі зображення (20% margin в preview.py)
-- ✅ Виправлено злітання авто перспективи після авто фіксу:
-  - Додано змінну _perspective_corners для збереження кутів
-  - Збереження кутів в _do_persp_auto
-  - Застосування збережених кутів в _do_autofix (use_perspective=False в pipeline)
-  - Скидання кутів в _do_persp_reset, _clear_queue, _on_queue_selection
-- ✅ Збільшено padding з 2% до 6% для уникнення обрізання зображення (PADDING_RATIO = 0.06)
-
-**Автоматизований тестувальник GUI (2026-05-01):**
-- ✅ Створено структуру директорій для тестів (tests/test_images, tests/expected, tests/results, tests/logs, tests/scenarios)
-- ✅ Реалізовано ядро GUITester в tests/gui_tester.py (subprocess, pyautogui, pywin32, opencv)
-- ✅ Створено базові сценарії (test_autofix_toggle.py, test_perspective_auto.py)
-- ✅ Додано requirements.txt (pyautogui, pywin32, opencv-python, pytest)
-- ✅ Створено README.md з документацією та інструкціями
-
-**Відкладено:**
-- ⏸️ Адаптивний HDR для фото документів (потребує додаткового дослідження алгоритмів)
-
-**Якість коду:**
-- ✅ Type hints у всіх модулях (processing, core, batch, utils, gui)
-- ✅ Логування через utils/logger.py
-- ✅ Константи винесені на початок файлів
-- ✅ Чисте розділення модулів (core, processing, gui, batch, utils, config)
-- ✅ Немає дублювання коду
-- ✅ Всі функції мають документацію (docstrings)
