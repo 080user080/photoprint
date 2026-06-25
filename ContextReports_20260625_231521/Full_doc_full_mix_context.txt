@@ -33,8 +33,10 @@ processing\text_mask.py
 processing\white_background.py
 tests\results
 tests\test_images
+tests\README.md
 tests\conftest.py
 tests\gui_tester.py
+tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -42,7 +44,9 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
+README.md
 main.py
+requirements.txt
 shadow_remove_gui.py
 
 ============================================================
@@ -57,6 +61,17 @@ shadow_remove_gui.py
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\batch\batch_processor.py
 ============================================================
+Імпорти:
+  import os
+  import threading
+  from concurrent.futures import ThreadPoolExecutor, as_completed, Future
+  from typing import Callable
+  import numpy
+  from core import loader, saver, printer
+  from processing import pipeline
+  from utils import file_utils
+  from utils.logger import get_logger
+
 Сутності:
 class BatchProcessor:
     def __init__(self, settings: dict):
@@ -97,6 +112,11 @@ on_error(index, filename, message)
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\config\app_settings.py
 ============================================================
+Імпорти:
+  import configparser
+  import os
+  import os
+
 Сутності:
 def _get_path(path):
 def load(path) -> dict:
@@ -112,6 +132,12 @@ def save(settings: dict, path):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\loader.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import os
+  from utils.logger import get_logger
+
 Сутності:
 def _load_heic(path: str) -> np.ndarray:
     """Завантаження HEIC через pillow-heif → BGR numpy."""
@@ -127,6 +153,16 @@ def load(path: str) -> np.ndarray:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\printer.py
 ============================================================
+Імпорти:
+  import os
+  import sys
+  import tempfile
+  import subprocess
+  import threading
+  import numpy
+  import cv2
+  from utils.logger import get_logger
+
 Сутності:
 def _save_temp_jpg(image: np.ndarray, quality: int) -> str:
     """Зберігає зображення у тимчасовий JPG файл. Повертає шлях."""
@@ -150,6 +186,12 @@ def _print_unix(path: str, printer_name: str) -> None:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\saver.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import os
+  from utils.logger import get_logger
+
 Сутності:
 def save(image: np.ndarray, path: str, quality: int) -> str:
     """Зберігає BGR numpy array як JPG.
@@ -164,6 +206,11 @@ def save(image: np.ndarray, path: str, quality: int) -> str:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\controls.py
 ============================================================
+Імпорти:
+  from typing import Optional, Dict, Any
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QPushButton, QGroupBox, QCheckBox
+  from PyQt6.QtCore import Qt, pyqtSignal
+
 Сутності:
 class _SliderRow(QWidget):
     def __init__(self, label: str, min_val: float, max_val: float, default: float, show_auto: bool, parent: Optional[QWidget]):
@@ -188,6 +235,25 @@ class ControlsPanel(QWidget):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\main_window.py
 ============================================================
+Імпорти:
+  import os
+  import sys
+  from pathlib import Path
+  from typing import Optional, Dict, Any
+  import numpy
+  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox, QListWidget
+  from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
+  from PyQt6.QtGui import QIcon
+  from gui.preview import PreviewPanel
+  from gui.queue_view import QueueView
+  from gui.controls import ControlsPanel
+  from gui.settings_window import SettingsWindow
+  from batch.batch_processor import BatchProcessor
+  from processing import pipeline
+  from utils import file_utils, image_utils
+  from utils.logger import get_logger
+  from config import app_settings
+
 Сутності:
 class AutoWorker(QObject):
     def __init__(self, processor: BatchProcessor):
@@ -275,6 +341,13 @@ class MainWindow(QMainWindow):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\preview.py
 ============================================================
+Імпорти:
+  from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy
+  from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal
+  from PyQt6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QBrush
+  import numpy
+  import cv2
+
 Сутності:
 def _np_to_pixmap(image: np.ndarray) -> QPixmap:
 class ImageLabel(QLabel):
@@ -312,6 +385,13 @@ class PreviewPanel(QWidget):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\queue_view.py
 ============================================================
+Імпорти:
+  from typing import Optional, List
+  from PyQt6.QtWidgets import QWidget, QListWidget, QListWidgetItem, QAbstractItemView, QFrame
+  from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
+  from PyQt6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent
+  import os
+
 Сутності:
 class QueueView(QListWidget):
     def __init__(self, parent: Optional[QWidget]):
@@ -336,6 +416,14 @@ class QueueView(QListWidget):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\settings_window.py
 ============================================================
+Імпорти:
+  from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox, QCheckBox, QDoubleSpinBox, QSpinBox, QLineEdit, QPushButton, QLabel, QFileDialog, QMessageBox, QComboBox, QListWidget, QListWidgetItem, QStackedWidget, QScrollArea
+  import os
+  from PyQt6.QtCore import pyqtSignal
+  from PyQt6.QtCore import Qt
+  from config import app_settings
+  from config.app_settings import DEFAULT_WORKER_THREADS
+
 Сутності:
 class StrategyPresetWidget(QWidget):
     """Віджет вибору пресета стратегії обробки."""
@@ -385,6 +473,15 @@ class SettingsWindow(QWidget):
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\autofix.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+  from processing import detail_map
+  from processing import hdr
+  from processing import sharpen
+  from processing import brightness_contrast
+  from processing import text_mask
+
 Сутності:
 def apply(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, adaptive_hdr: bool) -> np.ndarray:
     """Повний Auto Fix pipeline для фотографій.
@@ -413,6 +510,10 @@ Args:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\brightness_contrast.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def apply_brightness(image: np.ndarray, value: float) -> np.ndarray:
     """value: -1.0 (темно) … 0.0 (без змін) … +1.0 (світло).
@@ -449,6 +550,10 @@ def _make_contrast_lut(alpha: float) -> np.ndarray:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\deskew.py
 ============================================================
+Імпорти:
+  import numpy
+  import cv2
+
 Сутності:
 def measure_skew_angle(image: np.ndarray) -> float:
     """Вимірює кут нахилу документа за допомогою HoughLinesP.
@@ -471,6 +576,10 @@ def apply_deskew(image: np.ndarray, angle: float) -> np.ndarray:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
     """Локальное стандартное отклонение каждого пикселя через box filter.
@@ -492,6 +601,12 @@ noise_floor: если передан, заменяет DETAIL_MIN_REF_STD как
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\diagnostics.py
 ============================================================
+Імпорти:
+  from dataclasses import dataclass
+  from typing import Optional
+  import cv2
+  import numpy
+
 Сутності:
 class DiagnosticResult:
     """Результат повної діагностики зображення."""
@@ -556,6 +671,12 @@ def partial_rediagnose(image: np.ndarray, settings: dict, fields: list[str]) -> 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\doc_classifier.py
 ============================================================
+Імпорти:
+  from typing import Literal
+  import cv2
+  import numpy
+  import logging
+
 Сутності:
 def _has_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> tuple[float, bool]:
     """Локальна перевірка наявності кольору, стійка до великого нейтрального фону.
@@ -589,6 +710,10 @@ flat_background: рівний фон без документа (скріншот
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def adaptive_tile_grid(h: int, w: int, target_px: int) -> tuple[int, int]:
     """Размер CLAHE-сетки в тайлах, соответствующий примерно target_px пикселям
@@ -636,6 +761,11 @@ noise_floor: порог coring для подавления шума. Если No
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+  import logging
+
 Сутності:
 def auto_detect_corners(image: np.ndarray, max_dim: int) -> np.ndarray | None:
     """Автоматично знаходить 4 кути документа.
@@ -680,7 +810,13 @@ def _try_canny(gray: np.ndarray) -> np.ndarray | None:
 Кращий для кольорових документів з різними фонами."""
 def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
     """Третя спроба (fallback) — беремо найбільший контур та його bounding box.
-Працює навіть коли документ не ідеальний прямокутник."""
+Працює навіть коли документ не ідеальний прямокутник.
+
+Валідація:
+- Пропорції: aspect ratio >= 1.1 (документ має бути прямокутним, не квадратом)
+- Площа: не менше MIN_DOCUMENT_AREA_RATIO від кадру
+- Bounding box не займає > MAX_BORDER_AREA_RATIO площі кадру
+- Якщо bounding box торкається краю кадру з 2+ сторін — відхиляємо (фон/стіл)"""
 def _find_quad_contour(binary: np.ndarray, gray_shape: tuple) -> np.ndarray | None:
     """Шукає 4-кутний контур-документ з валідацією.
 Тепер використовує адаптивний APPROX_POLY_EPSILONS та solidity-перевірку."""
@@ -699,7 +835,12 @@ def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
 pts: впорядковані [TL, TR, BR, BL].
 Повертає {"top": bool, "bottom": bool, "left": bool, "right": bool} —
 True, якщо відповідна пара кутів відхиляється від "прямої" сторони
-більше ніж на PARTIAL_SKEW_THRESHOLD_RATIO від розміру документа."""
+більше ніж на PARTIAL_SKEW_THRESHOLD_RATIO від розміру документа.
+
+Захисні перевірки:
+- Всі 4 кути мають бути різні (мінімальна відстань між будь-якими двома > 10px)
+- Площа квадрилатераля має бути > мінімально допустимої
+- Якщо перевірки не пройдено — повертається {top: False, bottom: False, left: False, right: False}"""
 def apply_partial_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """Виправляє перспективу лише для "кривих" сторін документа.
 Якщо жодна сторона не крива — повертає копію без змін.
@@ -755,6 +896,13 @@ Returns:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\pipeline.py
 ============================================================
+Імпорти:
+  from enum import Enum
+  from typing import Optional
+  import cv2
+  import numpy
+  from processing import autofix, sharpen, hdr, perspective, brightness_contrast, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew
+
 Сутності:
 class DocType(str, Enum):
     """Типи документів для класифікації."""
@@ -796,11 +944,11 @@ def run_perspective_auto_smart(image: np.ndarray, settings: dict | None) -> tupl
     """Розумна авто-перспектива з deskew.
 
 Логіка:
-- Вимірює кут нахилу (skew)
 - Шукає кути документа
-- Якщо знайдено викривлення перспективи — warp + deskew
-- Якщо тільки нахил — тільки deskew
-- Якщо нічого — без змін
+- Якщо знайдено викривлення перспективи — warp, потім вимірює кут на результаті warp і deskew
+- Якщо тільки нахил (кути є без перспективи) — тільки deskew на оригіналі
+- Якщо кутів немає — вимірює кут на оригіналі і deskew
+- Якщо нічого не знайдено — без змін
 
 Returns:
     (result, status_message)"""
@@ -843,6 +991,10 @@ def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_highlight.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def apply_shadow_highlight(image: np.ndarray, strength: float) -> np.ndarray:
     """Висвітлює тіні на зображенні.
@@ -867,6 +1019,10 @@ Returns:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_remove.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
     """Створює модель фону через морфологічне закриття + легке згладжування.
@@ -981,6 +1137,10 @@ def _detect_shadow(image: np.ndarray, threshold: float, ratio: float) -> bool:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\sharpen.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def apply(image: np.ndarray, strength: float) -> np.ndarray:
     """Unsharp Mask різкість.
@@ -997,6 +1157,10 @@ def auto_apply(image: np.ndarray, threshold: float, max_strength: float) -> tupl
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\text_mask.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def _binarize_text(gray: np.ndarray) -> np.ndarray:
     """Адаптивна бінаризація для виділення тексту.
@@ -1032,6 +1196,10 @@ def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\white_background.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+
 Сутності:
 def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
     """Локальне стандартне відхилення через box filter (O(1) на піксель)."""
@@ -1058,8 +1226,106 @@ def make_background_white(image: np.ndarray, background_uniformity: float, detai
 
 
 ============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
+============================================================
+# Автоматизований тестувальник GUI для PhotoPrint
+
+Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
+
+## Структура
+
+```
+tests/
+├── gui_tester.py          # Ядро тестувальника (GUITester клас)
+├── requirements.txt       # Залежності для тестів
+├── README.md             # Цей файл
+├── scenarios/            # Сценарії тестів
+│   ├── test_autofix_toggle.py
+│   └── test_perspective_auto.py
+├── test_images/          # Тестові зображення
+├── expected/             # Очікувані результати
+├── results/              # Результати тестів (скріншоти)
+└── logs/                 # Логи додатка
+```
+
+## Встановлення
+
+1. Встановіть залежності:
+```bash
+pip install -r tests/requirements.txt
+```
+
+## Використання
+
+### Запуск окремого тесту
+
+```bash
+python tests/scenarios/test_autofix_toggle.py
+python tests/scenarios/test_perspective_auto.py
+```
+
+### Створення нового сценарію
+
+1. Створіть новий файл в `tests/scenarios/`
+2. Імпортуйте GUITester:
+```python
+from tests.gui_tester import GUITester
+```
+
+3. Створіть функцію тесту:
+```python
+def test_my_feature():
+    tester = GUITester("gui/main.py")
+    tester.setup_directories()
+    tester.launch_app()
+    tester.wait(3)
+    tester.activate_window(title="PhotoPrint")
+    # Ваші дії...
+    tester.close_app()
+    return True
+```
+
+## GUITester API
+
+### Методи
+
+- `launch_app()` - Запускає GUI додаток через subprocess
+- `activate_window(title)` - Активує вікно за назвою
+- `type_text(text)` - Вставляє текст в активне вікно
+- `press_key(key)` - Натискає клавішу
+- `click_at(x, y)` - Клікає мишкою по координатах
+- `wait(seconds)` - Чекає заданий час
+- `screenshot(filename)` - Зберігає скріншот вікна
+- `compare_images(actual, expected, tolerance)` - Порівнює зображення
+- `close_app()` - Закриває GUI додаток
+- `setup_directories()` - Створює необхідні директорії
+- `clear_logs()` - Очищає логи перед тестом
+- `read_logs()` - Читає логи після тесту
+
+## TODO
+
+- [ ] Реалізувати завантаження зображень через drag & drop
+- [ ] Реалізувати перемикання елементів через координати
+- [ ] Додати більше сценаріїв тестів
+- [ ] Інтеграція з pytest
+- [ ] CI/CD інтеграція
+
+## Примітки
+
+- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
+- Не залежить від внутрішньої структури GUI
+- Працює як реальний користувач
+- Потрібно щоб GUI було відкрито і видимим під час тестів
+
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
 ============================================================
+Імпорти:
+  import sys
+  import os
+  import pytest
+
 Сутності:
 def test_image_path() -> str:
     """Повертає шлях до тестового JPG-зображення."""
@@ -1070,6 +1336,17 @@ def gui_tester():
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
 ============================================================
+Імпорти:
+  import json
+  import subprocess
+  import time
+  import sys
+  import os
+  import ctypes
+  import threading
+  from pathlib import Path
+  from typing import Optional, Tuple, List, Dict
+
 Сутності:
 class GUITester:
     """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
@@ -1130,6 +1407,15 @@ class GUITester:
         """Читає логи після тесту"""
 
 ============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
+============================================================
+pyautogui>=0.9.54
+pywin32>=306
+opencv-python>=4.8.0
+pytest>=7.4.0
+
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
 ============================================================
 (немає класів чи функцій верхнього рівня)
@@ -1137,6 +1423,19 @@ class GUITester:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\profile_memory.py
 ============================================================
+Імпорти:
+  import argparse
+  import gc
+  import os
+  import sys
+  import tracemalloc
+  from typing import Optional
+  import numpy
+  import cv2
+  from batch.batch_processor import BatchProcessor
+  from core import loader
+  from utils.logger import get_logger
+
 Сутності:
 def _generate_test_images(count: int, target_dir: str) -> list[str]:
     """Генерує `count` синтетичних тестових зображень у `target_dir`.
@@ -1186,6 +1485,9 @@ def main():
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\file_utils.py
 ============================================================
+Імпорти:
+  import os
+
 Сутності:
 def is_supported_image(path: str) -> bool:
 def collect_images_from_folder(folder: str) -> list[str]:
@@ -1199,6 +1501,12 @@ def build_output_path(source_path: str, save_folder: str, suffix: str) -> str:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\image_utils.py
 ============================================================
+Імпорти:
+  import cv2
+  import numpy
+  from collections import OrderedDict
+  from typing import Optional
+
 Сутності:
 def _preview_cache_key(image: np.ndarray, max_side: int) -> int:
     """Генерує унікальний ключ для кешу на основі shape, dtype та max_side.
@@ -1222,6 +1530,11 @@ def ensure_bgr(image: np.ndarray) -> np.ndarray:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\logger.py
 ============================================================
+Імпорти:
+  import logging
+  import os
+  from pathlib import Path
+
 Сутності:
 def setup_logger(name: str, log_file: str | None, level: int) -> logging.Logger:
     """Setup a logger with console and optional file output.
@@ -1245,6 +1558,12 @@ Returns:
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\win_drop.py
 ============================================================
+Імпорти:
+  import struct
+  import ctypes
+  import ctypes.wintypes
+  from PyQt6.QtCore import QAbstractNativeEventFilter
+
 Сутності:
 def register_drop_window(hwnd: int):
     """Реєструє вікно для прийому WM_DROPFILES."""
@@ -1256,14 +1575,196 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
 
 ============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
+============================================================
+# PhotoPrint
+
+Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
+
+## Функціональність
+
+- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
+- **Інтелектуальна авто-обробка:**
+  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
+  - Авто-яскравість на основі гістограми (5-95% перцентилів)
+  - Авто-контраст з адаптивними порогами
+  - Авто-різкість на основі аналізу blur (Laplacian variance)
+  - Авто-детекція перспективи з fallback
+- **Ручне коригування:**
+  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
+  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
+  - Скидання: Скинути перспективу, Скинути слайдери
+- **Пакетна обробка:** Авто та ручний режими для черги файлів
+- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
+- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
+- **Друк:** Відправка на принтер (priPrinter або інший)
+- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
+
+## Встановлення
+
+```bash
+pip install -r requirements.txt
+```
+
+## Запуск
+
+```bash
+python main.py
+```
+
+## Структура проєкту
+
+```
+photoprint/
+├── main.py                    # Точка входу
+├── requirements.txt
+├── status.md                  # Статус розробки та план
+├── README.md                  # Цей файл
+│
+├── config/
+│   ├── settings.ini           # Конфігураційний файл
+│   └── app_settings.py        # Читання/запис налаштувань
+│
+├── core/
+│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
+│   ├── saver.py               # Збереження JPG
+│   └── printer.py             # Відправка на принтер
+│
+├── processing/
+│   ├── autofix.py             # Pipeline для різних типів документів
+│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
+│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
+│   ├── hdr.py                 # HDR tone mapping
+│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
+│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
+│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
+│   ├── perspective.py         # Авто + ручна перспективна корекція
+│   └── pipeline.py            # Єдина точка входу для GUI
+│
+├── batch/
+│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
+│
+├── gui/
+│   ├── main_window.py         # Головне вікно
+│   ├── preview.py             # Прев'ю До/Після
+│   ├── queue_view.py          # Черга файлів з Drag & Drop
+│   ├── controls.py            # Слайдери та кнопки керування
+│   └── settings_window.py     # Вікно налаштувань
+│
+└── utils/
+    ├── file_utils.py          # Робота з файлами
+    ├── image_utils.py         # Утиліти numpy/OpenCV
+    ├── logger.py              # Логування
+    └── win_drop.py            # Windows Drag & Drop
+```
+
+## Використання
+
+### Базовий робочий процес
+
+1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
+2. **Оберіть режим:** **Авто** або **Ручний**
+3. **Авто режим:**
+   - Натисніть "Друкувати все"
+   - Програма автоматично класифікує, обробить і надрукує всі файли
+4. **Ручний режим:**
+   - Переглядайте кожне фото по черзі
+   - Використовуйте "Auto Fix" для автоматичної корекції
+   - Або налаштуйте вручну через слайдери
+   - Натисніть "Друк" або "Пропустити"
+
+### Слайдери
+
+- **Тіні (0.0-2.0):** Висвітлення темних областей
+- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
+- **Контраст (-1.0-1.0):** Зміна контрасту
+- **Різкість (0.0-1.0):** Збільшення різкості
+- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
+
+### Кнопки авто-корекції
+
+- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
+- **Авто контраст:** Автоматичне вирівнювання контрасту
+- **Авто різкість:** Автоматична різкість на основі аналізу blur
+
+### Перспектива
+
+- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
+- **Ручна перспектива:** Ручне встановлення 4 кутів документа
+- **Скинути перспективу:** Повернення до оригінальної перспективи
+
+### Налаштування
+
+Файл `config/settings.ini` — текстовий, редагується блокнотом.
+Або через кнопку **⚙ Налаштування** у програмі.
+
+**Доступні налаштування:**
+- Пороги класифікації документів
+- Сила авто-різкості та поріг blur
+- Параметри авто-яскравості/контрасту (перцентилі)
+- Налаштування бінаризації для ч-б документів
+- Якість JPG при збереженні
+- Папка для збереження оброблених файлів
+- Назва принтера за замовчуванням
+- Вікно програми (розмір, позиція)
+
+## Стан розробки
+
+Детальний статус розробки дивіться у файлі [status.md](status.md).
+
+**Фаза 1 (завершено):**
+- ✅ Авто-обробка з класифікацією документів
+- ✅ Окремі pipeline для ч-б, кольорових документів та фото
+- ✅ Авто-видалення градієнтних тіней (blur/divide)
+- ✅ Авто-яскравість, авто-контраст, авто-різкість
+- ✅ Авто-детекція перспективи
+- ✅ Запам'ятовування ручних корекцій
+- ✅ Логування
+
+**Фаза 2 (наступний пріоритет):**
+- Адаптивний HDR для фото документів
+- Юніт-тести
+- Оптимізація пам'яті
+- Підтримка RAW-форматів
+- Трей-режим
+
+## Ліцензія
+
+Проект розробляється для особистого використання.
+
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
+Імпорти:
+  import sys
+  import os
+  from PyQt6.QtWidgets import QApplication
+  from PyQt6.QtCore import Qt
+  from gui.main_window import MainWindow
+
 Сутності:
 def main():
 
 ============================================================
+Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
+============================================================
+opencv-python>=4.8
+numpy>=1.24
+Pillow>=10.0
+pillow-heif>=0.13
+PyQt6>=6.5
+rawpy>=0.27
+
+============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
 ============================================================
+Імпорти:
+  import tkinter
+  from tkinter import ttk, filedialog, messagebox
+  import threading
+  import os
+
 Сутності:
 def _auto_kernel_size(image: np.ndarray) -> int:
 def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
