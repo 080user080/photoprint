@@ -7,6 +7,13 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+import cv2
+
+# OpenCV threading / OpenCL (Task 3)
+cv2.setNumThreads(cv2.getNumberOfCPUs())
+if cv2.ocl.haveOpenCL():
+    cv2.ocl.setUseOpenCL(True)
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore    import Qt
 from gui.main_window import MainWindow

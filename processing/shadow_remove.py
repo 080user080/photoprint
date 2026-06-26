@@ -83,6 +83,8 @@ import cv2
 import numpy as np
 
 # Константи для background estimation (прохід 1 — морфологія)
+MORPH_MAX_ANALYSIS_SIDE = 1000   # макс. розмір сторони для морфології (пікселів); більше → downscale
+
 BLUR_KERNEL_MIN = 21       # мінімальний розмір ядра GaussianBlur (непарне)
 BLUR_KERNEL_MAX = 201      # максимальний розмір ядра
 BLUR_KERNEL_STEP = 2       # крок збільшення (залишає непарним)
@@ -137,17 +139,14 @@ def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndar
     """
     Створює модель фону через морфологічне закриття + легке згладжування.
 
-    Алгоритм:
-    1. MORPH_CLOSE з еліптичним ядром: dilate заповнює темні області (тіні, текст)
-       значеннями світлого фону; erode повертає границю до початкового розміру.
-       Еліптичне ядро зберігає геометрію кутів тіней без «сходинок».
-    2. GaussianBlur з малим ядром (~kernel_size/5) прибирає залишки текстури
-       (дрібний текст, лінії), щоб вони не вплинули на модель фону.
+    Для прискорення на великих зображеннях — зменшує зображення перед
+    морфологією, потім апскейлить результат.
 
-    Працює добре для тіней, ширина яких порівнянна з kernel_size.
-    Для тіней, що сильно перевищують kernel_size, дає лише часткове
-    покриття (див. docstring модуля) — для цього є другий прохід,
-    _create_coarse_background().
+    Алгоритм:
+    1. При необхідності зменшує L-канал до MORPH_MAX_ANALYSIS_SIDE по
+       довшій стороні (INTER_AREA), пропорційно масштабує kernel.
+    2. MORPH_CLOSE з еліптичним ядром на зменшеному зображенні.
+    3. GaussianBlur + апскейл назад до оригінального розміру.
 
     Args:
         l_channel: L-канал LAB зображення (uint8, 2D).
@@ -156,18 +155,36 @@ def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndar
     Returns:
         Модель фону (uint8, 2D) — згладжене зображення без тіней та текстури.
     """
-    # Еліптичне ядро: краще зберігає кути тіней, ніж прямокутне
-    morph_kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
-    )
+    orig_h, orig_w = l_channel.shape[:2]
+    max_side = max(orig_h, orig_w)
 
-    # Морфологічне закриття: dilate → erode
-    # Заповнює темні області (тіні, текст) кольором фону
-    closed = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, morph_kernel)
+    # --- Downscale для прискорення морфології ---
+    if max_side > MORPH_MAX_ANALYSIS_SIDE:
+        scale = MORPH_MAX_ANALYSIS_SIDE / max_side
+        small_w = max(1, int(orig_w * scale))
+        small_h = max(1, int(orig_h * scale))
+        l_small = cv2.resize(l_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        scaled_kernel = max(MORPH_KERNEL_MIN, int(kernel_size * scale) | 1)
+    else:
+        l_small = l_channel
+        scaled_kernel = max(MORPH_KERNEL_MIN, kernel_size | 1)
+
+    # --- Морфологія на зменшеному зображенні ---
+    morph_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (scaled_kernel, scaled_kernel)
+    )
+    closed = cv2.morphologyEx(l_small, cv2.MORPH_CLOSE, morph_kernel)
 
     # Легке згладжування для прибирання залишків текстури
-    smooth_size = max(5, kernel_size // MORPH_SMOOTH_FACTOR) | 1
-    background = cv2.GaussianBlur(closed, (smooth_size, smooth_size), BLUR_SIGMA)
+    smooth_size = max(5, scaled_kernel // MORPH_SMOOTH_FACTOR) | 1
+    background_small = cv2.GaussianBlur(closed, (smooth_size, smooth_size), BLUR_SIGMA)
+
+    # --- Апскейл назад до оригінального розміру ---
+    if max_side > MORPH_MAX_ANALYSIS_SIDE:
+        background = cv2.resize(background_small, (orig_w, orig_h),
+                                interpolation=cv2.INTER_LINEAR)
+    else:
+        background = background_small
 
     return background
 
