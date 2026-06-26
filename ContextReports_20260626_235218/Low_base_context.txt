@@ -31,10 +31,6 @@ processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
-tests\results
-tests\test_images
-tests\conftest.py
-tests\gui_tester.py
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -154,6 +150,9 @@ class ControlsPanel(QWidget):
 class AutoWorker(QObject):
     def __init__(self, processor: BatchProcessor):
     def run(self):
+class SingleImageWorker(QObject):
+    def __init__(self, func):
+    def run(self):
 class MainWindow(QMainWindow):
     def __init__(self):
     def _setup_win_drop(self):
@@ -162,14 +161,16 @@ class MainWindow(QMainWindow):
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason):
     def _quit_app(self):
     def closeEvent(self, event):
+    def _wait_for_threads(self):
     def _on_win_drop(self, paths: list[str]):
     def _build_ui(self):
     def _btn_style(self, color):
+    def _on_mode_changed(self, btn_id: int):
     def _apply_default_mode(self):
     def _load_window_geometry(self):
     def _save_window_geometry(self):
     def resizeEvent(self, event):
-    def _on_shadow_mode_changed(self, index: int):
+    def _on_shadow_mode_changed(self, btn_id: int):
     def _on_settings_saved(self, s: dict):
     def _open_settings(self):
     def _on_files_added(self, paths: list[str]):
@@ -180,6 +181,7 @@ class MainWindow(QMainWindow):
     def _restore_file_settings(self, path: str):
     def _on_queue_selection(self, path: str):
     def _do_autofix(self):
+    def _do_apply_perspective(self):
     def _do_autofix_classic(self):
     def _on_controls_changed(self, vals: dict):
     def _do_auto_brightness(self):
@@ -196,15 +198,19 @@ class MainWindow(QMainWindow):
     def _do_skip(self):
     def _do_save_image(self):
     def _do_print_all(self):
+    def _cleanup_auto_thread(self):
     def _start_auto(self):
     def _on_auto_progress(self, cur: int, total: int, fname: str):
     def _on_auto_error(self, idx: int, fname: str, msg: str):
     def _on_auto_done(self, count: int):
     def _load_next_manual(self):
+    def _cleanup_single_thread(self):
+    def _reset_progress_ui(self, button_to_lock):
+    def _run_in_background(self, func, on_finished, button_to_lock):
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
-    def _set_status(self, text: str):
-    def _show_log(self, log_entries: list[dict]):
+    def _set_status(self, text: str, timeout_ms: int):
+    def _set_file_status(self, filename: str):
     def _dump_widget_geometries(self) -> None:
 
 ============================================================
@@ -473,52 +479,6 @@ def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
 Сутності:
 def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
 def make_background_white(image: np.ndarray, background_uniformity: float, detail_density: float) -> tuple[np.ndarray, bool]:
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
-
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
-
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
-============================================================
-Сутності:
-def test_image_path() -> str:
-def pytest_configure(config):
-def gui_tester():
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
-============================================================
-Сутності:
-class GUITester:
-    def __init__(self, app_path: str, venv_python: Optional[str], debug_mode: bool):
-    def launch_app(self) -> bool:
-    def activate_window(self, title: str, max_retries: int, retry_delay: float) -> bool:
-    def type_text(self, text: str) -> bool:
-    def press_key(self, key: str) -> bool:
-    def click_at(self, x: int, y: int) -> bool:
-    def wait(self, seconds: float) -> None:
-    def screenshot(self, filename: str) -> bool:
-    def compare_images(self, actual_path: str, expected_path: str, tolerance: int) -> bool:
-    def close_app(self) -> None:
-    def load_widget_geometries(self) -> Dict[str, dict]:
-    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
-    def click_widget(self, object_name: str) -> bool:
-    def get_status_text(self) -> Optional[str]:
-    def wait_for_widget(self, object_name: str, timeout: float, poll_interval: float) -> Optional[Dict[str, int]]:
-    def setup_directories(self) -> None:
-    def clear_logs(self) -> None:
-    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
-    def drag_drop_files(self, file_paths: List[str]) -> bool:
-    def click_button_by_text(self, text: str) -> bool:
-    def set_checkbox(self, text: str, checked: bool) -> bool:
-    def _click_relative(self, rel_x: float, rel_y: float, label: str) -> bool:
-    def hotkey(self) -> bool:
-    def drag_slider(self, slider_label: str, value: float) -> bool:
-    def screenshot_window(self, filename: str) -> bool:
-    def get_window_text(self) -> Optional[str]:
-    def list_child_widgets(self) -> List[dict]:
-    def read_logs(self) -> None:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py

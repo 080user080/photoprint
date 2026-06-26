@@ -31,12 +31,6 @@ processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
-tests\results
-tests\test_images
-tests\README.md
-tests\conftest.py
-tests\gui_tester.py
-tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -1103,12 +1097,18 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
+import cv2
+
+# OpenCV threading / OpenCL (Task 3)
+cv2.setNumThreads(cv2.getNumberOfCPUs())
+if cv2.ocl.haveOpenCL():
+    cv2.ocl.setUseOpenCL(True)
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QButtonGroup, QRadioButton,
     QFileDialog, QProgressBar, QScrollArea, QApplication,
-    QSystemTrayIcon, QMenu, QComboBox, QListWidget,
+    QSystemTrayIcon, QMenu, QComboBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
 from PyQt6.QtGui import QIcon
@@ -1175,6 +1175,30 @@ class AutoWorker(QObject):
 
 
 # ---------------------------------------------------------------------------
+# Worker для однієї операції обробки (фоновий потік)
+# ---------------------------------------------------------------------------
+
+class SingleImageWorker(QObject):
+    """
+    Виконує одну операцію обробки зображення у фоновому потоці.
+    func: callable() -> np.ndarray  (або tuple)
+    """
+    finished = pyqtSignal(object)   # результат операції (np.ndarray або tuple)
+    error    = pyqtSignal(str)      # повідомлення про помилку
+
+    def __init__(self, func):
+        super().__init__()
+        self._func = func
+
+    def run(self):
+        try:
+            result = self._func()
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+# ---------------------------------------------------------------------------
 # MainWindow
 # ---------------------------------------------------------------------------
 
@@ -1188,11 +1212,13 @@ class MainWindow(QMainWindow):
         self._logger = get_logger(__name__)
         self._settings: Dict[str, Any] = app_settings.load()
         self._processor: BatchProcessor = BatchProcessor(self._settings)
-        self._orig: Optional[np.ndarray] = None
-        self._base: Optional[np.ndarray] = None  # базове зображення після перспективи
+        self._orig: Optional[np.ndarray] = None      # НЕЗМІННИЙ оригінал з диску
+        self._base: Optional[np.ndarray] = None      # після autofix + перспективи + авто-корекцій
+        self._processed: Optional[np.ndarray] = None # _base + поточні слайдери (фінал для друку)
         self._base_for_perspective: Optional[np.ndarray] = None  # знімок _base до початку ручної перспективи
-        self._processed: Optional[np.ndarray] = None
         self._auto_thread: Optional[QThread] = None
+        self._single_worker: Optional[SingleImageWorker] = None
+        self._single_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
         self._drop_filter: Optional[DropEventFilter] = None
         self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
@@ -1274,6 +1300,10 @@ class MainWindow(QMainWindow):
         - Інакше — завершуємо програму.
         """
         image_utils.preview_cache_clear()  # очищуємо кеш прев'ю при закритті
+        
+        # Чекаємо завершення активних потоків перед закриттям
+        self._wait_for_threads()
+        
         if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
             self._save_window_geometry()
             self.hide()
@@ -1287,6 +1317,21 @@ class MainWindow(QMainWindow):
         else:
             self._save_window_geometry()
             event.accept()
+
+    def _wait_for_threads(self):
+        """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
+        # Чекаємо на авто-потік (пакетний режим)
+        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
+            self._logger.info("Очікування завершення AutoWorkerThread...")
+            self._auto_thread.requestInterruption()
+            self._auto_thread.quit()
+            if not self._auto_thread.wait(5000):
+                self._logger.warning("AutoWorkerThread не завершився за 5с")
+        
+        # Чекаємо на single-image потік
+        if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
+            self._logger.info("Очікування завершення SingleImageWorkerThread...")
+            self._cleanup_single_thread()
 
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
@@ -1307,6 +1352,7 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self):
         central = QWidget()
+        central.setStyleSheet("background-color: #E8E8E8;")
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
         root.setContentsMargins(LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN)
@@ -1354,19 +1400,8 @@ class MainWindow(QMainWindow):
         self._progress = QProgressBar()
         self._progress.setVisible(False)
 
-        self._status = QLabel("Перетягніть файли або натисніть «Додати файли»")
-        self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status.setStyleSheet("color:#444444; font-size:12px;")
-        self._status.setWordWrap(True)
-
-        self._log_widget = QListWidget()
-        self._log_widget.setMaximumHeight(120)
-        self._log_widget.setVisible(False)
-
         center.addWidget(self._preview, 1)
         center.addWidget(self._progress)
-        center.addWidget(self._status)
-        center.addWidget(self._log_widget)
 
         # === Внизу під прев'ю: керування ===
         # Панель керування (controls + кнопки)
@@ -1379,15 +1414,26 @@ class MainWindow(QMainWindow):
         mode_row.setSpacing(MODE_ROW_SPACING)
         lbl_mode = QLabel("Режим:")
         lbl_mode.setStyleSheet("font-weight:bold; color:#111111; font-size:13px;")
-        self._radio_auto   = QRadioButton("Авто")
+        self._radio_auto   = QRadioButton("Пакетний")
         self._radio_auto.setObjectName("radio_auto")
-        self._radio_manual = QRadioButton("Ручний")
+        self._radio_manual = QRadioButton("Покроковий")
         self._radio_manual.setObjectName("radio_manual")
         self._radio_auto.setStyleSheet("color:#111111;")
         self._radio_manual.setStyleSheet("color:#111111;")
+        self._radio_auto.setToolTip(
+            "Пакетний режим: всі файли з черги будуть автоматично\n"
+            "оброблені та надруковані без зупинок.\n"
+            "Кнопка «Друкувати все» запускає повну чергу."
+        )
+        self._radio_manual.setToolTip(
+            "Покроковий режим: кожне фото відкривається окремо.\n"
+            "Можна відредагувати слайдерами, переглянути результат,\n"
+            "потім надрукувати або пропустити."
+        )
         self._mode_group = QButtonGroup()
         self._mode_group.addButton(self._radio_auto,   MODE_AUTO_ID)
         self._mode_group.addButton(self._radio_manual, MODE_MANUAL_ID)
+        self._mode_group.idClicked.connect(self._on_mode_changed)
         mode_row.addWidget(lbl_mode)
         mode_row.addWidget(self._radio_auto)
         mode_row.addWidget(self._radio_manual)
@@ -1413,14 +1459,47 @@ class MainWindow(QMainWindow):
             b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
-        # ComboBox для режиму видалення тіней
-        self._combo_shadow_mode = QComboBox()
-        self._combo_shadow_mode.addItem("Авто", "auto")
-        self._combo_shadow_mode.addItem("Завжди", "always")
-        self._combo_shadow_mode.addItem("Ніколи", "never")
-        self._combo_shadow_mode.setObjectName("combo_shadow_mode")
-        self._combo_shadow_mode.setFixedWidth(120)
-        self._combo_shadow_mode.currentIndexChanged.connect(self._on_shadow_mode_changed)
+        self._btn_apply_perspective = QPushButton("✔ Застосувати перспективу")
+        self._btn_apply_perspective.setObjectName("btn_apply_perspective")
+        self._btn_apply_perspective.setFixedHeight(BUTTON_HEIGHT)
+        self._btn_apply_perspective.setStyleSheet(self._btn_style("#2E7A3A"))
+        self._btn_apply_perspective.clicked.connect(self._do_apply_perspective)
+        self._btn_apply_perspective.setVisible(False)
+
+        # Група радіокнопок для режиму тіней
+        shadow_group_widget = QWidget()
+        shadow_layout = QHBoxLayout(shadow_group_widget)
+        shadow_layout.setContentsMargins(4, 0, 4, 0)
+        shadow_layout.setSpacing(2)
+
+        shadow_label = QLabel("Тіні:")
+        shadow_label.setStyleSheet("color: #555; font-size: 11px;")
+        shadow_layout.addWidget(shadow_label)
+
+        self._rb_shadow_auto   = QRadioButton("авто")
+        self._rb_shadow_always = QRadioButton("завжди")
+        self._rb_shadow_never  = QRadioButton("ніколи")
+
+        for rb in (self._rb_shadow_auto, self._rb_shadow_always, self._rb_shadow_never):
+            rb.setStyleSheet("color: #111; font-size: 12px;")
+            shadow_layout.addWidget(rb)
+
+        self._rb_shadow_auto.setChecked(True)
+        self._rb_shadow_auto.setToolTip(
+            "Алгоритм автоматично визначає чи є тіні на документі.\n"
+            "Якщо тіней не знайдено — обробка пропускається."
+        )
+        self._rb_shadow_always.setToolTip(
+            "Видаляти тіні завжди, навіть якщо алгоритм не виявив їх.\n"
+            "Корисно для документів зі слабкими або нерівномірними тінями."
+        )
+        self._rb_shadow_never.setToolTip("Не обробляти тіні. Прискорює обробку.")
+
+        self._shadow_mode_group = QButtonGroup()
+        self._shadow_mode_group.addButton(self._rb_shadow_auto,   0)
+        self._shadow_mode_group.addButton(self._rb_shadow_always, 1)
+        self._shadow_mode_group.addButton(self._rb_shadow_never,  2)
+        self._shadow_mode_group.idClicked.connect(self._on_shadow_mode_changed)
 
         self._btn_autofix.clicked.connect(self._do_autofix)
         self._btn_print.clicked.connect(self._do_print_current)
@@ -1429,7 +1508,8 @@ class MainWindow(QMainWindow):
         self._btn_save_img.clicked.connect(self._do_save_image)
 
         buttons_row.addWidget(self._btn_autofix)
-        buttons_row.addWidget(self._combo_shadow_mode)
+        buttons_row.addWidget(shadow_group_widget)
+        buttons_row.addWidget(self._btn_apply_perspective)
         buttons_row.addWidget(self._btn_print)
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
@@ -1465,6 +1545,21 @@ class MainWindow(QMainWindow):
         root.addLayout(left,   0)
         root.addLayout(center, 1)
 
+        # Статусний рядок вбудований у QMainWindow
+        sb = self.statusBar()
+        sb.setStyleSheet(
+            "QStatusBar {"
+            "  color: #444444; font-size: 12px;"
+            "  background: #D8DCE0;"
+            "  border-top: 2px solid #BBBBBB;"
+            "  padding: 2px;"
+            "}"
+        )
+
+        self._status_file_label = QLabel("")
+        self._status_file_label.setStyleSheet("color: #888888; font-size: 11px; padding-right: 8px;")
+        sb.addPermanentWidget(self._status_file_label)
+
     def _btn_style(self, color="#2E5FA3"):
         return (
             f"QPushButton{{background:{color};color:white;border:none;"
@@ -1478,6 +1573,17 @@ class MainWindow(QMainWindow):
     # Налаштування
     # ------------------------------------------------------------------
 
+    def _on_mode_changed(self, btn_id: int):
+        if btn_id == MODE_AUTO_ID:
+            self._set_status(
+                "Пакетний режим: натисніть «Друкувати все» щоб обробити всю чергу"
+            )
+        else:
+            self._set_status(
+                "Покроковий режим: редагуйте кожне фото та натискайте «Друк»"
+            )
+        self._update_buttons()
+
     def _apply_default_mode(self):
         if self._settings.get("default_mode", "auto") == "auto":
             self._radio_auto.setChecked(True)
@@ -1486,11 +1592,15 @@ class MainWindow(QMainWindow):
         self._controls.set_shadow_highlight(self._settings.get("shadow_highlight_strength", 0.0))
         self._controls.set_sharpen(self._settings.get("sharpen_strength", 0.4))
         self._controls.set_hdr(self._settings.get("hdr_strength", 0.0))
-        # Ініціалізація ComboBox режиму видалення тіней
+        # Ініціалізація радіокнопок режиму видалення тіней
         shadow_mode = self._settings.get("shadow_remove_mode", "auto")
-        idx = self._combo_shadow_mode.findData(shadow_mode)
-        if idx >= 0:
-            self._combo_shadow_mode.setCurrentIndex(idx)
+        mode_to_btn = {
+            "auto": self._rb_shadow_auto,
+            "always": self._rb_shadow_always,
+            "never": self._rb_shadow_never,
+        }
+        btn = mode_to_btn.get(shadow_mode, self._rb_shadow_auto)
+        btn.setChecked(True)
 
     def _load_window_geometry(self):
         """Завантажує розмір вікна та ширину черги з налаштувань."""
@@ -1512,9 +1622,10 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._save_window_geometry()
 
-    def _on_shadow_mode_changed(self, index: int):
-        """Зміна режиму видалення тіней через ComboBox."""
-        mode = self._combo_shadow_mode.currentData()
+    def _on_shadow_mode_changed(self, btn_id: int):
+        """Зміна режиму видалення тіней через радіокнопки."""
+        mode_map = {0: "auto", 1: "always", 2: "never"}
+        mode = mode_map.get(btn_id, "auto")
         self._settings["shadow_remove_mode"] = mode
         app_settings.save(self._settings)
         # Перезапускаємо Auto Fix з новим режимом
@@ -1615,6 +1726,8 @@ class MainWindow(QMainWindow):
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
         try:
+            # Скидаємо режим редагування перспективи для попереднього зображення
+            self._preview.disable_perspective_edit()
             self._store_current_settings()
             from core import loader
             img = loader.load(path)
@@ -1643,16 +1756,32 @@ class MainWindow(QMainWindow):
     def _do_autofix(self):
         self._do_autofix_classic()
 
+    def _do_apply_perspective(self):
+        if self._processed is not None:
+            self._base = self._processed.copy()
+            self._base_for_perspective = None
+            self._preview.disable_perspective_edit()
+            self._btn_apply_perspective.setVisible(False)
+            self._on_controls_changed()
+            self._update_buttons()
+            self._set_status("Перспективу застосовано")
+
     def _do_autofix_classic(self):
         if self._orig is None:
             self._set_status("Спочатку оберіть файл")
             return
-        try:
-            s = self._settings
-            vals = self._controls.values()
+        if self._single_thread is not None and self._single_thread.isRunning():
+            self._logger.warning("AutoFix: попередній потік ще виконується — чекаємо завершення")
+            self._cleanup_single_thread()
+
+        s = self._settings
+        vals = self._controls.values()
+        base_snapshot = self._base.copy()   # знімок щоб не передавати self в інший потік
+
+        def _work():
             if s.get("autofix_enabled", True):
                 result, status_msg, log_entries = pipeline.run_autofix(
-                    self._base,
+                    base_snapshot,
                     sharpen_strength=vals["sharpen_strength"],
                     hdr_strength=vals["hdr_strength"],
                     use_hdr=s.get("hdr_in_autofix", True),
@@ -1666,17 +1795,14 @@ class MainWindow(QMainWindow):
                     output_color_mode=s.get("output_color_mode", "auto"),
                     autofix_contrast=s.get("autofix_contrast", 0.15),
                     contrast_mode=s.get("contrast_mode", "linear"),
-                    settings=self._settings,
+                    settings=s,
                 )
-                # НЕ оновлюємо _base — Auto Fix завжди працює від оригіналу/перспективи,
-                # щоб повторне натискання не накладало ефекти каскадно.
-                self._set_status(status_msg)
-                self._show_log(log_entries)
-                self._preview.set_autofix_applied("auto_fix")
+                if s.get("autofix_enabled", True) and vals["grayscale"]:
+                    result = pipeline.run_grayscale(result)
+                return result, status_msg, log_entries
             else:
-                # autofix_enabled=False: тільки ручні налаштування
                 result = pipeline.run_manual_adjustments(
-                    self._base,  # використовуємо базове зображення
+                    base_snapshot,
                     brightness=vals["brightness"],
                     contrast=vals["contrast"],
                     sharpen_strength=vals["sharpen_strength"],
@@ -1685,16 +1811,18 @@ class MainWindow(QMainWindow):
                     shadow_highlight_strength=vals["shadow_highlight"],
                     contrast_mode=s.get("contrast_mode", "linear"),
                 )
-                self._set_status("Ручні налаштування")
-                self._preview.set_autofix_applied(None)
-            if s.get("autofix_enabled", True) and vals["grayscale"]:
-                result = pipeline.run_grayscale(result)
+                return result, "Ручні налаштування", []
+
+        def _on_done(payload):
+            result, status_msg, log_entries = payload
+            self._base = result.copy()      # <-- ФІКСУЄМО в _base
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
+            self._preview.set_autofix_applied("auto_fix")
+            self._set_status(status_msg)
             self._update_buttons()
-        except Exception as e:
-            self._logger.error(f"Помилка Auto Fix: {e}", exc_info=True)
-            self._set_status(f"Помилка Auto Fix: {e}")
+
+        self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
     def _on_controls_changed(self, vals: dict = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
@@ -1727,76 +1855,106 @@ class MainWindow(QMainWindow):
         if self._base is None:
             return
         s = self._settings
-        result = pipeline.run_auto_brightness(
-            self._base,
-            percentile_low=s.get("auto_percentile_low", 5.0),
-            percentile_high=s.get("auto_percentile_high", 95.0),
-        )
-        # Оновлюємо базове зображення після авто-яскравості
-        self._base = result.copy()
-        self._processed = result
-        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
-        self._preview.set_after(image_utils.make_preview(result))
-        self._set_status("Авто-яскравість застосована")
+        base_snapshot = self._base.copy()
+
+        def _work():
+            return pipeline.run_auto_brightness(
+                base_snapshot,
+                percentile_low=s.get("auto_percentile_low", 5.0),
+                percentile_high=s.get("auto_percentile_high", 95.0),
+            )
+
+        def _on_done(result):
+            self._base = result.copy()
+            self._processed = result
+            self._perspective_corners = None
+            self._preview.set_after(image_utils.make_preview(result))
+            self._set_status("Авто-яскравість застосована")
+            self._update_buttons()
+
+        self._run_in_background(_work, _on_done)
 
     def _do_auto_contrast(self):
         if self._base is None:
             return
         s = self._settings
-        result = pipeline.run_auto_contrast(
-            self._base,
-            percentile_low=s.get("auto_percentile_low", 5.0),
-            percentile_high=s.get("auto_percentile_high", 95.0),
-        )
-        # Оновлюємо базове зображення після авто-контрасту
-        self._base = result.copy()
-        self._processed = result
-        self._perspective_corners = None  # кути перспективи більше не актуальні після зміни зображення
-        self._preview.set_after(image_utils.make_preview(result))
-        self._set_status("Авто-контраст застосований")
+        base_snapshot = self._base.copy()
+
+        def _work():
+            return pipeline.run_auto_contrast(
+                base_snapshot,
+                percentile_low=s.get("auto_percentile_low", 5.0),
+                percentile_high=s.get("auto_percentile_high", 95.0),
+            )
+
+        def _on_done(result):
+            self._base = result.copy()
+            self._processed = result
+            self._perspective_corners = None
+            self._preview.set_after(image_utils.make_preview(result))
+            self._set_status("Авто-контраст застосований")
+            self._update_buttons()
+
+        self._run_in_background(_work, _on_done)
 
     def _do_auto_sharpen(self):
         if self._base is None:
             return
         s = self._settings
-        result, strength = pipeline.run_auto_sharpen(
-            self._base,
-            threshold=s.get("autosharp_threshold", 80.0),
-            max_strength=s.get("autosharp_max_strength", 0.7),
-        )
-        # Оновлюємо базове зображення після авто-різкості
-        self._base = result.copy()
-        self._processed = result
-        self._controls.set_sharpen(strength)
-        self._preview.set_after(image_utils.make_preview(result))
-        if strength > 0:
-            self._set_status(f"Авто-різкість застосована ({strength:.2f})")
-        else:
-            self._set_status("Зображення достатньо різке — різкість не потрібна")
+        base_snapshot = self._base.copy()
+
+        def _work():
+            return pipeline.run_auto_sharpen(
+                base_snapshot,
+                threshold=s.get("autosharp_threshold", 80.0),
+                max_strength=s.get("autosharp_max_strength", 0.7),
+            )
+
+        def _on_done(result):
+            result, strength = result
+            self._base = result.copy()
+            self._processed = result
+            self._controls.set_sharpen(strength)
+            self._preview.set_after(image_utils.make_preview(result))
+            if strength > 0:
+                self._set_status(f"Авто-різкість застосована ({strength:.2f})")
+            else:
+                self._set_status("Зображення достатньо різке — різкість не потрібна")
+            self._update_buttons()
+
+        self._run_in_background(_work, _on_done)
 
     def _do_persp_auto(self):
         """Авто-детекція перспективи з deskew та fallback до ручного режиму."""
         if self._orig is None or self._base is None:
             return
+        if self._single_thread is not None and self._single_thread.isRunning():
+            self._set_status("⏳ Зачекайте, операція ще виконується")
+            return
         self._base_for_perspective = self._base.copy()
-        # Детектуємо кути ДО корекції — на оригінальному _base
-        corners_before = pipeline.detect_corners(self._base)
-        # Smart perspective з deskew
-        result, status = pipeline.run_perspective_auto_smart(self._base, self._settings)
-        self._base = result.copy()
-        self._processed = result
-        self._preview.set_before(image_utils.make_preview(result))
-        self._preview.set_after(image_utils.make_preview(result))
-        # Використовуємо corners_before для відображення точок
-        if corners_before is not None:
-            self._perspective_corners = corners_before.copy()
-            self._show_perspective_points(corners_before, status)
-        else:
-            self._perspective_corners = None
-            self._set_status(status)
-        # Застосовуємо поточні слайдери до нового базового зображення
-        self._on_controls_changed()
-        self._update_buttons()
+        base_snapshot = self._base.copy()
+        corners_before = pipeline.detect_corners(base_snapshot)
+
+        def _work():
+            return pipeline.run_perspective_auto_smart(base_snapshot, self._settings)
+
+        def _on_done(payload):
+            result, status = payload
+            self._base = result.copy()
+            self._processed = result
+            self._preview.set_before(image_utils.make_preview(result))
+            self._preview.set_after(image_utils.make_preview(result))
+            if corners_before is not None:
+                self._perspective_corners = corners_before.copy()
+                self._show_perspective_points(corners_before, status)
+            else:
+                self._perspective_corners = None
+                self._set_status(status)
+            self._on_controls_changed()
+            self._btn_apply_perspective.setVisible(True)
+            self._update_buttons()
+
+        self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
     def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
         """Показує 4 точки перспективи на прев'ю (на базовому зображенні _base)."""
@@ -1840,18 +1998,28 @@ class MainWindow(QMainWindow):
             self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
         else:
             self._do_persp_manual_fallback()
+        self._btn_apply_perspective.setVisible(True)
+        self._update_buttons()
 
     def _do_persp_reset(self):
-        """Скидає перспективу до оригінального зображення."""
+        """Скидає перспективу до стану до початку ручної перспективи."""
         if self._orig is None:
             return
-        self._base = self._orig.copy()
-        self._base_for_perspective = None
-        self._processed = self._orig.copy()
-        self._preview.set_before(image_utils.make_preview(self._orig))
-        self._preview.set_after(image_utils.make_preview(self._orig))
+        if self._base_for_perspective is not None:
+            # Повертаємось до знімка, зробленого перед ручною перспективою
+            # Це зберігає Auto Fix та інші корекції
+            self._base = self._base_for_perspective.copy()
+            self._base_for_perspective = None
+            self._processed = self._base.copy()
+        else:
+            # Якщо ручна перспектива не починалась — скидаємо до оригіналу
+            self._base = self._orig.copy()
+            self._processed = self._orig.copy()
+        self._preview.set_before(image_utils.make_preview(self._base))
+        self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
         self._perspective_corners = None  # скидаємо збережені кути
+        self._btn_apply_perspective.setVisible(False)
         self._set_status("Перспективу скинуто")
         self._update_buttons()
         # Після скидання перспективи застосовуємо поточні слайдери
@@ -1868,6 +2036,7 @@ class MainWindow(QMainWindow):
         self._preview.set_after(image_utils.make_preview(self._orig))
         self._preview.set_autofix_applied(None)
         self._perspective_corners = None  # скидаємо збережені кути перспективи
+        self._btn_apply_perspective.setVisible(False)
         self._set_status("Всі корекції скинуто")
         self._update_buttons()
         # Зберігаємо скинуті налаштування для поточного файлу
@@ -1997,7 +2166,25 @@ class MainWindow(QMainWindow):
     # Авто-режим у потоці
     # ------------------------------------------------------------------
 
+    def _cleanup_auto_thread(self):
+        """Безпечно завершує авто-потік та звільняє ресурси."""
+        if hasattr(self, '_auto_thread') and self._auto_thread is not None:
+            if self._auto_thread.isRunning():
+                self._auto_thread.quit()
+                if not self._auto_thread.wait(5000):
+                    self._logger.warning("AutoWorkerThread did not finish within 5s timeout")
+            self._auto_thread.deleteLater()
+            self._auto_thread = None
+        if hasattr(self, '_worker') and self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
+
     def _start_auto(self):
+        # Якщо попередній авто-потік ще виконується — чекаємо його завершення
+        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
+            self._logger.warning("Попередній AutoWorkerThread ще виконується — чекаємо завершення")
+            self._cleanup_auto_thread()
+
         self._progress.setVisible(True)
         self._progress.setRange(0, self._processor.total)
         self._set_buttons_enabled(False)
@@ -2005,6 +2192,7 @@ class MainWindow(QMainWindow):
         self._radio_manual.setEnabled(False)
 
         self._auto_thread = QThread()
+        self._auto_thread.setObjectName("AutoWorkerThread")
         self._worker = AutoWorker(self._processor)
         self._worker.moveToThread(self._auto_thread)
         self._auto_thread.started.connect(self._worker.run)
@@ -2012,6 +2200,7 @@ class MainWindow(QMainWindow):
         self._worker.error.connect(self._on_auto_error)
         self._worker.finished.connect(self._on_auto_done)
         self._worker.finished.connect(self._auto_thread.quit)
+        self._auto_thread.finished.connect(self._auto_thread.deleteLater)
         self._auto_thread.start()
 
     def _on_auto_progress(self, cur: int, total: int, fname: str):
@@ -2075,36 +2264,102 @@ class MainWindow(QMainWindow):
             self._set_status(f"Помилка завантаження: {e}")
 
     # ------------------------------------------------------------------
+    # Фонова обробка (SingleImageWorker)
+    # ------------------------------------------------------------------
+
+    def _cleanup_single_thread(self):
+        """Безпечно завершує single-image потік та звільняє ресурси."""
+        if self._single_thread is not None:
+            if self._single_thread.isRunning():
+                self._single_thread.quit()
+                if not self._single_thread.wait(3000):
+                    self._logger.warning("SingleImageWorker thread did not finish within 3s timeout")
+            self._single_thread.deleteLater()
+            self._single_thread = None
+        if self._single_worker is not None:
+            self._single_worker.deleteLater()
+            self._single_worker = None
+
+    def _reset_progress_ui(self, button_to_lock=None):
+        """Скидає UI прогрес-бару та кнопок після завершення фонової операції."""
+        self._progress.setVisible(False)
+        self._progress.setRange(0, 100)
+        self._set_buttons_enabled(True)
+        if button_to_lock:
+            button_to_lock.setEnabled(True)
+            button_to_lock.setText("⚡ Auto Fix")
+
+    def _run_in_background(self, func, on_finished, button_to_lock=None):
+        """
+        Запускає func() у фоновому потоці.
+        on_finished(result) викликається в GUI-потоці після завершення.
+        button_to_lock — кнопка яку заблокувати під час виконання.
+        """
+        # Якщо попередній потік ще живий — чекаємо його завершення
+        if self._single_thread is not None and self._single_thread.isRunning():
+            self._logger.warning("Попередній потік ще виконується — чекаємо завершення")
+            self._cleanup_single_thread()
+
+        # Показати прогрес
+        self._progress.setRange(0, 0)   # indeterminate (пульсуючий)
+        self._progress.setVisible(True)
+        if button_to_lock:
+            button_to_lock.setEnabled(False)
+            button_to_lock.setText("⏳ Обробка…")
+        self._set_buttons_enabled(False)
+
+        self._single_thread = QThread()
+        self._single_thread.setObjectName("SingleImageWorkerThread")
+        self._single_worker = SingleImageWorker(func)
+        self._single_worker.moveToThread(self._single_thread)
+
+        self._single_thread.started.connect(self._single_worker.run)
+
+        def _on_done(result):
+            self._reset_progress_ui(button_to_lock)
+            self._cleanup_single_thread()
+            on_finished(result)
+
+        def _on_error(msg):
+            self._reset_progress_ui(button_to_lock)
+            self._cleanup_single_thread()
+            self._set_status(f"Помилка: {msg}")
+            self._logger.error(msg)
+
+        self._single_worker.finished.connect(_on_done)
+        self._single_worker.error.connect(_on_error)
+        self._single_thread.finished.connect(self._single_thread.deleteLater)
+        self._single_thread.start()
+
+    # ------------------------------------------------------------------
     # Допоміжне
     # ------------------------------------------------------------------
 
     def _update_buttons(self):
         has_queue = bool(self._queue.get_all_paths())
         has_img   = self._orig is not None
-        self._btn_print_all.setEnabled(has_queue)
+        is_batch  = self._radio_auto.isChecked()
+        has_pending_persp = self._base_for_perspective is not None
+
+        self._btn_print_all.setEnabled(has_queue and is_batch)
+        self._btn_print_all.setToolTip(
+            "" if is_batch else "Доступно тільки в Пакетному режимі"
+        )
         self._btn_print.setEnabled(has_img)
-        self._btn_skip.setEnabled(self._processor.has_next())
-        self._btn_autofix.setEnabled(has_img)
+        self._btn_skip.setEnabled(self._processor.has_next() and not is_batch)
+        self._btn_autofix.setEnabled(has_img and not has_pending_persp)
         self._btn_save_img.setEnabled(has_img)
+        self._btn_apply_perspective.setVisible(has_pending_persp)
 
     def _set_buttons_enabled(self, enabled: bool):
         for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all):
             b.setEnabled(enabled)
 
-    def _set_status(self, text: str):
-        self._status.setText(text)
+    def _set_status(self, text: str, timeout_ms: int = 0):
+        self.statusBar().showMessage(text, timeout_ms)
 
-    def _show_log(self, log_entries: list[dict]):
-        """Показує лог кроків обробки у віджеті списку."""
-        self._log_widget.clear()
-        if not log_entries:
-            self._log_widget.setVisible(False)
-            return
-        for entry in log_entries:
-            icon = "✓" if entry["applied"] else "✗"
-            text = f"{icon} {entry['step']}: {entry['detail']}"
-            self._log_widget.addItem(text)
-        self._log_widget.setVisible(True)
+    def _set_file_status(self, filename: str):
+        self._status_file_label.setText(filename)
 
     # ------------------------------------------------------------------
     # Debug dump для GUI-тестувальника
@@ -5979,6 +6234,8 @@ import cv2
 import numpy as np
 
 # Константи для background estimation (прохід 1 — морфологія)
+MORPH_MAX_ANALYSIS_SIDE = 1000   # макс. розмір сторони для морфології (пікселів); більше → downscale
+
 BLUR_KERNEL_MIN = 21       # мінімальний розмір ядра GaussianBlur (непарне)
 BLUR_KERNEL_MAX = 201      # максимальний розмір ядра
 BLUR_KERNEL_STEP = 2       # крок збільшення (залишає непарним)
@@ -6033,17 +6290,14 @@ def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndar
     """
     Створює модель фону через морфологічне закриття + легке згладжування.
 
-    Алгоритм:
-    1. MORPH_CLOSE з еліптичним ядром: dilate заповнює темні області (тіні, текст)
-       значеннями світлого фону; erode повертає границю до початкового розміру.
-       Еліптичне ядро зберігає геометрію кутів тіней без «сходинок».
-    2. GaussianBlur з малим ядром (~kernel_size/5) прибирає залишки текстури
-       (дрібний текст, лінії), щоб вони не вплинули на модель фону.
+    Для прискорення на великих зображеннях — зменшує зображення перед
+    морфологією, потім апскейлить результат.
 
-    Працює добре для тіней, ширина яких порівнянна з kernel_size.
-    Для тіней, що сильно перевищують kernel_size, дає лише часткове
-    покриття (див. docstring модуля) — для цього є другий прохід,
-    _create_coarse_background().
+    Алгоритм:
+    1. При необхідності зменшує L-канал до MORPH_MAX_ANALYSIS_SIDE по
+       довшій стороні (INTER_AREA), пропорційно масштабує kernel.
+    2. MORPH_CLOSE з еліптичним ядром на зменшеному зображенні.
+    3. GaussianBlur + апскейл назад до оригінального розміру.
 
     Args:
         l_channel: L-канал LAB зображення (uint8, 2D).
@@ -6052,18 +6306,36 @@ def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndar
     Returns:
         Модель фону (uint8, 2D) — згладжене зображення без тіней та текстури.
     """
-    # Еліптичне ядро: краще зберігає кути тіней, ніж прямокутне
-    morph_kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
-    )
+    orig_h, orig_w = l_channel.shape[:2]
+    max_side = max(orig_h, orig_w)
 
-    # Морфологічне закриття: dilate → erode
-    # Заповнює темні області (тіні, текст) кольором фону
-    closed = cv2.morphologyEx(l_channel, cv2.MORPH_CLOSE, morph_kernel)
+    # --- Downscale для прискорення морфології ---
+    if max_side > MORPH_MAX_ANALYSIS_SIDE:
+        scale = MORPH_MAX_ANALYSIS_SIDE / max_side
+        small_w = max(1, int(orig_w * scale))
+        small_h = max(1, int(orig_h * scale))
+        l_small = cv2.resize(l_channel, (small_w, small_h), interpolation=cv2.INTER_AREA)
+        scaled_kernel = max(MORPH_KERNEL_MIN, int(kernel_size * scale) | 1)
+    else:
+        l_small = l_channel
+        scaled_kernel = max(MORPH_KERNEL_MIN, kernel_size | 1)
+
+    # --- Морфологія на зменшеному зображенні ---
+    morph_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (scaled_kernel, scaled_kernel)
+    )
+    closed = cv2.morphologyEx(l_small, cv2.MORPH_CLOSE, morph_kernel)
 
     # Легке згладжування для прибирання залишків текстури
-    smooth_size = max(5, kernel_size // MORPH_SMOOTH_FACTOR) | 1
-    background = cv2.GaussianBlur(closed, (smooth_size, smooth_size), BLUR_SIGMA)
+    smooth_size = max(5, scaled_kernel // MORPH_SMOOTH_FACTOR) | 1
+    background_small = cv2.GaussianBlur(closed, (smooth_size, smooth_size), BLUR_SIGMA)
+
+    # --- Апскейл назад до оригінального розміру ---
+    if max_side > MORPH_MAX_ANALYSIS_SIDE:
+        background = cv2.resize(background_small, (orig_w, orig_h),
+                                interpolation=cv2.INTER_LINEAR)
+    else:
+        background = background_small
 
     return background
 
@@ -6649,757 +6921,6 @@ def make_background_white(
 
     return result, True
 ```
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
-
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
-
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
-============================================================
-# Автоматизований тестувальник GUI для PhotoPrint
-
-Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
-
-## Структура
-
-```
-tests/
-├── gui_tester.py          # Ядро тестувальника (GUITester клас)
-├── requirements.txt       # Залежності для тестів
-├── README.md             # Цей файл
-├── scenarios/            # Сценарії тестів
-│   ├── test_autofix_toggle.py
-│   └── test_perspective_auto.py
-├── test_images/          # Тестові зображення
-├── expected/             # Очікувані результати
-├── results/              # Результати тестів (скріншоти)
-└── logs/                 # Логи додатка
-```
-
-## Встановлення
-
-1. Встановіть залежності:
-```bash
-pip install -r tests/requirements.txt
-```
-
-## Використання
-
-### Запуск окремого тесту
-
-```bash
-python tests/scenarios/test_autofix_toggle.py
-python tests/scenarios/test_perspective_auto.py
-```
-
-### Створення нового сценарію
-
-1. Створіть новий файл в `tests/scenarios/`
-2. Імпортуйте GUITester:
-```python
-from tests.gui_tester import GUITester
-```
-
-3. Створіть функцію тесту:
-```python
-def test_my_feature():
-    tester = GUITester("gui/main.py")
-    tester.setup_directories()
-    tester.launch_app()
-    tester.wait(3)
-    tester.activate_window(title="PhotoPrint")
-    # Ваші дії...
-    tester.close_app()
-    return True
-```
-
-## GUITester API
-
-### Методи
-
-- `launch_app()` - Запускає GUI додаток через subprocess
-- `activate_window(title)` - Активує вікно за назвою
-- `type_text(text)` - Вставляє текст в активне вікно
-- `press_key(key)` - Натискає клавішу
-- `click_at(x, y)` - Клікає мишкою по координатах
-- `wait(seconds)` - Чекає заданий час
-- `screenshot(filename)` - Зберігає скріншот вікна
-- `compare_images(actual, expected, tolerance)` - Порівнює зображення
-- `close_app()` - Закриває GUI додаток
-- `setup_directories()` - Створює необхідні директорії
-- `clear_logs()` - Очищає логи перед тестом
-- `read_logs()` - Читає логи після тесту
-
-## TODO
-
-- [ ] Реалізувати завантаження зображень через drag & drop
-- [ ] Реалізувати перемикання елементів через координати
-- [ ] Додати більше сценаріїв тестів
-- [ ] Інтеграція з pytest
-- [ ] CI/CD інтеграція
-
-## Примітки
-
-- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
-- Не залежить від внутрішньої структури GUI
-- Працює як реальний користувач
-- Потрібно щоб GUI було відкрито і видимим під час тестів
-
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
-============================================================
-```python
-"""
-conftest — додає шлях до кореня проєкту для імпорту processing/* та core/*.
-"""
-import sys
-import os
-import pytest
-
-# Додаємо корінь photoprint-main до sys.path
-_project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
-
-@pytest.fixture
-def test_image_path() -> str:
-    """Повертає шлях до тестового JPG-зображення."""
-    return os.path.join(_project_root, "tests", "test_images", "0 (1).jpg")
-
-
-# Маркер для GUI-тестів, що потребують реальний desktop
-def pytest_configure(config):
-    config.addinivalue_line("markers", "gui: Тести, що потребують реальний desktop з GUI (Windows)")
-
-
-@pytest.fixture
-def gui_tester():
-    """Фікстура для GUITester з desktop-режимом ( реальний Windows desktop)."""
-    from tests.gui_tester import GUITester
-    tester = GUITester("main.py", debug_mode=False)
-    tester.setup_directories()
-    yield tester
-    tester.close_app()
-
-```
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
-============================================================
-```python
-"""Автоматизований тестувальник GUI для PhotoPrint"""
-import json
-import subprocess
-import time
-import sys
-import os
-import ctypes
-import threading
-from pathlib import Path
-from typing import Optional, Tuple, List, Dict
-
-
-class GUITester:
-    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
-
-    # Файли для зберігання геометрії віджетів
-    WIDGETS_DEBUG_JSON = Path("tests/results/widgets_debug.json")
-
-    def __init__(self, app_path: str, venv_python: Optional[str] = None,
-                 debug_mode: bool = False):
-        self.app_path = app_path  # шлях до скрипта запуску GUI
-        self.venv_python = venv_python  # шлях до python у venv (опціонально)
-        self.process: Optional[subprocess.Popen] = None  # subprocess process
-        self.output_thread: Optional[threading.Thread] = None  # потік для читання виводу
-        self.test_images_dir = Path("tests/test_images")
-        self.expected_dir = Path("tests/expected")
-        self.results_dir = Path("tests/results")
-        self.logs_dir = Path("tests/logs")
-        self._hwnd: Optional[int] = None  # дескриптор вікна
-        self.debug_mode = debug_mode
-        self._widget_cache: Optional[Dict[str, dict]] = None  # кеш геометрії віджетів
-
-    def launch_app(self) -> bool:
-        """Запускає GUI додаток через subprocess"""
-        python = self.venv_python or sys.executable
-        try:
-            env = os.environ.copy()
-            if self.debug_mode:
-                env["PHOTOPRINT_DEBUG_WIDGETS"] = "1"
-            self.process = subprocess.Popen(
-                [python, self.app_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                cwd=str(Path(self.app_path).parent),
-                env=env,
-            )
-
-            # Читання виводу в окремому потоці
-            def read_output():
-                for line in self.process.stdout:
-                    try:
-                        if line.strip():
-                            print(f"[GUI] {line}", end='')
-                    except UnicodeDecodeError:
-                        pass  # Пропускаємо помилки кодування
-
-            self.output_thread = threading.Thread(target=read_output, daemon=True)
-            self.output_thread.start()
-            print(f"[OK] Додаток запущено: {self.app_path}")
-            return True
-        except Exception as e:
-            print(f"[ERROR] Помилка запуску додатка: {e}")
-            return False
-
-    def activate_window(self, title: str, max_retries: int = 5, retry_delay: float = 1.0) -> bool:
-        """Активує вікно за назвою (через Windows API) з повторними спробами"""
-        try:
-            import win32gui
-            import win32con
-
-            for attempt in range(max_retries):
-                def callback(hwnd, hwnd_list):
-                    if win32gui.IsWindowVisible(hwnd) and title in win32gui.GetWindowText(hwnd):
-                        hwnd_list.append(hwnd)
-                    return True
-
-                hwnd_list = []
-                win32gui.EnumWindows(callback, hwnd_list)
-
-                if hwnd_list:
-                    self._hwnd = hwnd_list[0]
-                    win32gui.SetForegroundWindow(self._hwnd)
-                    win32gui.ShowWindow(self._hwnd, win32con.SW_RESTORE)
-                    print(f"[OK] Вікно активовано: {title} (hwnd={self._hwnd})")
-                    return True
-                else:
-                    if attempt < max_retries - 1:
-                        print(f"[RETRY] Вікно '{title}' не знайдено, спроба {attempt+1}/{max_retries}...")
-                        time.sleep(retry_delay)
-
-            print(f"[ERROR] Вікно не знайдено після {max_retries} спроб: {title}")
-            return False
-        except ImportError:
-            print("[ERROR] Встановіть pywin32: pip install pywin32")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка активації вікна: {e}")
-            return False
-
-    def type_text(self, text: str) -> bool:
-        """Вставляє текст в активне вікно"""
-        try:
-            import pyautogui
-            pyautogui.write(text, interval=0.01)
-            print(f"[OK] Текст вставлено: {text}")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка вставки тексту: {e}")
-            return False
-
-    def press_key(self, key: str) -> bool:
-        """Натискає клавішу"""
-        try:
-            import pyautogui
-            pyautogui.press(key)
-            print(f"[OK] Клавіша натиснута: {key}")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка натискання клавіші: {e}")
-            return False
-
-    def click_at(self, x: int, y: int) -> bool:
-        """Клікає мишкою по координатах"""
-        try:
-            import pyautogui
-            pyautogui.click(x, y)
-            print(f"[OK] Клік виконано: ({x}, {y})")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка кліку: {e}")
-            return False
-
-    def wait(self, seconds: float) -> None:
-        """Чекає заданий час"""
-        print(f"[WAIT] Зачекайте {seconds} секунд...")
-        time.sleep(seconds)
-
-    def screenshot(self, filename: str) -> bool:
-        """Зберігає скріншот вікна"""
-        try:
-            import pyautogui
-            screenshot = pyautogui.screenshot()
-            screenshot.save(filename)
-            print(f"[OK] Скріншот збережено: {filename}")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка скріншоту: {e}")
-            return False
-
-    def compare_images(self, actual_path: str, expected_path: str, tolerance: int = 5) -> bool:
-        """Порівнює два зображення через OpenCV"""
-        try:
-            import cv2
-            import numpy as np
-
-            img1 = cv2.imread(str(actual_path))
-            img2 = cv2.imread(str(expected_path))
-
-            if img1 is None or img2 is None:
-                print(f"[ERROR] Не вдалося завантажити зображення")
-                return False
-
-            # Перевіряємо розміри
-            if img1.shape != img2.shape:
-                print(f"[ERROR] Розміри зображень не співпадають")
-                return False
-
-            # Порівнюємо пікселі з допуском
-            diff = np.abs(img1.astype(int) - img2.astype(int))
-            max_diff = np.max(diff)
-
-            if max_diff <= tolerance:
-                print(f"[OK] Зображення співпадають (max diff: {max_diff})")
-                return True
-            else:
-                print(f"[ERROR] Зображення не співпадають (max diff: {max_diff})")
-                return False
-
-        except ImportError:
-            print("[ERROR] Встановіть opencv-python: pip install opencv-python")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка порівняння: {e}")
-            return False
-
-    def close_app(self) -> None:
-        """Закриває GUI додаток"""
-        if self.process:
-            print("[CLOSE] Закриття програми...")
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-        self._widget_cache = None
-
-    # ------------------------------------------------------------------
-    # Методи для роботи з objectName віджетів
-    # ------------------------------------------------------------------
-
-    def load_widget_geometries(self) -> Dict[str, dict]:
-        """Завантажує геометрію віджетів з JSON-файлу (debug dump)."""
-        if self._widget_cache is not None:
-            return self._widget_cache
-        json_path = self.WIDGETS_DEBUG_JSON
-        if not json_path.exists():
-            print(f"[WARN] Файл геометрії віджетів не знайдено: {json_path}")
-            print("[INFO] Запустіть додаток з PHOTOPRINT_DEBUG_WIDGETS=1")
-            self._widget_cache = {}
-            return self._widget_cache
-        try:
-            with open(json_path, "r", encoding="utf-8") as f:
-                self._widget_cache = json.load(f)
-            print(f"[OK] Завантажено геометрію {len(self._widget_cache)} віджетів")
-            return self._widget_cache
-        except Exception as e:
-            print(f"[ERROR] Помилка читання JSON віджетів: {e}")
-            self._widget_cache = {}
-            return self._widget_cache
-
-    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
-        """Повертає глобальну геометрію віджета за objectName."""
-        widgets = self.load_widget_geometries()
-        if object_name not in widgets:
-            print(f"[WARN] Віджет з objectName='{object_name}' не знайдено")
-            print(f"[INFO] Доступні: {', '.join(sorted(widgets.keys()))}")
-            return None
-        return widgets[object_name]
-
-    def click_widget(self, object_name: str) -> bool:
-        """Клікає по центру віджета, знайденого за objectName."""
-        geom = self.get_widget_geometry(object_name)
-        if geom is None:
-            return False
-        cx = geom["x"] + geom["width"] // 2
-        cy = geom["y"] + geom["height"] // 2
-        try:
-            import pyautogui
-            pyautogui.click(cx, cy)
-            print(f"[OK] Клік по віджету '{object_name}': ({cx}, {cy})")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка кліку по віджету '{object_name}': {e}")
-            return False
-
-    def get_status_text(self) -> Optional[str]:
-        """Повертає текст статусного рядка (objectName='status_label')."""
-        # Не використовуємо get_widget_geometry бо текст не зберігається в JSON
-        # Використовуємо win32gui для пошуку тексту вікна
-        return None
-
-    def wait_for_widget(self, object_name: str, timeout: float = 10.0,
-                        poll_interval: float = 0.5) -> Optional[Dict[str, int]]:
-        """Чекає поки віджет з'явиться у debug dump."""
-        start = time.time()
-        self._widget_cache = None  # скидаємо кеш щоб перечитати
-        while time.time() - start < timeout:
-            geom = self.get_widget_geometry(object_name)
-            if geom is not None:
-                return geom
-            time.sleep(poll_interval)
-        print(f"[WARN] Віджет '{object_name}' не з'явився за {timeout}с")
-        return None
-
-    def setup_directories(self) -> None:
-        """Створює необхідні директорії"""
-        self.test_images_dir.mkdir(parents=True, exist_ok=True)
-        self.expected_dir.mkdir(parents=True, exist_ok=True)
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir.mkdir(parents=True, exist_ok=True)
-        print("[OK] Директорії створено")
-
-    def clear_logs(self) -> None:
-        """Очищає логи перед тестом"""
-        if self.logs_dir.exists():
-            for log_file in self.logs_dir.iterdir():
-                try:
-                    log_file.unlink()
-                    print(f"[OK] Видалено лог: {log_file.name}")
-                except Exception as e:
-                    print(f"[ERROR] Помилка видалення {log_file.name}: {e}")
-
-    # ------------------------------------------------------------------
-    # Розширені методи для взаємодії з GUI
-    # ------------------------------------------------------------------
-
-    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
-        """Повертає координати вікна (left, top, right, bottom)"""
-        try:
-            import win32gui
-            if self._hwnd:
-                rect = win32gui.GetWindowRect(self._hwnd)
-                print(f"[OK] Координати вікна: {rect}")
-                return rect
-            else:
-                print("[ERROR] Вікно не активовано (hwnd=None)")
-                return None
-        except Exception as e:
-            print(f"[ERROR] Помилка отримання координат: {e}")
-            return None
-
-    def drag_drop_files(self, file_paths: List[str]) -> bool:
-        """Імітує Drag & Drop файлів у вікно додатка через WM_DROPFILES"""
-        try:
-            import win32gui
-            import win32con
-            import win32api
-
-            if not self._hwnd:
-                print("[ERROR] Вікно не активовано. Спочатку викличте activate_window()")
-                return False
-
-            # Створюємо DROPFILES структуру
-            # Формат: DROPFILES struct + список шляхів (double-null terminated)
-            import struct
-
-            # Кодуємо шляхи в wide string з подвійним null-термінатором
-            paths_bytes = b""
-            for p in file_paths:
-                paths_bytes += p.encode("utf-16-le") + b"\x00\x00"
-            paths_bytes += b"\x00\x00"  # подвійний null-термінатор
-
-            # DROPFILES структура: 20 байт
-            # pt (POINT x,y) = 8 байт, fNC = 4, fWide = 4
-            offset_to_paths = 20  # sizeof(DROPFILES)
-            dropfiles = struct.pack(
-                "IIIii",
-                offset_to_paths,  # offset to file list
-                0,                 # pt.x (drop point - не важливо)
-                0,                 # pt.y
-                0,                 # fNC (не клієнтська область)
-                1                  # fWide = 1 (Unicode)
-            )
-
-            data = dropfiles + paths_bytes
-
-            # Виділяємо глобальну пам'ять
-            GMEM_MOVEABLE = 0x0002
-            hGlobal = win32api.GlobalAlloc(GMEM_MOVEABLE, len(data))
-            if not hGlobal:
-                print("[ERROR] Не вдалося виділити пам'ять для DROPFILES")
-                return False
-
-            pGlobal = win32api.GlobalLock(hGlobal)
-            if not pGlobal:
-                print("[ERROR] Не вдалося заблокувати пам'ять")
-                win32api.GlobalFree(hGlobal)
-                return False
-
-            # Копіюємо дані
-            import ctypes
-            ctypes.memmove(pGlobal, data, len(data))
-            win32api.GlobalUnlock(hGlobal)
-
-            # Відправляємо WM_DROPFILES
-            WM_DROPFILES = 0x0233
-            win32gui.PostMessage(self._hwnd, WM_DROPFILES, hGlobal, 0)
-
-            print(f"[OK] Drag & Drop виконано: {len(file_paths)} файл(ів)")
-            return True
-
-        except ImportError:
-            print("[ERROR] Встановіть pywin32: pip install pywin32")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка Drag & Drop: {e}")
-            return False
-
-    def click_button_by_text(self, text: str) -> bool:
-        """Знаходить кнопку за текстом і клікає на неї (через розрахунок координат для PyQt6)"""
-        # Маппінг кнопок до їх позицій (відсотки від розміру вікна)
-        # Layout: кнопки в ряд на ~70% висоти вікна, починаючи з ~25% ширини
-        # Порядок: Auto Fix, Друк, Пропустити, Друкувати все, Зберегти, Налаштування
-        button_map = {
-            "auto fix":      (0.28, 0.70),
-            "друк":          (0.38, 0.70),
-            "пропустити":    (0.48, 0.70),
-            "друкувати все": (0.58, 0.70),
-            "зберегти":      (0.68, 0.70),
-            "налаштування":  (0.78, 0.70),
-            # Кнопки управління чергою (ліва панель)
-            "додати файли":  (0.07, 0.88),
-            "додати папку":  (0.07, 0.92),
-            "очистити чергу": (0.07, 0.96),
-            # Кнопки перспективи та різне (нижній ряд під слайдерами)
-            "авто-перспектива":   (0.32, 0.88),
-            "ручна перспектива":  (0.46, 0.88),
-            "скинути перспективу": (0.60, 0.88),
-            "скинути слайдери":   (0.74, 0.88),
-        }
-
-        key = text.lower().strip()
-        if key not in button_map:
-            print(f"[ERROR] Невідома кнопка: {text}")
-            print(f"[INFO] Доступні кнопки: {', '.join(button_map.keys())}")
-            return False
-
-        rel_x, rel_y = button_map[key]
-        return self._click_relative(rel_x, rel_y, label=f"кнопка '{text}'")
-
-    def set_checkbox(self, text: str, checked: bool = True) -> bool:
-        """Знаходить чекбокс за текстом і встановлює його стан (через координати для PyQt6)"""
-        checkbox_map = {
-            "чорно-білий": (0.27, 0.88),
-            "ч/б":         (0.27, 0.88),
-        }
-
-        key = text.lower().strip()
-        if key not in checkbox_map:
-            print(f"[ERROR] Невідомий чекбокс: {text}")
-            return False
-
-        rel_x, rel_y = checkbox_map[key]
-        return self._click_relative(rel_x, rel_y, label=f"чекбокс '{text}'")
-
-    def _click_relative(self, rel_x: float, rel_y: float, label: str = "") -> bool:
-        """Клікає по відносних координатах вікна (0.0-1.0)"""
-        rect = self.find_window_rect()
-        if not rect:
-            return False
-
-        left, top, right, bottom = rect
-        win_width = right - left
-        win_height = bottom - top
-
-        abs_x = int(left + win_width * rel_x)
-        abs_y = int(top + win_height * rel_y)
-
-        try:
-            import pyautogui
-            pyautogui.click(abs_x, abs_y)
-            desc = f" ({label})" if label else ""
-            print(f"[OK] Клік по відносних координатах{desc}: ({rel_x:.2f}, {rel_y:.2f}) -> ({abs_x}, {abs_y})")
-            return True
-        except Exception as e:
-            print(f"[ERROR] Помилка кліку: {e}")
-            return False
-
-    def hotkey(self, *keys: str) -> bool:
-        """Натискає комбінацію клавіш (наприклад hotkey('ctrl', 's'))"""
-        try:
-            import pyautogui
-            pyautogui.hotkey(*keys)
-            print(f"[OK] Комбінація клавіш: {'+'.join(keys)}")
-            return True
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui: pip install pyautogui")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка комбінації клавіш: {e}")
-            return False
-
-    def drag_slider(self, slider_label: str, value: float) -> bool:
-        """Встановлює значення слайдера за назвою (через відносні координати вікна)"""
-        # Маппінг слайдерів до позицій (rel_y, row, start_x_fraction)
-        # Ряд 1 (y~0.78): Тіні, Яскравість, Контраст
-        # Ряд 2 (y~0.82): Різкість, HDR
-        slider_map = {
-            "тіні":        {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
-            "тени":        {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
-            "shadow":      {"y": 0.78, "x_start": 0.22, "x_end": 0.36},
-            "яскравість":  {"y": 0.78, "x_start": 0.38, "x_end": 0.52},
-            "brightness":  {"y": 0.78, "x_start": 0.38, "x_end": 0.52},
-            "контраст":    {"y": 0.78, "x_start": 0.54, "x_end": 0.68},
-            "contrast":    {"y": 0.78, "x_start": 0.54, "x_end": 0.68},
-            "різкість":    {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
-            "різкість":   {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
-            "sharpness":   {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
-            "sharpen":     {"y": 0.82, "x_start": 0.22, "x_end": 0.36},
-            "hdr":         {"y": 0.82, "x_start": 0.38, "x_end": 0.52},
-        }
-
-        key = slider_label.lower().strip()
-        if key not in slider_map:
-            print(f"[ERROR] Невідомий слайдер: {slider_label}")
-            print(f"[INFO] Доступні слайдери: {', '.join(set(slider_map.keys()))}")
-            return False
-
-        info = slider_map[key]
-        # Нормалізуємо value до 0.0-1.0 діапазону слайдера
-        # Для слайдерів з від'ємними значеннями (яскравість, контраст) - value 0.5 = нейтральне
-        rel_x = info["x_start"] + (info["x_end"] - info["x_start"]) * value
-        rel_y = info["y"]
-
-        return self._click_relative(rel_x, rel_y, label=f"слайдер '{slider_label}'={value}")
-
-    def screenshot_window(self, filename: str) -> bool:
-        """Зберігає скріншот тільки вікна додатка"""
-        try:
-            import win32gui
-            import pyautogui
-            from PIL import Image
-
-            if not self._hwnd:
-                print("[ERROR] Вікно не активовано")
-                return False
-
-            rect = win32gui.GetWindowRect(self._hwnd)
-            left, top, right, bottom = rect
-            width = right - left
-            height = bottom - top
-
-            # Робимо повний скріншот і обрізаємо
-            screenshot = pyautogui.screenshot()
-            cropped = screenshot.crop((left, top, right, bottom))
-            cropped.save(filename)
-            print(f"[OK] Скріншот вікна збережено: {filename} ({width}x{height})")
-            return True
-
-        except ImportError:
-            print("[ERROR] Встановіть pyautogui, Pillow, pywin32")
-            return False
-        except Exception as e:
-            print(f"[ERROR] Помилка скріншоту вікна: {e}")
-            return False
-
-    def get_window_text(self) -> Optional[str]:
-        """Повертає заголовок вікна"""
-        try:
-            import win32gui
-            if self._hwnd:
-                return win32gui.GetWindowText(self._hwnd)
-            return None
-        except Exception:
-            return None
-
-    def list_child_widgets(self) -> List[dict]:
-        """Перелічує всі дочірні віджети вікна (для дебагу)"""
-        try:
-            import win32gui
-            widgets = []
-
-            def enum_child_callback(hwnd, _):
-                cls = win32gui.GetClassName(hwnd)
-                text = win32gui.GetWindowText(hwnd)
-                rect = win32gui.GetWindowRect(hwnd)
-                widgets.append({
-                    "hwnd": hwnd,
-                    "class": cls,
-                    "text": text,
-                    "rect": rect,
-                })
-                return True
-
-            if self._hwnd:
-                win32gui.EnumChildWindows(self._hwnd, enum_child_callback, None)
-
-            print(f"[OK] Знайдено {len(widgets)} дочірніх віджетів")
-            for w in widgets:
-                print(f"  hwnd={w['hwnd']} cls={w['class']} text='{w['text']}' rect={w['rect']}")
-
-            return widgets
-
-        except ImportError:
-            print("[ERROR] Встановіть pywin32: pip install pywin32")
-            return []
-        except Exception as e:
-            print(f"[ERROR] Помилка переліку віджетів: {e}")
-            return []
-
-    def read_logs(self) -> None:
-        """Читає логи після тесту"""
-        print("\n" + "=" * 60)
-        print("ЛОГИ:")
-        print("=" * 60)
-
-        if self.logs_dir.exists():
-            for log_file in self.logs_dir.iterdir():
-                print(f"\n[FILE] {log_file.name}:")
-                print("-" * 40)
-                try:
-                    content = log_file.read_text(encoding='utf-8')
-                    if content:
-                        print(content)
-                    else:
-                        print("(пустий)")
-                except Exception as e:
-                    print(f"[ERROR] Помилка читання {log_file.name}: {e}")
-        else:
-            print("[ERROR] Папка логів не існує")
-
-```
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
-============================================================
-pyautogui>=0.9.54
-pywin32>=306
-opencv-python>=4.8.0
-pytest>=7.4.0
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -8251,6 +7772,13 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(__file__))
+
+import cv2
+
+# OpenCV threading / OpenCL (Task 3)
+cv2.setNumThreads(cv2.getNumberOfCPUs())
+if cv2.ocl.haveOpenCL():
+    cv2.ocl.setUseOpenCL(True)
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore    import Qt

@@ -31,12 +31,6 @@ processing\shadow_remove.py
 processing\sharpen.py
 processing\text_mask.py
 processing\white_background.py
-tests\results
-tests\test_images
-tests\README.md
-tests\conftest.py
-tests\gui_tester.py
-tests\requirements.txt
 tools\__init__.py
 tools\profile_memory.py
 utils\__init__.py
@@ -241,7 +235,8 @@ class ControlsPanel(QWidget):
   from pathlib import Path
   from typing import Optional, Dict, Any
   import numpy
-  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox, QListWidget
+  import cv2
+  from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox
   from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
   from PyQt6.QtGui import QIcon
   from gui.preview import PreviewPanel
@@ -258,6 +253,11 @@ class ControlsPanel(QWidget):
 class AutoWorker(QObject):
     def __init__(self, processor: BatchProcessor):
     def run(self):
+class SingleImageWorker(QObject):
+    """Виконує одну операцію обробки зображення у фоновому потоці.
+func: callable() -> np.ndarray  (або tuple)"""
+    def __init__(self, func):
+    def run(self):
 class MainWindow(QMainWindow):
     def __init__(self):
     def _setup_win_drop(self):
@@ -273,10 +273,13 @@ class MainWindow(QMainWindow):
         """Перевизначення closeEvent:
 - Якщо minimize_to_tray == True — ховаємо в трей.
 - Інакше — завершуємо програму."""
+    def _wait_for_threads(self):
+        """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
     def _build_ui(self):
     def _btn_style(self, color):
+    def _on_mode_changed(self, btn_id: int):
     def _apply_default_mode(self):
     def _load_window_geometry(self):
         """Завантажує розмір вікна та ширину черги з налаштувань."""
@@ -284,8 +287,8 @@ class MainWindow(QMainWindow):
         """Зберігає розмір вікна та ширину черги в налаштуваннях."""
     def resizeEvent(self, event):
         """Перевизначення resizeEvent для збереження розміру вікна."""
-    def _on_shadow_mode_changed(self, index: int):
-        """Зміна режиму видалення тіней через ComboBox."""
+    def _on_shadow_mode_changed(self, btn_id: int):
+        """Зміна режиму видалення тіней через радіокнопки."""
     def _on_settings_saved(self, s: dict):
     def _open_settings(self):
     def _on_files_added(self, paths: list[str]):
@@ -300,6 +303,7 @@ class MainWindow(QMainWindow):
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
     def _do_autofix(self):
+    def _do_apply_perspective(self):
     def _do_autofix_classic(self):
     def _on_controls_changed(self, vals: dict):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
@@ -315,7 +319,7 @@ class MainWindow(QMainWindow):
     def _do_persp_manual(self):
         """Ручна корекція: пробуємо знайти точки авто на _base, інакше дефолтні."""
     def _do_persp_reset(self):
-        """Скидає перспективу до оригінального зображення."""
+        """Скидає перспективу до стану до початку ручної перспективи."""
     def _do_reset_all(self):
         """Скидає всі корекції до оригінального зображення."""
     def _on_persp_pts(self, points: list):
@@ -325,16 +329,25 @@ class MainWindow(QMainWindow):
     def _do_save_image(self):
         """Зберігає поточне зображення — для відладки."""
     def _do_print_all(self):
+    def _cleanup_auto_thread(self):
+        """Безпечно завершує авто-потік та звільняє ресурси."""
     def _start_auto(self):
     def _on_auto_progress(self, cur: int, total: int, fname: str):
     def _on_auto_error(self, idx: int, fname: str, msg: str):
     def _on_auto_done(self, count: int):
     def _load_next_manual(self):
+    def _cleanup_single_thread(self):
+        """Безпечно завершує single-image потік та звільняє ресурси."""
+    def _reset_progress_ui(self, button_to_lock):
+        """Скидає UI прогрес-бару та кнопок після завершення фонової операції."""
+    def _run_in_background(self, func, on_finished, button_to_lock):
+        """Запускає func() у фоновому потоці.
+on_finished(result) викликається в GUI-потоці після завершення.
+button_to_lock — кнопка яку заблокувати під час виконання."""
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
-    def _set_status(self, text: str):
-    def _show_log(self, log_entries: list[dict]):
-        """Показує лог кроків обробки у віджеті списку."""
+    def _set_status(self, text: str, timeout_ms: int):
+    def _set_file_status(self, filename: str):
     def _dump_widget_geometries(self) -> None:
         """Записує геометрію всіх віджетів з objectName у JSON для GUITester."""
 
@@ -1027,17 +1040,14 @@ Returns:
 def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
     """Створює модель фону через морфологічне закриття + легке згладжування.
 
-Алгоритм:
-1. MORPH_CLOSE з еліптичним ядром: dilate заповнює темні області (тіні, текст)
-   значеннями світлого фону; erode повертає границю до початкового розміру.
-   Еліптичне ядро зберігає геометрію кутів тіней без «сходинок».
-2. GaussianBlur з малим ядром (~kernel_size/5) прибирає залишки текстури
-   (дрібний текст, лінії), щоб вони не вплинули на модель фону.
+Для прискорення на великих зображеннях — зменшує зображення перед
+морфологією, потім апскейлить результат.
 
-Працює добре для тіней, ширина яких порівнянна з kernel_size.
-Для тіней, що сильно перевищують kernel_size, дає лише часткове
-покриття (див. docstring модуля) — для цього є другий прохід,
-_create_coarse_background().
+Алгоритм:
+1. При необхідності зменшує L-канал до MORPH_MAX_ANALYSIS_SIDE по
+   довшій стороні (INTER_AREA), пропорційно масштабує kernel.
+2. MORPH_CLOSE з еліптичним ядром на зменшеному зображенні.
+3. GaussianBlur + апскейл назад до оригінального розміру.
 
 Args:
     l_channel: L-канал LAB зображення (uint8, 2D).
@@ -1220,200 +1230,6 @@ def make_background_white(image: np.ndarray, background_uniformity: float, detai
 
 Повертає:
     (модифіковане_зображення, чи_була_заміна)"""
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\results
-
-# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\tests\test_images
-
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\README.md
-============================================================
-# Автоматизований тестувальник GUI для PhotoPrint
-
-Цей каталог містить інфраструктуру для автоматизованого тестування GUI PhotoPrint через зовнішнє керування (клавіатура/мишка).
-
-## Структура
-
-```
-tests/
-├── gui_tester.py          # Ядро тестувальника (GUITester клас)
-├── requirements.txt       # Залежності для тестів
-├── README.md             # Цей файл
-├── scenarios/            # Сценарії тестів
-│   ├── test_autofix_toggle.py
-│   └── test_perspective_auto.py
-├── test_images/          # Тестові зображення
-├── expected/             # Очікувані результати
-├── results/              # Результати тестів (скріншоти)
-└── logs/                 # Логи додатка
-```
-
-## Встановлення
-
-1. Встановіть залежності:
-```bash
-pip install -r tests/requirements.txt
-```
-
-## Використання
-
-### Запуск окремого тесту
-
-```bash
-python tests/scenarios/test_autofix_toggle.py
-python tests/scenarios/test_perspective_auto.py
-```
-
-### Створення нового сценарію
-
-1. Створіть новий файл в `tests/scenarios/`
-2. Імпортуйте GUITester:
-```python
-from tests.gui_tester import GUITester
-```
-
-3. Створіть функцію тесту:
-```python
-def test_my_feature():
-    tester = GUITester("gui/main.py")
-    tester.setup_directories()
-    tester.launch_app()
-    tester.wait(3)
-    tester.activate_window(title="PhotoPrint")
-    # Ваші дії...
-    tester.close_app()
-    return True
-```
-
-## GUITester API
-
-### Методи
-
-- `launch_app()` - Запускає GUI додаток через subprocess
-- `activate_window(title)` - Активує вікно за назвою
-- `type_text(text)` - Вставляє текст в активне вікно
-- `press_key(key)` - Натискає клавішу
-- `click_at(x, y)` - Клікає мишкою по координатах
-- `wait(seconds)` - Чекає заданий час
-- `screenshot(filename)` - Зберігає скріншот вікна
-- `compare_images(actual, expected, tolerance)` - Порівнює зображення
-- `close_app()` - Закриває GUI додаток
-- `setup_directories()` - Створює необхідні директорії
-- `clear_logs()` - Очищає логи перед тестом
-- `read_logs()` - Читає логи після тесту
-
-## TODO
-
-- [ ] Реалізувати завантаження зображень через drag & drop
-- [ ] Реалізувати перемикання елементів через координати
-- [ ] Додати більше сценаріїв тестів
-- [ ] Інтеграція з pytest
-- [ ] CI/CD інтеграція
-
-## Примітки
-
-- Тестувальник використовує зовнішнє керування (pyautogui, pywin32)
-- Не залежить від внутрішньої структури GUI
-- Працює як реальний користувач
-- Потрібно щоб GUI було відкрито і видимим під час тестів
-
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\conftest.py
-============================================================
-Імпорти:
-  import sys
-  import os
-  import pytest
-
-Сутності:
-def test_image_path() -> str:
-    """Повертає шлях до тестового JPG-зображення."""
-def pytest_configure(config):
-def gui_tester():
-    """Фікстура для GUITester з desktop-режимом ( реальний Windows desktop)."""
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\gui_tester.py
-============================================================
-Імпорти:
-  import json
-  import subprocess
-  import time
-  import sys
-  import os
-  import ctypes
-  import threading
-  from pathlib import Path
-  from typing import Optional, Tuple, List, Dict
-
-Сутності:
-class GUITester:
-    """Базовий клас для автоматизованого тестування GUI через зовнішнє керування"""
-    def __init__(self, app_path: str, venv_python: Optional[str], debug_mode: bool):
-    def launch_app(self) -> bool:
-        """Запускає GUI додаток через subprocess"""
-    def activate_window(self, title: str, max_retries: int, retry_delay: float) -> bool:
-        """Активує вікно за назвою (через Windows API) з повторними спробами"""
-    def type_text(self, text: str) -> bool:
-        """Вставляє текст в активне вікно"""
-    def press_key(self, key: str) -> bool:
-        """Натискає клавішу"""
-    def click_at(self, x: int, y: int) -> bool:
-        """Клікає мишкою по координатах"""
-    def wait(self, seconds: float) -> None:
-        """Чекає заданий час"""
-    def screenshot(self, filename: str) -> bool:
-        """Зберігає скріншот вікна"""
-    def compare_images(self, actual_path: str, expected_path: str, tolerance: int) -> bool:
-        """Порівнює два зображення через OpenCV"""
-    def close_app(self) -> None:
-        """Закриває GUI додаток"""
-    def load_widget_geometries(self) -> Dict[str, dict]:
-        """Завантажує геометрію віджетів з JSON-файлу (debug dump)."""
-    def get_widget_geometry(self, object_name: str) -> Optional[Dict[str, int]]:
-        """Повертає глобальну геометрію віджета за objectName."""
-    def click_widget(self, object_name: str) -> bool:
-        """Клікає по центру віджета, знайденого за objectName."""
-    def get_status_text(self) -> Optional[str]:
-        """Повертає текст статусного рядка (objectName='status_label')."""
-    def wait_for_widget(self, object_name: str, timeout: float, poll_interval: float) -> Optional[Dict[str, int]]:
-        """Чекає поки віджет з'явиться у debug dump."""
-    def setup_directories(self) -> None:
-        """Створює необхідні директорії"""
-    def clear_logs(self) -> None:
-        """Очищає логи перед тестом"""
-    def find_window_rect(self) -> Optional[Tuple[int, int, int, int]]:
-        """Повертає координати вікна (left, top, right, bottom)"""
-    def drag_drop_files(self, file_paths: List[str]) -> bool:
-        """Імітує Drag & Drop файлів у вікно додатка через WM_DROPFILES"""
-    def click_button_by_text(self, text: str) -> bool:
-        """Знаходить кнопку за текстом і клікає на неї (через розрахунок координат для PyQt6)"""
-    def set_checkbox(self, text: str, checked: bool) -> bool:
-        """Знаходить чекбокс за текстом і встановлює його стан (через координати для PyQt6)"""
-    def _click_relative(self, rel_x: float, rel_y: float, label: str) -> bool:
-        """Клікає по відносних координатах вікна (0.0-1.0)"""
-    def hotkey(self) -> bool:
-        """Натискає комбінацію клавіш (наприклад hotkey('ctrl', 's'))"""
-    def drag_slider(self, slider_label: str, value: float) -> bool:
-        """Встановлює значення слайдера за назвою (через відносні координати вікна)"""
-    def screenshot_window(self, filename: str) -> bool:
-        """Зберігає скріншот тільки вікна додатка"""
-    def get_window_text(self) -> Optional[str]:
-        """Повертає заголовок вікна"""
-    def list_child_widgets(self) -> List[dict]:
-        """Перелічує всі дочірні віджети вікна (для дебагу)"""
-    def read_logs(self) -> None:
-        """Читає логи після тесту"""
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\tests\requirements.txt
-============================================================
-pyautogui>=0.9.54
-pywin32>=306
-opencv-python>=4.8.0
-pytest>=7.4.0
-
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
@@ -1739,6 +1555,7 @@ photoprint/
 Імпорти:
   import sys
   import os
+  import cv2
   from PyQt6.QtWidgets import QApplication
   from PyQt6.QtCore import Qt
   from gui.main_window import MainWindow
