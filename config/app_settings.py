@@ -50,6 +50,14 @@ DEFAULT_MIN_WORKER_THREADS = 1
 DEFAULT_PIPELINE_PRESET = "doc_bw"
 DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,hdr,sharpen,grayscale,white_background"
 
+# Константи для вигляду
+DEFAULT_BACKGROUND_COLOR = "#E8E8E8"
+DEFAULT_PREVIEW_BG_COLOR = "#E8E8E8"
+DEFAULT_PREVIEW_TEXT_COLOR = "#333333"
+DEFAULT_QUEUE_BG_COLOR = "#FFFFFF"
+DEFAULT_QUEUE_TEXT_COLOR = "#111111"
+DEFAULT_AUTO_CONTRAST_TEXT = True
+
 
 def _get_path(path=None):
     return path or _DEFAULT_PATH
@@ -105,6 +113,13 @@ def load(path=None) -> dict:
         # Пресети стратегій
         "pipeline_preset":        cfg.get("processing", "pipeline_preset",        fallback=DEFAULT_PIPELINE_PRESET),
         "pipeline_steps_enabled": cfg.get("processing", "pipeline_steps_enabled", fallback=DEFAULT_PIPELINE_STEPS_ENABLED),
+        # Вигляд
+        "background_color": cfg.get("appearance", "background_color", fallback=DEFAULT_BACKGROUND_COLOR),
+        "preview_bg_color": cfg.get("appearance", "preview_bg_color", fallback=DEFAULT_PREVIEW_BG_COLOR),
+        "preview_text_color": cfg.get("appearance", "preview_text_color", fallback=DEFAULT_PREVIEW_TEXT_COLOR),
+        "queue_bg_color": cfg.get("appearance", "queue_bg_color", fallback=DEFAULT_QUEUE_BG_COLOR),
+        "queue_text_color": cfg.get("appearance", "queue_text_color", fallback=DEFAULT_QUEUE_TEXT_COLOR),
+        "auto_contrast_text": cfg.getboolean("appearance", "auto_contrast_text", fallback=DEFAULT_AUTO_CONTRAST_TEXT),
     }
 
 
@@ -162,6 +177,15 @@ def save(settings: dict, path=None):
     )
     cfg["processing"]["pipeline_preset"]        = settings.get("pipeline_preset",        DEFAULT_PIPELINE_PRESET)
     cfg["processing"]["pipeline_steps_enabled"] = settings.get("pipeline_steps_enabled", DEFAULT_PIPELINE_STEPS_ENABLED)
+    # Вигляд
+    cfg["appearance"] = {
+        "background_color": settings.get("background_color", DEFAULT_BACKGROUND_COLOR),
+        "preview_bg_color": settings.get("preview_bg_color", DEFAULT_PREVIEW_BG_COLOR),
+        "preview_text_color": settings.get("preview_text_color", DEFAULT_PREVIEW_TEXT_COLOR),
+        "queue_bg_color": settings.get("queue_bg_color", DEFAULT_QUEUE_BG_COLOR),
+        "queue_text_color": settings.get("queue_text_color", DEFAULT_QUEUE_TEXT_COLOR),
+        "auto_contrast_text": str(settings.get("auto_contrast_text", DEFAULT_AUTO_CONTRAST_TEXT)).lower(),
+    }
 
     target = _get_path(path)
     os.makedirs(os.path.dirname(target), exist_ok=True)

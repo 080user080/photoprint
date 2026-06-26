@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 import os as _os
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QCheckBox
 from config import app_settings
 from config.app_settings import DEFAULT_WORKER_THREADS
 
@@ -156,6 +158,7 @@ SECTIONS = [
     ("strategy",     "Стратегія обробки"),
     ("format",       "Формат/Збереження"),
     ("printer",      "Принтер/Режим"),
+    ("appearance",   "Вигляд"),
 ]
 
 
@@ -284,6 +287,7 @@ class SettingsWindow(QWidget):
         self._stack.addWidget(_make_scroll_page(self._page_strategy()))
         self._stack.addWidget(_make_scroll_page(self._page_format_save()))
         self._stack.addWidget(_make_scroll_page(self._page_printer_mode()))
+        self._stack.addWidget(_make_scroll_page(self._page_appearance()))
 
         self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
 
@@ -578,6 +582,136 @@ class SettingsWindow(QWidget):
         layout.addStretch()
         return container
 
+    def _page_appearance(self) -> QWidget:
+        """Сторінка вигляду — кольори фону та тексту."""
+        box = QGroupBox("Вигляд")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
+
+        # === Колір фону головного вікна ===
+        bg_row = QHBoxLayout()
+        self._color_preview = QLabel()
+        self._color_preview.setFixedSize(40, 24)
+        self._color_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._color_hex = QLineEdit()
+        self._color_hex.setPlaceholderText("#E8E8E8")
+        self._color_hex.setToolTip("Колір фону у форматі #RRGGBB")
+        btn_bg = QPushButton("…")
+        btn_bg.setFixedWidth(32)
+        btn_bg.clicked.connect(self._choose_background_color)
+        bg_row.addWidget(self._color_preview)
+        bg_row.addWidget(self._color_hex, 1)
+        bg_row.addWidget(btn_bg)
+        form.addRow("Колір фону:", bg_row)
+
+        # === Колір фону прев'ю "До/Після" ===
+        prev_bg_row = QHBoxLayout()
+        self._preview_bg_preview = QLabel()
+        self._preview_bg_preview.setFixedSize(40, 24)
+        self._preview_bg_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._preview_bg_hex = QLineEdit()
+        self._preview_bg_hex.setPlaceholderText("#E8E8E8")
+        self._preview_bg_hex.setToolTip("Колір фону прев'ю у форматі #RRGGBB")
+        btn_prev_bg = QPushButton("…")
+        btn_prev_bg.setFixedWidth(32)
+        btn_prev_bg.clicked.connect(lambda: self._choose_color(self._preview_bg_hex, self._preview_bg_preview))
+        prev_bg_row.addWidget(self._preview_bg_preview)
+        prev_bg_row.addWidget(self._preview_bg_hex, 1)
+        prev_bg_row.addWidget(btn_prev_bg)
+        form.addRow("Фон прев'ю:", prev_bg_row)
+
+        # === Колір тексту прев'ю (заголовки "ДО"/"ПІСЛЯ") ===
+        prev_text_row = QHBoxLayout()
+        self._preview_text_preview = QLabel()
+        self._preview_text_preview.setFixedSize(40, 24)
+        self._preview_text_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._preview_text_hex = QLineEdit()
+        self._preview_text_hex.setPlaceholderText("#333333")
+        self._preview_text_hex.setToolTip("Колір тексту заголовків у форматі #RRGGBB")
+        btn_prev_text = QPushButton("…")
+        btn_prev_text.setFixedWidth(32)
+        btn_prev_text.clicked.connect(lambda: self._choose_color(self._preview_text_hex, self._preview_text_preview))
+        prev_text_row.addWidget(self._preview_text_preview)
+        prev_text_row.addWidget(self._preview_text_hex, 1)
+        prev_text_row.addWidget(btn_prev_text)
+        form.addRow("Текст прев'ю:", prev_text_row)
+
+        # === Колір фону списку черги ===
+        queue_bg_row = QHBoxLayout()
+        self._queue_bg_preview = QLabel()
+        self._queue_bg_preview.setFixedSize(40, 24)
+        self._queue_bg_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._queue_bg_hex = QLineEdit()
+        self._queue_bg_hex.setPlaceholderText("#FFFFFF")
+        self._queue_bg_hex.setToolTip("Колір фону списку файлів у форматі #RRGGBB")
+        btn_queue_bg = QPushButton("…")
+        btn_queue_bg.setFixedWidth(32)
+        btn_queue_bg.clicked.connect(lambda: self._choose_color(self._queue_bg_hex, self._queue_bg_preview))
+        queue_bg_row.addWidget(self._queue_bg_preview)
+        queue_bg_row.addWidget(self._queue_bg_hex, 1)
+        queue_bg_row.addWidget(btn_queue_bg)
+        form.addRow("Фон черги:", queue_bg_row)
+
+        # === Колір тексту списку черги ===
+        queue_text_row = QHBoxLayout()
+        self._queue_text_preview = QLabel()
+        self._queue_text_preview.setFixedSize(40, 24)
+        self._queue_text_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._queue_text_hex = QLineEdit()
+        self._queue_text_hex.setPlaceholderText("#111111")
+        self._queue_text_hex.setToolTip("Колір тексту списку файлів у форматі #RRGGBB")
+        btn_queue_text = QPushButton("…")
+        btn_queue_text.setFixedWidth(32)
+        btn_queue_text.clicked.connect(lambda: self._choose_color(self._queue_text_hex, self._queue_text_preview))
+        queue_text_row.addWidget(self._queue_text_preview)
+        queue_text_row.addWidget(self._queue_text_hex, 1)
+        queue_text_row.addWidget(btn_queue_text)
+        form.addRow("Текст черги:", queue_text_row)
+
+        # === Авто-контрастний текст ===
+        self._cb_auto_contrast = QCheckBox()
+        self._cb_auto_contrast.setChecked(True)
+        self._cb_auto_contrast.setToolTip("Автоматично обирати світлий/темний текст залежно від кольору фону для забезпечення читаємості")
+        self._cb_auto_contrast.toggled.connect(self._on_auto_contrast_toggled)
+        form.addRow("Авто-контрастний текст:", self._cb_auto_contrast)
+
+        return box
+
+    def _on_auto_contrast_toggled(self, checked: bool):
+        """Вмикає/вимикає поля вибору кольору тексту."""
+        enabled = not checked
+        self._preview_text_hex.setEnabled(enabled)
+        self._preview_text_preview.setEnabled(enabled)
+        self._queue_text_hex.setEnabled(enabled)
+        self._queue_text_preview.setEnabled(enabled)
+
+    def _choose_background_color(self):
+        """Відкриває діалог вибору кольору."""
+        self._choose_color(self._color_hex, self._color_preview)
+
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
+        """Універсальний метод вибору кольору."""
+        from PyQt6.QtWidgets import QColorDialog
+
+        current_text = hex_edit.text().strip()
+        if not current_text.startswith("#"):
+            current_text = "#E8E8E8"
+
+        try:
+            current_color = QColor(current_text)
+            if not current_color.isValid():
+                current_color = QColor("#E8E8E8")
+        except Exception:
+            current_color = QColor("#E8E8E8")
+
+        color = QColorDialog.getColor(current_color, self, "Виберіть колір")
+        if color.isValid():
+            hex_color = color.name()
+            hex_edit.setText(hex_color)
+            preview_label.setStyleSheet(
+                f"background-color: {hex_color}; border: 1px solid #888888; border-radius: 2px;"
+            )
+
     # ------------------------------------------------------------------
     # Завантаження / збереження
     # ------------------------------------------------------------------
@@ -643,6 +777,39 @@ class SettingsWindow(QWidget):
         enabled = [k.strip() for k in enabled_str.split(",") if k.strip()] if enabled_str else None
         self._preset_widget.set_state(preset, enabled)
 
+        # Вигляд
+        bg_color = s.get("background_color", "#E8E8E8")
+        self._color_hex.setText(bg_color)
+        self._color_preview.setStyleSheet(
+            f"background-color: {bg_color}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        preview_bg = s.get("preview_bg_color", "#E8E8E8")
+        self._preview_bg_hex.setText(preview_bg)
+        self._preview_bg_preview.setStyleSheet(
+            f"background-color: {preview_bg}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        preview_text = s.get("preview_text_color", "#333333")
+        self._preview_text_hex.setText(preview_text)
+        self._preview_text_preview.setStyleSheet(
+            f"background-color: {preview_text}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        queue_bg = s.get("queue_bg_color", "#FFFFFF")
+        self._queue_bg_hex.setText(queue_bg)
+        self._queue_bg_preview.setStyleSheet(
+            f"background-color: {queue_bg}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        queue_text = s.get("queue_text_color", "#111111")
+        self._queue_text_hex.setText(queue_text)
+        self._queue_text_preview.setStyleSheet(
+            f"background-color: {queue_text}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        self._cb_auto_contrast.setChecked(s.get("auto_contrast_text", True))
+
     def _collect_settings(self) -> dict:
         return {
             "autofix_enabled":    self._cb_autofix.isChecked(),
@@ -682,6 +849,12 @@ class SettingsWindow(QWidget):
             "default_mode":      "auto" if self._cb_default_auto.isChecked() else "manual",
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "worker_threads": self._spin_worker_threads.value(),
+            "background_color": self._color_hex.text().strip() or "#E8E8E8",
+            "preview_bg_color": self._preview_bg_hex.text().strip() or "#E8E8E8",
+            "preview_text_color": self._preview_text_hex.text().strip() or "#333333",
+            "queue_bg_color": self._queue_bg_hex.text().strip() or "#FFFFFF",
+            "queue_text_color": self._queue_text_hex.text().strip() or "#111111",
+            "auto_contrast_text": self._cb_auto_contrast.isChecked(),
         }
 
     def _save(self):

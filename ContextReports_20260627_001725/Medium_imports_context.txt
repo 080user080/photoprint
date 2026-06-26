@@ -39,7 +39,6 @@ utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
 main.py
-shadow_remove_gui.py
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: medium)
@@ -250,6 +249,8 @@ class MainWindow(QMainWindow):
         """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
+    def _apply_background_color(self):
+        """Застосовує колір фону центрального віджета з налаштувань."""
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -402,6 +403,7 @@ class QueueView(QListWidget):
   import os
   from PyQt6.QtCore import pyqtSignal
   from PyQt6.QtCore import Qt
+  from PyQt6.QtGui import QColor
   from config import app_settings
   from config.app_settings import DEFAULT_WORKER_THREADS
 
@@ -438,6 +440,10 @@ class SettingsWindow(QWidget):
         """Сторінка формату виходу та збереження."""
     def _page_printer_mode(self) -> QWidget:
         """Сторінка принтера та режиму запуску."""
+    def _page_appearance(self) -> QWidget:
+        """Сторінка вигляду — колір фону головного вікна."""
+    def _choose_background_color(self):
+        """Відкриває діалог вибору кольору."""
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -918,41 +924,3 @@ class DropEventFilter(QAbstractNativeEventFilter):
 
 Сутності:
 def main():
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
-============================================================
-Імпорти:
-  import tkinter
-  from tkinter import ttk, filedialog, messagebox
-  import threading
-  import os
-
-Сутності:
-def _auto_kernel_size(image: np.ndarray) -> int:
-def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
-def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
-def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
-def _detect_shadow(image: np.ndarray) -> bool:
-    """Returns True if shadow is detected and removal should proceed."""
-def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
-    """Remove gradient shadows from a document image."""
-def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
-    """Automatically detect and remove shadows."""
-def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
-class ShadowRemoverApp(tk.Tk):
-    def __init__(self):
-    def _build_ui(self):
-    def _on_kernel_change(self, _):
-    def _on_options_change(self):
-    def _pick_input(self):
-    def _pick_output(self):
-    def _show_preview_before(self, img: np.ndarray):
-    def _show_preview_after(self, img: np.ndarray):
-    def _clear_after_canvas(self):
-    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
-    def _run_threaded(self):
-    def _process(self):
-    def _finish(self, status: str):
-    def _error(self, msg: str):
-    def _save_result(self):

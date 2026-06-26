@@ -61,8 +61,8 @@ class ImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
-        # Сірий фон замість білого — запобігає білому спалаху при зміні зображення
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
+        self._default_bg = "#E8E8E8"
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px;")
         # Залишаємо місце навколо для точок що на краю
         self.setContentsMargins(IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN)
         self._pixmap_orig: QPixmap | None = None
@@ -85,7 +85,8 @@ class ImageLabel(QLabel):
         self._points = []
         self.clear()
         self.setText(text)
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px; color: #777777; font-size: 13px;")
+        text_color = "#777777"
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px; color: {text_color}; font-size: 13px;")
 
     def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None = None):
         self._edit_mode = enabled
@@ -176,7 +177,7 @@ class ImageLabel(QLabel):
         )
         self.setPixmap(scaled)
         # Залишаємо фон сірим, прибираємо тільки текстову стилізацію
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def _img_rect(self) -> QRect | None:
         if not self.pixmap() or self.pixmap().isNull():
@@ -220,6 +221,8 @@ class PreviewPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._default_bg = "#E8E8E8"
+        self._text_color = "#333333"
         self._build_ui()
 
     def _build_ui(self):
@@ -229,20 +232,20 @@ class PreviewPanel(QWidget):
 
         # До
         left = QVBoxLayout()
-        lbl_b = QLabel("ДО")
-        lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_b.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+        self._lbl_before = QLabel("ДО")
+        self._lbl_before.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_before.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
         self._before = ImageLabel()
         self._before.set_placeholder()
         self._before.points_changed.connect(self.perspective_points_changed)
-        left.addWidget(lbl_b)
+        left.addWidget(self._lbl_before)
         left.addWidget(self._before)
 
         # Після
         right = QVBoxLayout()
         self._lbl_after = QLabel("ПІСЛЯ")
         self._lbl_after.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+        self._lbl_after.setStyleSheet("font-weight:bold; color:_preview_text; font-size:13px;")
         self._after = ImageLabel()
         self._after.set_placeholder("Тут з'явиться результат")
         right.addWidget(self._lbl_after)
@@ -256,6 +259,21 @@ class PreviewPanel(QWidget):
 
     def set_after(self, image: np.ndarray):
         self._after.set_image(image)
+
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для прев'ю."""
+        self._default_bg = bg_color
+        self._text_color = text_color
+        if hasattr(self, '_before'):
+            self._before._default_bg = bg_color
+        if hasattr(self, '_after'):
+            self._after._default_bg = bg_color
+        self._lbl_before.setStyleSheet(f"font-weight:bold; color:{text_color}; font-size:13px;")
+        self._lbl_after.setStyleSheet(f"font-weight:bold; color:{text_color}; font-size:13px;")
+        # Оновлюємо фон ImageLabel
+        for attr in ('_before', '_after'):
+            w = getattr(self, attr)
+            w.setStyleSheet(f"background-color: {bg_color}; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def set_autofix_applied(self, mode: str | None):
         """Візуальний індикатор застосованої автокорекції.
@@ -271,7 +289,7 @@ class PreviewPanel(QWidget):
             self._lbl_after.setStyleSheet("font-weight:bold; color:#006600; font-size:13px;")
         else:
             self._lbl_after.setText("ПІСЛЯ")
-            self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+            self._lbl_after.setStyleSheet(f"font-weight:bold; color:{self._text_color}; font-size:13px;")
 
     def clear(self):
         self._before.set_placeholder()

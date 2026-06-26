@@ -38,10 +38,7 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
-shadow_remove_gui.py
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: full_doc)
@@ -277,6 +274,8 @@ class MainWindow(QMainWindow):
         """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
+    def _apply_background_color(self):
+        """Застосовує колір фону центрального віджета з налаштувань."""
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -434,6 +433,7 @@ class QueueView(QListWidget):
   import os
   from PyQt6.QtCore import pyqtSignal
   from PyQt6.QtCore import Qt
+  from PyQt6.QtGui import QColor
   from config import app_settings
   from config.app_settings import DEFAULT_WORKER_THREADS
 
@@ -470,6 +470,10 @@ class SettingsWindow(QWidget):
         """Сторінка формату виходу та збереження."""
     def _page_printer_mode(self) -> QWidget:
         """Сторінка принтера та режиму запуску."""
+    def _page_appearance(self) -> QWidget:
+        """Сторінка вигляду — колір фону головного вікна."""
+    def _choose_background_color(self):
+        """Відкриває діалог вибору кольору."""
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -1391,165 +1395,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
 
 ============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-============================================================
-# PhotoPrint
-
-Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
-
-## Функціональність
-
-- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
-- **Інтелектуальна авто-обробка:**
-  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
-  - Авто-яскравість на основі гістограми (5-95% перцентилів)
-  - Авто-контраст з адаптивними порогами
-  - Авто-різкість на основі аналізу blur (Laplacian variance)
-  - Авто-детекція перспективи з fallback
-- **Ручне коригування:**
-  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
-  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
-  - Скидання: Скинути перспективу, Скинути слайдери
-- **Пакетна обробка:** Авто та ручний режими для черги файлів
-- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
-- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
-- **Друк:** Відправка на принтер (priPrinter або інший)
-- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
-
-## Встановлення
-
-```bash
-pip install -r requirements.txt
-```
-
-## Запуск
-
-```bash
-python main.py
-```
-
-## Структура проєкту
-
-```
-photoprint/
-├── main.py                    # Точка входу
-├── requirements.txt
-├── status.md                  # Статус розробки та план
-├── README.md                  # Цей файл
-│
-├── config/
-│   ├── settings.ini           # Конфігураційний файл
-│   └── app_settings.py        # Читання/запис налаштувань
-│
-├── core/
-│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
-│   ├── saver.py               # Збереження JPG
-│   └── printer.py             # Відправка на принтер
-│
-├── processing/
-│   ├── autofix.py             # Pipeline для різних типів документів
-│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
-│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
-│   ├── hdr.py                 # HDR tone mapping
-│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
-│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
-│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
-│   ├── perspective.py         # Авто + ручна перспективна корекція
-│   └── pipeline.py            # Єдина точка входу для GUI
-│
-├── batch/
-│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
-│
-├── gui/
-│   ├── main_window.py         # Головне вікно
-│   ├── preview.py             # Прев'ю До/Після
-│   ├── queue_view.py          # Черга файлів з Drag & Drop
-│   ├── controls.py            # Слайдери та кнопки керування
-│   └── settings_window.py     # Вікно налаштувань
-│
-└── utils/
-    ├── file_utils.py          # Робота з файлами
-    ├── image_utils.py         # Утиліти numpy/OpenCV
-    ├── logger.py              # Логування
-    └── win_drop.py            # Windows Drag & Drop
-```
-
-## Використання
-
-### Базовий робочий процес
-
-1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
-2. **Оберіть режим:** **Авто** або **Ручний**
-3. **Авто режим:**
-   - Натисніть "Друкувати все"
-   - Програма автоматично класифікує, обробить і надрукує всі файли
-4. **Ручний режим:**
-   - Переглядайте кожне фото по черзі
-   - Використовуйте "Auto Fix" для автоматичної корекції
-   - Або налаштуйте вручну через слайдери
-   - Натисніть "Друк" або "Пропустити"
-
-### Слайдери
-
-- **Тіні (0.0-2.0):** Висвітлення темних областей
-- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
-- **Контраст (-1.0-1.0):** Зміна контрасту
-- **Різкість (0.0-1.0):** Збільшення різкості
-- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
-
-### Кнопки авто-корекції
-
-- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
-- **Авто контраст:** Автоматичне вирівнювання контрасту
-- **Авто різкість:** Автоматична різкість на основі аналізу blur
-
-### Перспектива
-
-- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
-- **Ручна перспектива:** Ручне встановлення 4 кутів документа
-- **Скинути перспективу:** Повернення до оригінальної перспективи
-
-### Налаштування
-
-Файл `config/settings.ini` — текстовий, редагується блокнотом.
-Або через кнопку **⚙ Налаштування** у програмі.
-
-**Доступні налаштування:**
-- Пороги класифікації документів
-- Сила авто-різкості та поріг blur
-- Параметри авто-яскравості/контрасту (перцентилі)
-- Налаштування бінаризації для ч-б документів
-- Якість JPG при збереженні
-- Папка для збереження оброблених файлів
-- Назва принтера за замовчуванням
-- Вікно програми (розмір, позиція)
-
-## Стан розробки
-
-Детальний статус розробки дивіться у файлі [status.md](status.md).
-
-**Фаза 1 (завершено):**
-- ✅ Авто-обробка з класифікацією документів
-- ✅ Окремі pipeline для ч-б, кольорових документів та фото
-- ✅ Авто-видалення градієнтних тіней (blur/divide)
-- ✅ Авто-яскравість, авто-контраст, авто-різкість
-- ✅ Авто-детекція перспективи
-- ✅ Запам'ятовування ручних корекцій
-- ✅ Логування
-
-**Фаза 2 (наступний пріоритет):**
-- Адаптивний HDR для фото документів
-- Юніт-тести
-- Оптимізація пам'яті
-- Підтримка RAW-форматів
-- Трей-режим
-
-## Ліцензія
-
-Проект розробляється для особистого використання.
-
-
-============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
 Імпорти:
@@ -1562,64 +1407,3 @@ photoprint/
 
 Сутності:
 def main():
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-============================================================
-opencv-python>=4.8
-numpy>=1.24
-Pillow>=10.0
-pillow-heif>=0.13
-PyQt6>=6.5
-rawpy>=0.27
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
-============================================================
-Імпорти:
-  import tkinter
-  from tkinter import ttk, filedialog, messagebox
-  import threading
-  import os
-
-Сутності:
-def _auto_kernel_size(image: np.ndarray) -> int:
-def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
-def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
-def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
-def _detect_shadow(image: np.ndarray) -> bool:
-    """Returns True if shadow is detected and removal should proceed."""
-def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
-    """Remove gradient shadows from a document image.
-
-Parameters
-----------
-image       : BGR numpy array
-kernel_size : morphological kernel size (0 = auto)
-coarse_pass : whether to apply the downsample second pass
-
-Returns
--------
-Corrected BGR numpy array"""
-def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
-    """Automatically detect and remove shadows.
-
-Returns (processed_image, shadow_was_detected)
-If force=True, skips detection and always processes."""
-def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
-class ShadowRemoverApp(tk.Tk):
-    def __init__(self):
-    def _build_ui(self):
-    def _on_kernel_change(self, _):
-    def _on_options_change(self):
-    def _pick_input(self):
-    def _pick_output(self):
-    def _show_preview_before(self, img: np.ndarray):
-    def _show_preview_after(self, img: np.ndarray):
-    def _clear_after_canvas(self):
-    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
-    def _run_threaded(self):
-    def _process(self):
-    def _finish(self, status: str):
-    def _error(self, msg: str):
-    def _save_result(self):

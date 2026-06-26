@@ -143,6 +143,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_default_mode()
+        self._apply_preview_colors()
+        self._apply_queue_colors()
         self._update_buttons()
 
         # Завантажуємо розмір вікна та ширину черги
@@ -264,9 +266,47 @@ class MainWindow(QMainWindow):
     # Побудова UI
     # ------------------------------------------------------------------
 
+    def _apply_background_color(self):
+        """Застосовує колір фону центрального віджета з налаштувань."""
+        bg_color = self._settings.get("background_color", "#E8E8E8")
+        central = self.centralWidget()
+        if central is not None:
+            central.setStyleSheet(f"background-color: {bg_color};")
+
+    def _apply_preview_colors(self):
+        """Застосовує кольори до прев'ю."""
+        bg_color = self._settings.get("preview_bg_color", "#E8E8E8")
+        text_color = self._settings.get("preview_text_color", "#333333")
+        auto_contrast = self._settings.get("auto_contrast_text", True)
+
+        if auto_contrast:
+            text_color = self._auto_contrast_color(bg_color)
+
+        self._preview.set_colors(bg_color, text_color)
+
+    def _apply_queue_colors(self):
+        """Застосовує кольори до списку черги."""
+        bg_color = self._settings.get("queue_bg_color", "#FFFFFF")
+        text_color = self._settings.get("queue_text_color", "#111111")
+        auto_contrast = self._settings.get("auto_contrast_text", True)
+
+        if auto_contrast:
+            text_color = self._auto_contrast_color(bg_color)
+
+        self._queue.set_colors(bg_color, text_color)
+
+    @staticmethod
+    def _auto_contrast_color(bg_hex: str) -> str:
+        """Автоматично обирає контрастний колір тексту для заданого фону."""
+        bg_hex = bg_hex.lstrip("#")
+        r, g, b = int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "#FFFFFF" if luminance < 128 else "#111111"
+
     def _build_ui(self):
         central = QWidget()
-        central.setStyleSheet("background-color: #E8E8E8;")
+        bg_color = self._settings.get("background_color", "#E8E8E8")
+        central.setStyleSheet(f"background-color: {bg_color};")
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
         root.setContentsMargins(LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN)
@@ -550,6 +590,9 @@ class MainWindow(QMainWindow):
         self._processor = BatchProcessor(self._settings)
         self._processor.set_files(self._queue.get_all_paths())
         self._apply_default_mode()
+        self._apply_background_color()
+        self._apply_preview_colors()
+        self._apply_queue_colors()
 
     def _open_settings(self):
         self._settings_win.load_from_file()

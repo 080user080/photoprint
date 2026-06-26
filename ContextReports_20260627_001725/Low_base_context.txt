@@ -39,7 +39,6 @@ utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
 main.py
-shadow_remove_gui.py
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
@@ -163,6 +162,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
     def _wait_for_threads(self):
     def _on_win_drop(self, paths: list[str]):
+    def _apply_background_color(self):
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -293,6 +293,8 @@ class SettingsWindow(QWidget):
     def _page_strategy(self) -> QWidget:
     def _page_format_save(self) -> QWidget:
     def _page_printer_mode(self) -> QWidget:
+    def _page_appearance(self) -> QWidget:
+    def _choose_background_color(self):
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -545,32 +547,3 @@ class DropEventFilter(QAbstractNativeEventFilter):
 ============================================================
 Сутності:
 def main():
-
-============================================================
-Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
-============================================================
-Сутності:
-def _auto_kernel_size(image: np.ndarray) -> int:
-def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
-def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
-def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
-def _detect_shadow(image: np.ndarray) -> bool:
-def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
-def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
-def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
-class ShadowRemoverApp(tk.Tk):
-    def __init__(self):
-    def _build_ui(self):
-    def _on_kernel_change(self, _):
-    def _on_options_change(self):
-    def _pick_input(self):
-    def _pick_output(self):
-    def _show_preview_before(self, img: np.ndarray):
-    def _show_preview_after(self, img: np.ndarray):
-    def _clear_after_canvas(self):
-    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
-    def _run_threaded(self):
-    def _process(self):
-    def _finish(self, status: str):
-    def _error(self, msg: str):
-    def _save_result(self):

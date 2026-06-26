@@ -59,6 +59,10 @@ class QueueView(QListWidget):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.itemClicked.connect(self._on_clicked)
 
+        # Кольори за замовчуванням
+        self._bg_color = COLOR_PENDING
+        self._text_color = COLOR_TEXT
+
     # ------------------------------------------------------------------
     # Публічний API
     # ------------------------------------------------------------------
@@ -79,6 +83,20 @@ class QueueView(QListWidget):
     def mark_done(self, idx: int) -> None:     self._set_status(idx, "done")
     def mark_error(self, idx: int) -> None:    self._set_status(idx, "error")
     def mark_skipped(self, idx: int) -> None:  self._set_status(idx, "skipped")
+
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для всіх елементів."""
+        self._bg_color = QColor(bg_color)
+        self._text_color = QColor(text_color)
+        self._apply_colors()
+
+    def _apply_colors(self):
+        """Застосувати поточні кольори до всіх елементів."""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item:
+                item.setBackground(self._bg_color)
+                item.setForeground(self._text_color)
 
     def get_all_paths(self) -> List[str]:
         return self._all_paths()
@@ -139,7 +157,7 @@ class QueueView(QListWidget):
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setBackground(self._COLOR["pending"])
-        item.setForeground(COLOR_TEXT)
+        item.setForeground(self._text_color)
         item.setToolTip(path)
         self.addItem(item)
 
@@ -152,7 +170,7 @@ class QueueView(QListWidget):
         prefix = self._PREFIX.get(status, "")
         item.setText(prefix + name)
         item.setBackground(self._COLOR.get(status, self._COLOR["pending"]))
-        item.setForeground(COLOR_TEXT)
+        item.setForeground(self._text_color)
         if status == "current":
             self.setCurrentRow(idx)
             self.scrollToItem(item)
