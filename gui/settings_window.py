@@ -398,6 +398,44 @@ class SettingsWindow(QWidget):
         form.addRow("BGR-алгоритм (краще для деяких документів):",
                     self._cb_shadow_bgr_mode)
 
+        # --- Ступінь однорідності фону (uniformity) ---
+        uniformity_label = QLabel(
+            "Ступінь однорідності фону (uniformity)"
+        )
+        uniformity_label.setStyleSheet("font-weight:bold; margin-top:8px;")
+        form.addRow(uniformity_label)
+
+        uniformity_desc = QLabel(
+            "Uniformity — частка пікселів з однорідним фоном (0.0=складний, 1.0=рівномірний).\n"
+            "Якщо uniformity вище верхнього порогу — тіні видаляються завжди.\n"
+            "Нижче нижнього — ніколи. Між порогами — залежить від типу документа."
+        )
+        uniformity_desc.setStyleSheet("color:#555; font-size:11px; margin-bottom:4px;")
+        uniformity_desc.setWordWrap(True)
+        form.addRow(uniformity_desc)
+
+        self._spin_uniformity_low = QDoubleSpinBox()
+        self._spin_uniformity_low.setRange(0.0, 1.0)
+        self._spin_uniformity_low.setSingleStep(0.05)
+        self._spin_uniformity_low.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_low)
+        self._spin_uniformity_low.setToolTip(
+            "Якщо uniformity нижче цього порогу — тіні не видаляються.\n"
+            "Фон складний, ризик артефактів."
+        )
+        form.addRow("Нижній поріг (не видаляти <):", self._spin_uniformity_low)
+
+        self._spin_uniformity_high = QDoubleSpinBox()
+        self._spin_uniformity_high.setRange(0.0, 1.0)
+        self._spin_uniformity_high.setSingleStep(0.05)
+        self._spin_uniformity_high.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_high)
+        self._spin_uniformity_high.setToolTip(
+            "Якщо uniformity вище цього порогу — тіні видаляються завжди.\n"
+            "Фон однорідний, shadow_remove безпечний."
+        )
+        form.addRow("Верхній поріг (видаляти >):", self._spin_uniformity_high)
+
         return box
 
     def _page_classify(self) -> QWidget:
@@ -736,6 +774,8 @@ class SettingsWindow(QWidget):
         self._spin_shadow_detect_ratio.setValue(s.get("shadow_detect_ratio", 0.3))
         self._spin_shadow_coarse_blend.setValue(s.get("shadow_coarse_blend_color", 0.0))
         self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
+        self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
+        self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -823,6 +863,8 @@ class SettingsWindow(QWidget):
             "shadow_detect_ratio":       self._spin_shadow_detect_ratio.value(),
             "shadow_coarse_blend_color": self._spin_shadow_coarse_blend.value(),
             "shadow_bgr_mode":           self._cb_shadow_bgr_mode.isChecked(),
+            "shadow_uniformity_low":     self._spin_uniformity_low.value(),
+            "shadow_uniformity_high":    self._spin_uniformity_high.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 

@@ -101,6 +101,14 @@ def run_autofix(
     result = image.copy()
     log_entries: list[dict] = []
 
+    # Діагностика фону — до будь-якої обробки (Задача 3)
+    from processing import diagnostics as _diag
+    _bg_uniformity, _detail_density = _diag.measure_background_metrics(image)
+
+    # Класифікація умов зйомки (Задача 5)
+    from processing.doc_classifier import classify_capture_conditions, CAPTURE_SCREEN, CAPTURE_PHONE
+    _capture_cond = classify_capture_conditions(image, background_uniformity=_bg_uniformity)
+
     # Визначаємо список увімкнених кроків згідно з пресетом
     _preset_steps_map = {
         "doc_bw":    ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
@@ -152,8 +160,30 @@ def run_autofix(
                                     "detail": "тіні видалено (примусово)"})
             elif shadow_mode == "never":
                 pass  # нічого не робимо
-            else:  # auto — тільки для документів, не для фото
-                if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
+            else:  # auto — з урахуванням background_uniformity та capture_conditions
+                _should_run = False
+                _reason = ""
+                # Отримуємо пороги з налаштувань
+                _unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
+                _unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
+                # screen_capture — не запускаємо shadow_remove (екран уже рівномірний)
+                if _capture_cond == CAPTURE_SCREEN:
+                    _should_run = False
+                    _reason = f"screen_capture"
+                elif _bg_uniformity > _unif_high:
+                    # Однорідний фон — запускаємо незалежно від doc_type
+                    _should_run = True
+                    _reason = f"uniformity={_bg_uniformity:.2f}>{_unif_high:.2f}"
+                elif _bg_uniformity < _unif_low:
+                    # Складний фон — не запускаємо
+                    _should_run = False
+                    _reason = f"uniformity={_bg_uniformity:.2f}<{_unif_low:.2f}"
+                else:
+                    # Проміжний діапазон — залишаємо стару логіку (тільки для документів)
+                    if doc_type == DocType.BW_DOCUMENT.value:
+                        _should_run = True
+                        _reason = f"doc_type={doc_type}"
+                if _should_run:
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
                         is_color_document=is_color,
@@ -164,7 +194,25 @@ def run_autofix(
                     )
                     if had_shadow:
                         log_entries.append({"step": "shadow_remove", "applied": True,
-                                           "detail": "тіні видалено"})
+                                           "detail": f"тіні видалено ({_reason})"})
+                    # Нейтралізація кольорового відтінку для phone_camera
+                    if had_shadow and _capture_cond == CAPTURE_PHONE:
+                        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+                        l_ch, a_ch, b_ch = cv2.split(lab)
+                        bg_mask = l_ch > 180
+                        bg_pixel_count = np.count_nonzero(bg_mask)
+                        if bg_pixel_count > 0:
+                            # Зсув a-каналу до нейтрального (128) на 30%
+                            a_bg = a_ch[bg_mask]
+                            b_bg = b_ch[bg_mask]
+                            a_shift = (128.0 - float(np.median(a_bg))) * 0.3
+                            b_shift = (128.0 - float(np.median(b_bg))) * 0.3
+                            a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
+                            b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
+                            merged = cv2.merge([l_ch, a_ch, b_ch])
+                            result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+                            log_entries.append({"step": "color_neutralize", "applied": True,
+                                               "detail": "нейтралізація відтінку"})
             # Висвітлення тіней — додаткове підсвічування (залишається як є)
             if shadow_highlight_strength > EPSILON:
                 result = shadow_highlight.apply_shadow_highlight(
@@ -174,10 +222,14 @@ def run_autofix(
                                    "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 
         elif step_key == "perspective":
-            if use_perspective:
+            # Для screen_capture — форсуємо perspective навіть якщо use_perspective=False
+            _use_persp = use_perspective or _capture_cond == CAPTURE_SCREEN
+            if _use_persp:
                 result, persp_status = run_perspective_auto_smart(result, settings)
                 if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
                     log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
+                elif _capture_cond == CAPTURE_SCREEN:
+                    log_entries.append({"step": "perspective_forced", "applied": True, "detail": "screen_capture detected"})
 
         elif step_key == "brightness":
             # Яскравість окремо не застосовується в autofix — вона в ручних налаштуваннях
@@ -220,13 +272,13 @@ def run_autofix(
             if had_white:
                 log_entries.append({"step": "white_background", "applied": True, "detail": "білий фон"})
 
-    # Додаємо інформацію про тип документа в лог
+    # Додаємо інформацію про тип документа в лог (з capture_cond)
     if doc_type == DocType.BW_DOCUMENT.value:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "ч-б документ"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"ч-б документ ({_capture_cond})"})
     elif doc_type == DocType.COLOR_DOCUMENT.value:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "кольоровий документ"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"кольоровий документ ({_capture_cond})"})
     else:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "фото"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"фото ({_capture_cond})"})
 
     # Формат виходу: якщо не "auto" — примусово конвертуємо
     if output_color_mode == "grayscale":
@@ -464,9 +516,9 @@ def run_manual_adjustments(
             gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
             from processing import text_mask as text_mask_module
             mask = text_mask_module.text_region_mask(gray)
-            result = hdr.apply_adaptive(result, strength=hdr_strength, text_mask=mask)
+            result = hdr.apply_adaptive(result, strength=hdr_strength, text_mask=mask, manual_mode=True)
         else:
-            result = hdr.apply(result, strength=hdr_strength)
+            result = hdr.apply(result, strength=hdr_strength, manual_mode=True)
     if sharpen_strength > EPSILON:
         result = sharpen.apply(result, strength=sharpen_strength)
     return result

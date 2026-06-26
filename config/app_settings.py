@@ -36,6 +36,8 @@ DEFAULT_SHADOW_DETECT_THRESHOLD = 80.0
 DEFAULT_SHADOW_DETECT_RATIO = 0.3
 DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
 DEFAULT_SHADOW_BGR_MODE = False
+DEFAULT_SHADOW_UNIFORMITY_LOW = 0.30    # нижній поріг однорідності фону
+DEFAULT_SHADOW_UNIFORMITY_HIGH = 0.55   # верхній поріг однорідності фону
 
 # Константи для паралельної обробки
 import os as _os
@@ -106,6 +108,8 @@ def load(path=None) -> dict:
         "shadow_detect_ratio":       cfg.getfloat("processing",   "shadow_detect_ratio",       fallback=DEFAULT_SHADOW_DETECT_RATIO),
         "shadow_coarse_blend_color": cfg.getfloat("processing",   "shadow_coarse_blend_color", fallback=DEFAULT_SHADOW_COARSE_BLEND_COLOR),
         "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
+        "shadow_uniformity_low":     cfg.getfloat("processing",   "shadow_uniformity_low",     fallback=DEFAULT_SHADOW_UNIFORMITY_LOW),
+        "shadow_uniformity_high":    cfg.getfloat("processing",   "shadow_uniformity_high",    fallback=DEFAULT_SHADOW_UNIFORMITY_HIGH),
         "worker_threads": cfg.getint(
             "processing", "worker_threads",
             fallback=DEFAULT_WORKER_THREADS
@@ -171,6 +175,8 @@ def save(settings: dict, path=None):
     cfg["processing"]["shadow_bgr_mode"] = str(
         settings.get("shadow_bgr_mode", DEFAULT_SHADOW_BGR_MODE)
     ).lower()
+    cfg["processing"]["shadow_uniformity_low"] = str(settings.get("shadow_uniformity_low", DEFAULT_SHADOW_UNIFORMITY_LOW))
+    cfg["processing"]["shadow_uniformity_high"] = str(settings.get("shadow_uniformity_high", DEFAULT_SHADOW_UNIFORMITY_HIGH))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
     cfg["processing"]["worker_threads"] = str(
         settings.get("worker_threads", DEFAULT_WORKER_THREADS)

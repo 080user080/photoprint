@@ -31,6 +31,19 @@ CHROMA_PIXEL_THRESHOLD = 10.0
 # Зменшено з 0.02 до 0.01 для більш чутливого виявлення кольору.
 COLOR_PIXEL_RATIO_MIN = 0.01
 
+# Умови зйомки
+SCREEN_EDGE_DARK_THRESHOLD = 40    # пікселі темніші за це — підозра на рамку UI
+SCREEN_EDGE_STRIP_WIDTH = 15       # ширина смуги по краях для аналізу
+SCREEN_EDGE_DARK_RATIO = 0.6       # якщо >60% пікселів смуги темні → screen_capture
+PHONE_WARM_B_THRESHOLD = 133       # b-канал LAB > цього → теплий відтінок фону
+PHONE_COOL_B_THRESHOLD = 123       # b-канал LAB < цього → холодний відтінок фону
+FLAT_UNIFORM_BG_THRESHOLD = 0.60   # background_uniformity > цього → flat_uniform
+
+CAPTURE_SCREEN = "screen_capture"
+CAPTURE_PHONE = "phone_camera"
+CAPTURE_FLAT = "flat_uniform"
+CAPTURE_UNKNOWN = "unknown"
+
 # Логгер для діагностики
 _logger = logging.getLogger(__name__)
 
@@ -186,3 +199,103 @@ def classify(
         return "color_document"
     _logger.debug("-> photo (color)")
     return "photo"
+
+
+# ---------------------------------------------------------------------------
+# Capture conditions classification (Задача 4)
+# ---------------------------------------------------------------------------
+
+
+def _detect_screen_capture(small: np.ndarray) -> bool:
+    """
+    Визначає, чи є зображення захопленням екрану (screen capture).
+    Аналізує краї зображення на наявність темних смуг (рамка UI/вікна).
+
+    small: зменшене зображення BGR (до ~300px по більшій стороні).
+    """
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    sw = min(SCREEN_EDGE_STRIP_WIDTH, w // 4)
+    sh = min(SCREEN_EDGE_STRIP_WIDTH, h // 4)
+    if sw < 2 or sh < 2:
+        return False
+
+    # Верхня, нижня, ліва, права смуги
+    strips = [
+        gray[:sh, :],           # верх
+        gray[h-sh:, :],         # низ
+        gray[:, :sw],           # ліво
+        gray[:, w-sw:],         # право
+    ]
+
+    dark_strip_count = 0
+    for strip in strips:
+        if strip.size == 0:
+            continue
+        dark_ratio = float(np.mean(strip < SCREEN_EDGE_DARK_THRESHOLD))
+        if dark_ratio > SCREEN_EDGE_DARK_RATIO:
+            dark_strip_count += 1
+
+    return dark_strip_count >= 2
+
+
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+    """
+    Визначає, чи зроблено фото на камеру телефону за кольоровим відтінком фону.
+
+    small: зменшене зображення BGR.
+    bg_uniformity: background_uniformity метрика (0..1).
+    """
+    if bg_uniformity < 0.4:
+        return False
+
+    lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Пікселі світлого фону (L > 180)
+    bg_mask = l_ch > 180
+    bg_pixel_count = np.count_nonzero(bg_mask)
+    if bg_pixel_count < 0.05 * small.shape[0] * small.shape[1]:
+        return False
+
+    b_bg = b_ch[bg_mask]
+    b_median = float(np.median(b_bg))
+
+    return b_median > PHONE_WARM_B_THRESHOLD or b_median < PHONE_COOL_B_THRESHOLD
+
+
+def classify_capture_conditions(
+    image: np.ndarray,
+    background_uniformity: float = 0.5,
+) -> str:
+    """
+    Визначає умови зйомки зображення.
+
+    Повертає одне з:
+      "screen_capture" — захоплення екрану
+      "phone_camera"   — фото на телефон (кольоровий відтінок)
+      "flat_uniform"   — рівномірний фон (скан/плоский об'єкт)
+      "unknown"        — не визначено
+
+    image: BGR uint8.
+    background_uniformity: метрика однорідності фону (0..1).
+    """
+    # Ресайз до 300px по більшій стороні для швидкості
+    h, w = image.shape[:2]
+    max_side = max(h, w)
+    scale = min(300.0 / max_side, 1.0)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    small = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # 1. Перевірка на screen capture
+    if _detect_screen_capture(small):
+        return CAPTURE_SCREEN
+
+    # 2. Рівномірний фон
+    if background_uniformity > FLAT_UNIFORM_BG_THRESHOLD:
+        if _detect_phone_camera(small, background_uniformity):
+            return CAPTURE_PHONE
+        return CAPTURE_FLAT
+
+    return CAPTURE_UNKNOWN

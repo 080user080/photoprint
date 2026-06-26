@@ -21,6 +21,7 @@ ADAPTIVE_HDR_BLEND_KERNEL = (15, 15)  # ядро для размытия мас�
 
 # --- Coring (подавление усиления шума) ---
 HDR_NOISE_FLOOR = 1.5  # уровни L (0-255); diff меньше этого обнуляется
+HDR_MANUAL_NOISE_FLOOR = 0.3   # знижений coring для ручного режиму
 
 # --- Адаптивный tile grid (resolution-independent CLAHE) ---
 HDR_TILE_TARGET_PX = 64   # желаемый размер тайла в пикселях
@@ -89,7 +90,7 @@ def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
     return cv2.addWeighted(l_ch, 1.0 - effective_strength, l_eq, effective_strength, 0)
 
 
-def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+def apply(image: np.ndarray, strength: float = 0.5, manual_mode: bool = False) -> np.ndarray:
     """
     Простой HDR эффект через CLAHE в канале яркости (LAB).
     strength: 0.0 – без эффекта, 1.0 – максимальное вытягивание деталей.
@@ -100,7 +101,7 @@ def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
     """
     if strength <= HDR_THRESHOLD:
         return image.copy()
-    return apply_adaptive(image, strength=strength, text_mask=None)
+    return apply_adaptive(image, strength=strength, text_mask=None, manual_mode=manual_mode)
 
 
 def apply_adaptive(
@@ -109,6 +110,7 @@ def apply_adaptive(
     text_mask: np.ndarray | None = None,
     auto_detail: bool = True,
     noise_floor: float | None = None,
+    manual_mode: bool = False,
 ) -> np.ndarray:
     """
     Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
@@ -123,6 +125,8 @@ def apply_adaptive(
                  участках через processing.detail_map.detail_mask. Это и есть фикс
                  артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
     noise_floor: порог coring для подавления шума. Если None — используется HDR_NOISE_FLOOR.
+    manual_mode: если True — пропускает _auto_strength_factor, пропускает detail_mask,
+                 использует HDR_MANUAL_NOISE_FLOOR для coring.
 
     Возвращает uint8 BGR.
     """
@@ -134,19 +138,37 @@ def apply_adaptive(
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
-    l_hdr = _compute_hdr_lab(l_ch, strength)
+    # Якщо manual_mode — не використовуємо _auto_strength_factor, тобто ефективна сила = strength
+    if manual_mode:
+        effective_strength = strength
+    else:
+        effective_strength = strength * _auto_strength_factor(l_ch)
+
+    clip_limit = HDR_CLIP_LIMIT_BASE + effective_strength * HDR_CLIP_LIMIT_MULTIPLIER
+    tile_grid = adaptive_tile_grid(l_ch.shape[0], l_ch.shape[1])
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+    l_eq = clahe.apply(l_ch)
+
+    l_hdr = cv2.addWeighted(l_ch, 1.0 - effective_strength, l_eq, effective_strength, 0)
 
     l_ch_f = l_ch.astype(np.float32)
     l_hdr_f = l_hdr.astype(np.float32)
-    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=noise_floor)
+
+    # В ручному режимі використовуємо знижений noise_floor
+    if manual_mode:
+        nf = HDR_MANUAL_NOISE_FLOOR if noise_floor is None else noise_floor
+    else:
+        nf = noise_floor
+    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=nf)
 
     # --- alpha map: базово "полный эффект" везде ---
     alpha_map = np.full(l_ch.shape, ADAPTIVE_HDR_ALPHA_BACKGROUND, dtype=np.float32)
 
     # --- ограничение на однотонных участках (новый, основной фикс) ---
-    if auto_detail:
+    # В ручному режимі пропускаємо detail_mask (ефект діє по всьому зображенню)
+    if auto_detail and not manual_mode:
         from processing import detail_map as detail_map_module
-        dmask = detail_map_module.detail_mask(l_ch, noise_floor=noise_floor)  # 0..1, 0=плоско
+        dmask = detail_map_module.detail_mask(l_ch, noise_floor=nf)  # 0..1, 0=плоско
         alpha_map *= dmask
 
     # --- существующее ограничение на тексте (как и раньше) ---

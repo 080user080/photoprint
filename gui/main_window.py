@@ -503,15 +503,16 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         sb.setStyleSheet(
             "QStatusBar {"
-            "  color: #444444; font-size: 12px;"
+            "  color: #444444; font-size: 14px;"
             "  background: #D8DCE0;"
             "  border-top: 2px solid #BBBBBB;"
-            "  padding: 2px;"
+            "  padding: 4px 6px;"
+            "  min-height: 30px;"
             "}"
         )
 
         self._status_file_label = QLabel("")
-        self._status_file_label.setStyleSheet("color: #888888; font-size: 11px; padding-right: 8px;")
+        self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
         sb.addPermanentWidget(self._status_file_label)
 
     def _btn_style(self, color="#2E5FA3"):
@@ -776,7 +777,21 @@ class MainWindow(QMainWindow):
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
             self._preview.set_autofix_applied("auto_fix")
-            self._set_status(status_msg)
+            # Побудова розгорнутого рядка з log_entries
+            if log_entries:
+                # Відфільтровуємо тільки applied кроки
+                applied = [e for e in log_entries if e.get("applied")]
+                # Виокремлюємо doc_type та color_mode на початок
+                type_parts = [e["detail"] for e in applied if e["step"] in ("doc_type", "color_mode")]
+                other_parts = [e["detail"] for e in applied if e["step"] not in ("doc_type", "color_mode")]
+                all_parts = type_parts + other_parts
+                detailed_status = "Auto Fix: " + " | ".join(all_parts)
+            else:
+                detailed_status = status_msg
+            self._set_status(detailed_status)
+            # Скидаємо стиль через таймер (1.5с)
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1500, lambda: self._reset_status_style())
             self._update_buttons()
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
@@ -899,7 +914,6 @@ class MainWindow(QMainWindow):
             result, status = payload
             self._base = result.copy()
             self._processed = result
-            self._preview.set_before(image_utils.make_preview(result))
             self._preview.set_after(image_utils.make_preview(result))
             if corners_before is not None:
                 self._perspective_corners = corners_before.copy()
@@ -972,7 +986,6 @@ class MainWindow(QMainWindow):
             # Якщо ручна перспектива не починалась — скидаємо до оригіналу
             self._base = self._orig.copy()
             self._processed = self._orig.copy()
-        self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
         self._perspective_corners = None  # скидаємо збережені кути
@@ -1313,7 +1326,51 @@ class MainWindow(QMainWindow):
             b.setEnabled(enabled)
 
     def _set_status(self, text: str, timeout_ms: int = 0):
-        self.statusBar().showMessage(text, timeout_ms)
+        sb = self.statusBar()
+        if text.startswith("Auto Fix:"):
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #006600; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        elif "Помилка" in text:
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #CC0000; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        else:
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #444444; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        sb.showMessage(text, timeout_ms)
+
+    def _reset_status_style(self):
+        """Скидає стиль статус-бару до стандартного."""
+        sb = self.statusBar()
+        sb.setStyleSheet(
+            "QStatusBar {"
+            "  color: #444444; font-size: 14px;"
+            "  background: #D8DCE0;"
+            "  border-top: 2px solid #BBBBBB;"
+            "  padding: 4px 6px;"
+            "  min-height: 30px;"
+            "}"
+        )
 
     def _set_file_status(self, filename: str):
         self._status_file_label.setText(filename)
