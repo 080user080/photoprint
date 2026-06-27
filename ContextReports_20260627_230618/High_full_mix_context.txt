@@ -401,6 +401,7 @@ DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
 DEFAULT_SHADOW_BGR_MODE = False
 DEFAULT_SHADOW_UNIFORMITY_LOW = 0.30    # нижній поріг однорідності фону
 DEFAULT_SHADOW_UNIFORMITY_HIGH = 0.55   # верхній поріг однорідності фону
+DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH = 0.65  # верхній поріг для фото (суворіший)
 DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD = 2.0   # поріг std блоків для детекції тіні на рівномірному фоні
 DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE = 32        # розмір блоку для локального std
 
@@ -475,6 +476,7 @@ def load(path=None) -> dict:
         "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
         "shadow_uniformity_low":     cfg.getfloat("processing",   "shadow_uniformity_low",     fallback=DEFAULT_SHADOW_UNIFORMITY_LOW),
         "shadow_uniformity_high":    cfg.getfloat("processing",   "shadow_uniformity_high",    fallback=DEFAULT_SHADOW_UNIFORMITY_HIGH),
+        "shadow_uniformity_photo_high": cfg.getfloat("processing", "shadow_uniformity_photo_high", fallback=DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH),
         "shadow_uniform_std_threshold": cfg.getfloat("processing", "shadow_uniform_std_threshold", fallback=DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD),
         "shadow_uniform_block_size":     cfg.getint("processing", "shadow_uniform_block_size",     fallback=DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE),
         "worker_threads": cfg.getint(
@@ -544,6 +546,7 @@ def save(settings: dict, path=None):
     ).lower()
     cfg["processing"]["shadow_uniformity_low"] = str(settings.get("shadow_uniformity_low", DEFAULT_SHADOW_UNIFORMITY_LOW))
     cfg["processing"]["shadow_uniformity_high"] = str(settings.get("shadow_uniformity_high", DEFAULT_SHADOW_UNIFORMITY_HIGH))
+    cfg["processing"]["shadow_uniformity_photo_high"] = str(settings.get("shadow_uniformity_photo_high", DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH))
     cfg["processing"]["shadow_uniform_std_threshold"] = str(settings.get("shadow_uniform_std_threshold", DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD))
     cfg["processing"]["shadow_uniform_block_size"] = str(settings.get("shadow_uniform_block_size", DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
@@ -3506,6 +3509,18 @@ class SettingsWindow(QWidget):
         )
         form.addRow("Верхній поріг (видаляти >):", self._spin_uniformity_high)
 
+        self._spin_uniformity_photo_high = QDoubleSpinBox()
+        self._spin_uniformity_photo_high.setRange(0.0, 1.0)
+        self._spin_uniformity_photo_high.setSingleStep(0.05)
+        self._spin_uniformity_photo_high.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_photo_high)
+        self._spin_uniformity_photo_high.setToolTip(
+            "Поріг uniformity для фото (окремий, суворіший).\n"
+            "Якщо uniformity фото вище цього порогу і немає обличчя — тіні видаляються.\n"
+            "Фото пейзажів/портретів зазвичай мають низьку uniformity."
+        )
+        form.addRow("Поріг для фото (видаляти >):", self._spin_uniformity_photo_high)
+
         return box
 
     def _page_classify(self) -> QWidget:
@@ -3846,6 +3861,7 @@ class SettingsWindow(QWidget):
         self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
         self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
         self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
+        self._spin_uniformity_photo_high.setValue(s.get("shadow_uniformity_photo_high", 0.65))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -3935,6 +3951,7 @@ class SettingsWindow(QWidget):
             "shadow_bgr_mode":           self._cb_shadow_bgr_mode.isChecked(),
             "shadow_uniformity_low":     self._spin_uniformity_low.value(),
             "shadow_uniformity_high":    self._spin_uniformity_high.value(),
+            "shadow_uniformity_photo_high": self._spin_uniformity_photo_high.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
@@ -6739,10 +6756,27 @@ def run_autofix(
                     _should_run = False
                     _reason = "screen_capture"
                 elif doc_type == DocType.PHOTO.value:
-                    # Фото — не запускаємо (природні градієнти освітлення, фото псуються shadow_remove).
-                    # Користувач може примусово увімкнути через режим "always".
-                    _should_run = False
-                    _reason = f"doc_type={doc_type} (auto skip)"
+                    # Фото — запускаємо ТІЛЬКИ при високій однорідності фону.
+                    # Фото документа на білому фоні (зроблене на телефон) має високу uniformity.
+                    # Пейзажі, портрети — низьку uniformity, тому автоматично захищені.
+                    _shadow_unif_high_photo = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
+                    if _bg_uniformity > _shadow_unif_high_photo:
+                        # Додаткова перевірка: якщо є обличчя — не видаляємо тіні
+                        from processing import diagnostics as _diag_face_photo
+                        if _diag_face_photo.detect_face(result):
+                            _should_run = False
+                            _reason = f"photo face_detected (uniformity={_bg_uniformity:.2f})"
+                        else:
+                            _should_run = True
+                            _reason = f"photo uniformity={_bg_uniformity:.2f}>{_shadow_unif_high_photo:.2f}"
+                    elif _bg_uniformity < _shadow_unif_low:
+                        # Складний фон — не запускаємо
+                        _should_run = False
+                        _reason = f"photo low uniformity={_bg_uniformity:.2f}"
+                    else:
+                        # Проміжний діапазон — фото ризиковані, краще консервативно
+                        _should_run = False
+                        _reason = f"photo mid uniformity={_bg_uniformity:.2f}"
                 elif doc_type == DocType.COLOR_DOCUMENT.value:
                     # Кольоровий документ — запускаємо ТІЛЬКИ при високій однорідності фону,
                     # інакше ризикуємо зіпсувати кольоровий фон/зображення на документі.
