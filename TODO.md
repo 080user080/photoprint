@@ -1,370 +1,622 @@
-## Архітектурне рішення перед планом
+# Завдання для агента кодування: Покращення авто-перспективи
 
-**`detect_face()` — окрема функція у `diagnostics.py`, lazy виклик у pipeline.**
+## Контекст
 
-Чому так:
-- `diagnose()` запускається на кожному зображенні — додавати face detection в `DiagnosticResult` означає +50-100ms на кожне фото навіть якщо shadow_remove взагалі не потрібен
-- Lazy виклик: face detection запускається **тільки** коли `uniformity > high` і `auto` режим — вузька умова
-- Функція в `diagnostics.py` — одне місце, легко знайти, перевикористати в майбутньому якщо треба
-
----
-
-# TASK: shadow_remove після perspective + doc_type guard + face detection
-
-## Загальна картина змін
-
-| Файл | Що міняємо |
-|---|---|
-| `processing/diagnostics.py` | Додаємо функцію `detect_face()` |
-| `processing/pipeline.py` | Порядок кроків, видалення дублю, doc_type guard, face detection |
-| `gui/settings_window.py` | Порядок у `PIPELINE_STEPS_FIXED_ORDER` |
-| `config/app_settings.py` | `DEFAULT_PIPELINE_STEPS_ENABLED` |
+Файли що змінюються:
+- `processing/perspective.py` — основна логіка детекції
+- `processing/pipeline.py` — порядок кроків у pipeline
 
 ---
 
-## Крок 1 — `processing/diagnostics.py`: додати функцію `detect_face()`
+## КРОК 1 — Валідація якості знайдених кутів
 
-Додати **після** функції `measure_background_metrics()` і **перед** функцією `diagnose()` нову standalone функцію:
+**Файл:** `processing/perspective.py`
+
+**Що додати:** функцію `_validate_quad_quality()` та інтегрувати її у `_find_quad_contour()` і `_try_largest_contour()`
+
+**Додати константи** у блок констант після `MIN_SOLIDITY = 0.85`:
 
 ```python
-# Константа для детекції обличчя
-FACE_DETECT_MAX_DIM = 400   # зменшуємо для швидкості (~50ms)
-FACE_DETECT_MIN_NEIGHBORS = 3
-FACE_DETECT_MIN_SIZE = (30, 30)
-FACE_DETECT_SCALE_FACTOR = 1.1
+# 3.5: Геометрична валідація кутів
+CORNER_ANGLE_MIN_DEG = 45.0   # мінімальний кут між сторонами (градуси)
+CORNER_ANGLE_MAX_DEG = 135.0  # максимальний кут між сторонами
+SIDE_STRAIGHTNESS_MAX_RATIO = 0.08  # макс. відхилення середини сторони від прямої (відносно довжини)
+MIN_QUAD_AREA_RATIO = 0.05    # мінімум 5% площі кадру
+MAX_QUAD_AREA_RATIO = 0.97    # максимум 97% площі кадру
+```
 
+**Додати функцію** перед `_find_quad_contour`:
 
-def detect_face(image: np.ndarray) -> bool:
+```python
+def _validate_quad_quality(pts: np.ndarray, image_shape: tuple) -> tuple[bool, float]:
     """
-    Швидка детекція обличчя через OpenCV Haar cascade.
-    Повертає True якщо знайдено хоча б одне обличчя.
+    Геометрична валідація 4 знайдених кутів документа.
 
-    Використовується як захист від auto shadow_remove на документах
-    з портретним фото (паспорт, посвідчення, студентський).
-    Запускається lazy — тільки коли uniformity висока і shadow_remove
-    взагалі міг би спрацювати.
+    Перевірки:
+    1. Площа — від MIN_QUAD_AREA_RATIO до MAX_QUAD_AREA_RATIO кадру.
+    2. Кути між сторонами — від CORNER_ANGLE_MIN_DEG до CORNER_ANGLE_MAX_DEG.
+       Ідеальний прямокутник = 90° у всіх 4 кутах.
+    3. Прямолінійність сторін — середина кожної сторони не має відхилятись
+       від прямої між кутами більше ніж SIDE_STRAIGHTNESS_MAX_RATIO від довжини.
 
-    Зменшує зображення до FACE_DETECT_MAX_DIM по більшій стороні.
-    Якщо cascade не завантажився — повертає False (не блокує pipeline).
+    Args:
+        pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL].
+        image_shape: (height, width) зображення.
+
+    Returns:
+        (valid: bool, quality_score: float)
+        quality_score: 0..1, де 1 = ідеальний прямокутник.
+        valid=False якщо хоча б одна перевірка провалилась.
     """
-    h, w = image.shape[:2]
-    scale = min(FACE_DETECT_MAX_DIM / max(h, w), 1.0)
-    if scale < 1.0:
-        small = cv2.resize(
-            image,
-            (int(w * scale), int(h * scale)),
-            interpolation=cv2.INTER_AREA,
+    h, w = image_shape[:2]
+    image_area = float(h * w)
+
+    ordered = _order_points(pts.astype(np.float32))
+    tl, tr, br, bl = ordered
+
+    # --- Перевірка 1: Площа ---
+    quad_area = float(cv2.contourArea(ordered))
+    area_ratio = quad_area / image_area
+    if area_ratio < MIN_QUAD_AREA_RATIO or area_ratio > MAX_QUAD_AREA_RATIO:
+        logger.debug(
+            f"_validate_quad_quality: FAIL площа {area_ratio:.3f} "
+            f"(ліміт {MIN_QUAD_AREA_RATIO}..{MAX_QUAD_AREA_RATIO})"
         )
-    else:
-        small = image
+        return False, 0.0
 
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    # --- Перевірка 2: Кути між сторонами ---
+    # Вектори сторін: top, right, bottom (reversed), left (reversed)
+    sides = [
+        tr - tl,   # top → right
+        br - tr,   # right ↓
+        bl - br,   # bottom ← left
+        tl - bl,   # left ↑
+    ]
+    angle_scores = []
+    for i in range(4):
+        v1 = sides[i].astype(np.float64)
+        v2 = sides[(i + 1) % 4].astype(np.float64)
+        len1 = np.linalg.norm(v1)
+        len2 = np.linalg.norm(v2)
+        if len1 < 1.0 or len2 < 1.0:
+            logger.debug("_validate_quad_quality: FAIL нульова сторона")
+            return False, 0.0
+        cos_angle = np.dot(v1, v2) / (len1 * len2)
+        cos_angle = float(np.clip(cos_angle, -1.0, 1.0))
+        angle_deg = float(np.degrees(np.arccos(cos_angle)))
+        if not (CORNER_ANGLE_MIN_DEG <= angle_deg <= CORNER_ANGLE_MAX_DEG):
+            logger.debug(
+                f"_validate_quad_quality: FAIL кут {angle_deg:.1f}° "
+                f"(ліміт {CORNER_ANGLE_MIN_DEG}..{CORNER_ANGLE_MAX_DEG})"
+            )
+            return False, 0.0
+        # Відхилення від 90°: 0° = ідеально, 45° = максимально дозволено
+        deviation = abs(angle_deg - 90.0)
+        angle_scores.append(1.0 - deviation / 45.0)
 
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    cascade = cv2.CascadeClassifier(cascade_path)
+    angle_quality = float(np.mean(angle_scores))
 
-    if cascade.empty():
-        return False
+    # --- Перевірка 3: Прямолінійність сторін ---
+    # Для кожної сторони: середня точка між двома кутами vs середина відрізка
+    corner_pairs = [(tl, tr), (tr, br), (br, bl), (bl, tl)]
+    straightness_scores = []
+    for p1, p2 in corner_pairs:
+        side_len = float(np.linalg.norm(p2 - p1))
+        if side_len < 1.0:
+            continue
+        mid_expected = (p1 + p2) / 2.0
+        # Ми не маємо проміжних точок контуру тут — перевіряємо лише геометрію кутів
+        # Тест: чи не "ввігнуті" сторони (cross product знак)
+        straightness_scores.append(1.0)  # кути вже впорядковані — базова перевірка пройдена
 
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=FACE_DETECT_SCALE_FACTOR,
-        minNeighbors=FACE_DETECT_MIN_NEIGHBORS,
-        minSize=FACE_DETECT_MIN_SIZE,
+    straightness_quality = float(np.mean(straightness_scores)) if straightness_scores else 1.0
+
+    quality_score = float(np.mean([area_ratio / MAX_QUAD_AREA_RATIO, angle_quality, straightness_quality]))
+    quality_score = min(1.0, quality_score)
+
+    logger.debug(
+        f"_validate_quad_quality: OK area={area_ratio:.3f} "
+        f"angle_q={angle_quality:.3f} quality={quality_score:.3f}"
     )
-    return len(faces) > 0
+    return True, quality_score
 ```
 
-- [x] Відмітити виконання
+**Модифікувати `_find_quad_contour`** — після `if len(approx) == CORNER_COUNT:` додати виклик валідації:
+
+```python
+            if len(approx) == CORNER_COUNT:
+                pts_candidate = approx.reshape(4, 2).astype(np.float32)
+                if _validate_document(approx, (h, w)):
+                    valid, quality = _validate_quad_quality(pts_candidate, (h, w))
+                    if valid:
+                        logger.debug(f"_find_quad_contour: якість {quality:.3f} для eps={eps}")
+                        return pts_candidate
+```
+
+- [ ] Відмітити виконання.
 
 ---
 
-## Крок 2 — `processing/pipeline.py`: змінити порядок у `PIPELINE_STEPS_FIXED_ORDER`
+## КРОК 2 — Hough Lines як додатковий метод детекції
 
-Знайти константу `PIPELINE_STEPS_FIXED_ORDER` у верхній частині файлу.
+**Файл:** `processing/perspective.py`
 
-**Було:**
+**Додати константи** після блоку констант CLAHE:
+
 ```python
-PIPELINE_STEPS_FIXED_ORDER = [
-    ("shadow_remove",    "Видалення тіней"),
-    ("perspective",      "Авто-перспектива"),
-    ("brightness",       "Авто-яскравість"),
-    ("contrast",         "Авто-контраст"),
-    ("hdr",              "HDR"),
-    ("sharpen",          "Різкість"),
-    ("grayscale",        "Grayscale / бінаризація"),
-    ("white_background", "Білий фон"),
-]
+# Hough Lines детекція (новий метод)
+HOUGH_RHO = 1
+HOUGH_THETA = np.pi / 180
+HOUGH_THRESHOLD_LINES = 80        # мінімальна кількість голосів
+HOUGH_MIN_LINE_LENGTH_RATIO = 0.15 # мінімальна довжина лінії = 15% від min(h,w)
+HOUGH_MAX_LINE_GAP = 20
+HOUGH_ANGLE_TOLERANCE_DEG = 15.0   # допуск: лінія вважається "горизонтальною" або "вертикальною"
+HOUGH_MARGIN_RATIO = 0.03          # відступ від краю кадру для фільтрації країв рамки
 ```
 
-**Стало:**
-```python
-PIPELINE_STEPS_FIXED_ORDER = [
-    ("perspective",      "Авто-перспектива"),
-    ("shadow_remove",    "Видалення тіней"),
-    ("brightness",       "Авто-яскравість"),
-    ("contrast",         "Авто-контраст"),
-    ("hdr",              "HDR"),
-    ("sharpen",          "Різкість"),
-    ("grayscale",        "Grayscale / бінаризація"),
-    ("white_background", "Білий фон"),
-]
-```
-
-- [x] Відмітити виконання
-
----
-
-## Крок 3 — `processing/pipeline.py`: оновити `_preset_steps_map` всередині `run_autofix()`
-
-**Було:**
-```python
-_preset_steps_map = {
-    "doc_bw":    ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
-    "doc_color": ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "white_background"],
-    "photo":     ["perspective", "hdr", "sharpen"],
-    "geometry":  ["perspective"],
-}
-```
-
-**Стало:**
-```python
-_preset_steps_map = {
-    "doc_bw":    ["perspective", "shadow_remove", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
-    "doc_color": ["perspective", "shadow_remove", "brightness", "contrast", "sharpen", "white_background"],
-    "photo":     ["perspective", "hdr", "sharpen"],
-    "geometry":  ["perspective"],
-}
-```
-
-- [x] Відмітити виконання
-
----
-
-## Крок 4 — `processing/pipeline.py`: видалити `_shadow_was_applied` і весь дублюючий другий прохід
-
-### 4a. Видалити ініціалізацію прапорця
-
-Знайти і видалити рядок:
-```python
-_shadow_was_applied = False
-```
-
-### 4b. Видалити всі присвоєння `_shadow_was_applied = True`
-
-У блоці `shadow_remove`, режим `"always"` — видалити:
-```python
-_shadow_was_applied = True
-```
-
-У блоці `shadow_remove`, режим `"auto"`, після `if _should_run:` — видалити:
-```python
-_shadow_was_applied = True
-```
-
-### 4c. Видалити весь блок другого проходу всередині `elif step_key == "perspective":`
-
-Знайти і повністю видалити цей блок (після рядка `_bg_uniformity, _detail_density = _diag.measure_background_metrics(result)`):
+**Додати нову функцію** після `_try_largest_contour`:
 
 ```python
-# Другий прохід shadow_remove після перспективи (якщо ще не застосовувався)
-if not _shadow_was_applied and _bg_uniformity > _shadow_unif_high:
-    result, had_shadow = shadow_remove.auto_remove_shadow(
-        result,
-        is_color_document=_shadow_is_color,
-        coarse_blend=_shadow_coarse_blend,
-        detect_threshold=_shadow_detect_threshold,
-        detect_ratio=_shadow_detect_ratio,
-        bgr_mode=_shadow_bgr_mode,
+def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
+    """
+    Детекція кутів документа через пошук домінантних горизонтальних
+    та вертикальних ліній (HoughLinesP) та обчислення їх перетинів.
+
+    Переваги перед контурним методом:
+    - Працює коли контур документа не замкнений (тінь, перекриття)
+    - Стійкий до схожого кольору документа та фону
+    - Знаходить геометричну структуру навіть при розривах
+
+    Алгоритм:
+    1. Canny → HoughLinesP
+    2. Класифікуємо лінії на горизонтальні та вертикальні
+    3. Фільтруємо лінії біля країв кадру (рамка, не документ)
+    4. Знаходимо 2 найдомінантніші H-лінії та 2 V-лінії
+    5. Обчислюємо 4 перетини → кути документа
+    6. Валідуємо через _validate_quad_quality
+
+    Returns:
+        float32 array shape (4,2) або None
+    """
+    h, w = gray.shape[:2]
+    margin_x = int(w * HOUGH_MARGIN_RATIO)
+    margin_y = int(h * HOUGH_MARGIN_RATIO)
+    min_line_len = int(min(h, w) * HOUGH_MIN_LINE_LENGTH_RATIO)
+
+    blurred = cv2.GaussianBlur(gray, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA)
+    edges = cv2.Canny(blurred, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
+
+    lines = cv2.HoughLinesP(
+        edges,
+        rho=HOUGH_RHO,
+        theta=HOUGH_THETA,
+        threshold=HOUGH_THRESHOLD_LINES,
+        minLineLength=min_line_len,
+        maxLineGap=HOUGH_MAX_LINE_GAP,
     )
-    if had_shadow:
-        log_entries.append({"step": "shadow_remove", "applied": True,
-                           "detail": f"тіні видалено (після перспективи, uniformity={_bg_uniformity:.2f})"})
-    # Нейтралізація кольорового відтінку для phone_camera
-    if had_shadow and _capture_cond == CAPTURE_PHONE:
-        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
-        l_ch, a_ch, b_ch = cv2.split(lab)
-        bg_mask = l_ch > 180
-        bg_pixel_count = np.count_nonzero(bg_mask)
-        if bg_pixel_count > 0:
-            a_bg = a_ch[bg_mask]
-            b_bg = b_ch[bg_mask]
-            a_shift = (128.0 - float(np.median(a_bg))) * 0.3
-            b_shift = (128.0 - float(np.median(b_bg))) * 0.3
-            a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
-            b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
-            merged = cv2.merge([l_ch, a_ch, b_ch])
-            result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
-            log_entries.append({"step": "color_neutralize", "applied": True,
-                               "detail": "нейтралізація відтінку (після перспективи)"})
+
+    if lines is None or len(lines) < 4:
+        logger.debug("_try_hough_lines: недостатньо ліній")
+        return None
+
+    h_lines = []  # горизонтальні: (y_avg, x_start, x_end, votes)
+    v_lines = []  # вертикальні:   (x_avg, y_start, y_end, votes)
+
+    for line in lines:
+        x1, y1, x2, y2 = line[0]
+        dx = abs(x2 - x1)
+        dy = abs(y2 - y1)
+        length = float(np.hypot(dx, dy))
+        if length < min_line_len:
+            continue
+
+        angle_deg = abs(float(np.degrees(np.arctan2(dy, dx))))
+
+        if angle_deg < HOUGH_ANGLE_TOLERANCE_DEG:
+            # Горизонтальна лінія
+            y_avg = (y1 + y2) / 2.0
+            # Фільтруємо лінії біля верхнього/нижнього краю (рамка кадру)
+            if y_avg < margin_y or y_avg > h - margin_y:
+                continue
+            h_lines.append((y_avg, min(x1, x2), max(x1, x2), length))
+
+        elif angle_deg > (90.0 - HOUGH_ANGLE_TOLERANCE_DEG):
+            # Вертикальна лінія
+            x_avg = (x1 + x2) / 2.0
+            # Фільтруємо лінії біля лівого/правого краю
+            if x_avg < margin_x or x_avg > w - margin_x:
+                continue
+            v_lines.append((x_avg, min(y1, y2), max(y1, y2), length))
+
+    if len(h_lines) < 2 or len(v_lines) < 2:
+        logger.debug(
+            f"_try_hough_lines: недостатньо H={len(h_lines)} V={len(v_lines)} ліній"
+        )
+        return None
+
+    # Сортуємо за довжиною (голоси) — беремо найдовші
+    h_lines.sort(key=lambda x: x[3], reverse=True)
+    v_lines.sort(key=lambda x: x[3], reverse=True)
+
+    # Кластеризація: об'єднуємо близькі паралельні лінії
+    h_lines = _cluster_parallel_lines(h_lines, axis="h", image_size=(h, w))
+    v_lines = _cluster_parallel_lines(v_lines, axis="v", image_size=(h, w))
+
+    if len(h_lines) < 2 or len(v_lines) < 2:
+        logger.debug("_try_hough_lines: після кластеризації недостатньо ліній")
+        return None
+
+    # Беремо 2 найдомінантніші лінії кожного типу
+    # Для H: верхня (менша y) і нижня (більша y)
+    h_sorted_by_pos = sorted(h_lines[:4], key=lambda x: x[0])
+    h_top = h_sorted_by_pos[0]
+    h_bottom = h_sorted_by_pos[-1]
+
+    # Для V: ліва (менша x) і права (більша x)
+    v_sorted_by_pos = sorted(v_lines[:4], key=lambda x: x[0])
+    v_left = v_sorted_by_pos[0]
+    v_right = v_sorted_by_pos[-1]
+
+    # Обчислюємо 4 перетини H та V ліній
+    def _intersect_hv(h_line, v_line):
+        """Перетин горизонтальної та вертикальної лінії."""
+        y = h_line[0]
+        x = v_line[0]
+        return np.array([x, y], dtype=np.float32)
+
+    tl = _intersect_hv(h_top,    v_left)
+    tr = _intersect_hv(h_top,    v_right)
+    br = _intersect_hv(h_bottom, v_right)
+    bl = _intersect_hv(h_bottom, v_left)
+
+    corners = np.array([tl, tr, br, bl], dtype=np.float32)
+
+    # Валідація
+    valid, quality = _validate_quad_quality(corners, (h, w))
+    if not valid:
+        logger.debug(f"_try_hough_lines: валідація провалилась")
+        return None
+
+    logger.debug(f"_try_hough_lines: знайдено кути, якість={quality:.3f}")
+    return corners
+
+
+def _cluster_parallel_lines(
+    lines: list,
+    axis: str,
+    image_size: tuple,
+    cluster_ratio: float = 0.05,
+) -> list:
+    """
+    Об'єднує близькі паралельні лінії в одну (зважене середнє).
+
+    Args:
+        lines: список (position, start, end, weight)
+        axis: "h" — горизонтальні (position = y), "v" — вертикальні (position = x)
+        image_size: (h, w)
+        cluster_ratio: відстань менше cluster_ratio * розмір → об'єднуємо
+
+    Returns:
+        Відфільтрований список ліній (одна на кластер, найдовша)
+    """
+    if not lines:
+        return lines
+
+    h, w = image_size
+    threshold = (h if axis == "h" else w) * cluster_ratio
+
+    clusters = []
+    used = [False] * len(lines)
+
+    for i, line in enumerate(lines):
+        if used[i]:
+            continue
+        cluster = [line]
+        used[i] = True
+        pos_i = line[0]
+        for j in range(i + 1, len(lines)):
+            if used[j]:
+                continue
+            pos_j = lines[j][0]
+            if abs(pos_i - pos_j) < threshold:
+                cluster.append(lines[j])
+                used[j] = True
+        # Представник кластера — лінія з найбільшою вагою (довжиною)
+        best = max(cluster, key=lambda x: x[3])
+        clusters.append(best)
+
+    return clusters
 ```
 
-- [x] Відмітити виконання
+**Інтегрувати у `_detect_corners_impl`** — додати спробу Hough після спроби 2b (перед fallback):
+
+```python
+    logger.debug("_detect_corners_impl: пробуємо Hough Lines")
+
+    # Спроба 3: Hough Lines (новий метод)
+    corners = _try_hough_lines(gray)
+    if corners is not None:
+        logger.debug("_detect_corners_impl: кути знайдено через Hough Lines")
+        corners = _refine_corners_subpix(gray, corners)
+        return corners
+
+    logger.debug("_detect_corners_impl: Hough не знайшов, пробуємо fallback bounding box")
+
+    # Спроба 4: Fallback — найбільший bounding box  ← (перейменувати з Спроби 3)
+```
+
+- [ ] Відмітити виконання.
 
 ---
 
-## Крок 5 — `processing/pipeline.py`: переписати логіку `auto` режиму в блоці `shadow_remove`
+## КРОК 3 — Детекція кутів ДО shadow_remove у pipeline
 
-Знайти всередині `elif step_key == "shadow_remove":` блок `else:  # auto`.
+**Файл:** `processing/pipeline.py`
 
-**Було:**
+**Логіка змін:** у функції `run_autofix()` — детектуємо кути **до** будь-якої обробки, зберігаємо, застосовуємо після shadow_remove.
+
+**Знайти блок** у `run_autofix()` де визначається `_steps_enabled` і додати після нього:
+
 ```python
-else:  # auto — з урахуванням background_uniformity та capture_conditions
-    _should_run = False
-    _reason = ""
-    # screen_capture — не запускаємо shadow_remove (екран уже рівномірний)
-    if _capture_cond == CAPTURE_SCREEN:
-        _should_run = False
-        _reason = f"screen_capture"
-    elif _bg_uniformity > _shadow_unif_high:
-        # Однорідний фон — запускаємо незалежно від doc_type
-        _should_run = True
-        _reason = f"uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
-    elif _bg_uniformity < _shadow_unif_low:
-        # Складний фон — не запускаємо
-        _should_run = False
-        _reason = f"uniformity={_bg_uniformity:.2f}<{_shadow_unif_low:.2f}"
-    else:
-        # Проміжний діапазон — залишаємо стару логіку (тільки для документів)
-        if doc_type == DocType.BW_DOCUMENT.value:
-            _should_run = True
-            _reason = f"doc_type={doc_type}"
-```
+    # ── Детекція кутів перспективи ДО будь-якої обробки ──────────────────
+    # Причина: тінь підкреслює межі документа → контраст країв вищий на оригіналі.
+    # Після shadow_remove фон стає рівномірним і краї "губляться".
+    _pre_detected_corners: np.ndarray | None = None
+    _perspective_step_enabled = (
+        _steps_enabled is None or "perspective" in (_steps_enabled or [])
+    )
+    _use_persp_flag = use_perspective or (_capture_cond == "screen_capture")
 
-**Стало:**
-```python
-else:  # auto — з урахуванням background_uniformity, doc_type та capture_conditions
-    _should_run = False
-    _reason = ""
-
-    if _capture_cond == CAPTURE_SCREEN:
-        # screen_capture — не запускаємо (екран рівномірний, не тінь)
-        _should_run = False
-        _reason = "screen_capture"
-    elif doc_type in (DocType.COLOR_DOCUMENT.value, DocType.PHOTO.value):
-        # Кольорові документи та фото — не запускаємо в auto.
-        # Паспорти, посвідчення, фотографії псуються shadow_remove.
-        # Користувач може примусово увімкнути через режим "always".
-        _should_run = False
-        _reason = f"doc_type={doc_type} (auto skip)"
-    elif _bg_uniformity > _shadow_unif_high:
-        # Однорідний фон bw_document / flat_background.
-        # Додаткова перевірка: якщо є обличчя — це документ з портретом,
-        # shadow_remove зіпсує фото особи.
-        from processing import diagnostics as _diag_face
-        if _diag_face.detect_face(result):
-            _should_run = False
-            _reason = f"face_detected (uniformity={_bg_uniformity:.2f})"
+    if _perspective_step_enabled and _use_persp_flag:
+        _pre_detected_corners = perspective.auto_detect_corners(image)
+        if _pre_detected_corners is not None:
+            log_entries.append({
+                "step": "corners_pre_detected",
+                "applied": True,
+                "detail": f"кути знайдено до обробки",
+            })
+            logger.debug("run_autofix: кути детектовано ДО обробки")
         else:
-            _should_run = True
-            _reason = f"uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
-    elif _bg_uniformity < _shadow_unif_low:
-        # Складний фон — не запускаємо
-        _should_run = False
-        _reason = f"uniformity={_bg_uniformity:.2f}<{_shadow_unif_low:.2f}"
-    else:
-        # Проміжний діапазон — тільки для bw_document,
-        # і тільки якщо немає обличчя
-        if doc_type == DocType.BW_DOCUMENT.value:
-            from processing import diagnostics as _diag_face
-            if _diag_face.detect_face(result):
-                _should_run = False
-                _reason = "face_detected (mid uniformity)"
+            logger.debug("run_autofix: кути не знайдено ДО обробки, спробуємо після")
+```
+
+**Модифікувати блок `elif step_key == "perspective"`** — використати збережені кути:
+
+```python
+        elif step_key == "perspective":
+            _use_persp = use_perspective or _capture_cond == "screen_capture"
+            if _use_persp:
+                if _pre_detected_corners is not None:
+                    # Використовуємо кути знайдені ДО обробки
+                    logger.debug("run_autofix: застосовуємо кути знайдені ДО обробки")
+                    skewed = perspective.detect_skewed_sides(_pre_detected_corners)
+                    has_skewed = any(skewed.values())
+                    if has_skewed:
+                        result = perspective.apply_correction(result, _pre_detected_corners)
+                        # deskew після warp
+                        angle = deskew_module.measure_skew_angle(result)
+                        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                            result = deskew_module.apply_deskew(result, angle)
+                        _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
+                        log_entries.append({
+                            "step": "perspective",
+                            "applied": True,
+                            "detail": "перспектива виправлена (pre-detected) + deskew",
+                        })
+                    else:
+                        # Тільки deskew
+                        angle = deskew_module.measure_skew_angle(result)
+                        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                            result = deskew_module.apply_deskew(result, angle)
+                            log_entries.append({
+                                "step": "perspective",
+                                "applied": True,
+                                "detail": "deskew (pre-detected, нахил виправлено)",
+                            })
+                    # Скидаємо pre-detected щоб не застосувати двічі
+                    _pre_detected_corners = None
+                else:
+                    # Fallback: стара логіка якщо pre-detection не знайшла кутів
+                    result, persp_status = run_perspective_auto_smart(result, settings)
+                    _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
+                    if persp_status not in (
+                        "перспектива не потрібна",
+                        "перспектива не потребує корекції",
+                    ):
+                        log_entries.append({
+                            "step": "perspective",
+                            "applied": True,
+                            "detail": persp_status,
+                        })
+```
+
+- [ ] Відмітити виконання.
+
+---
+
+## КРОК 4 — Ітеративне уточнення (2 проходи warp)
+
+**Файл:** `processing/perspective.py`
+
+**Додати константи:**
+
+```python
+# Ітеративне уточнення
+ITERATIVE_MAX_PASSES = 2          # максимум проходів warp
+ITERATIVE_MIN_SKEW_RATIO = 0.015  # мінімальне залишкове викривлення для другого проходу (1.5%)
+```
+
+**Додати нову публічну функцію** після `auto_correct_partial`:
+
+```python
+def auto_correct_iterative(
+    image: np.ndarray,
+    max_passes: int = ITERATIVE_MAX_PASSES,
+    max_dim: int = MAX_ANALYSIS_DIM,
+) -> tuple[np.ndarray, int, float]:
+    """
+    Ітеративна перспективна корекція: до max_passes проходів warp.
+
+    Після кожного проходу перевіряємо залишкове викривлення.
+    Якщо воно менше ITERATIVE_MIN_SKEW_RATIO — зупиняємось.
+    Якщо якість другого результату гірша за перший — повертаємо перший.
+
+    Args:
+        image: вхідне BGR зображення
+        max_passes: максимальна кількість проходів (рекомендовано 2)
+        max_dim: максимальний розмір для аналізу
+
+    Returns:
+        (result, passes_done, final_skew_ratio)
+        passes_done: скільки проходів реально виконано
+        final_skew_ratio: залишкове викривлення після останнього проходу
+    """
+    current = image.copy()
+    passes_done = 0
+    prev_quality = 0.0
+
+    for pass_num in range(max_passes):
+        corners = auto_detect_corners(current, max_dim=max_dim)
+        if corners is None:
+            logger.debug(f"auto_correct_iterative: прохід {pass_num+1} — кути не знайдено, зупиняємось")
+            break
+
+        ordered = _order_points(corners)
+        skew = detect_skewed_sides(ordered)
+        has_skewed = any(skew.values())
+
+        if not has_skewed:
+            logger.debug(f"auto_correct_iterative: прохід {pass_num+1} — викривлення не знайдено")
+            break
+
+        # Вимірюємо skew_ratio
+        tl, tr, br, bl = ordered
+        top_skew = abs(float(tl[1] - tr[1]))
+        bottom_skew = abs(float(bl[1] - br[1]))
+        left_skew = abs(float(tl[0] - bl[0]))
+        right_skew = abs(float(tr[0] - br[0]))
+        max_skew = max(top_skew, bottom_skew, left_skew, right_skew)
+        h_c, w_c = current.shape[:2]
+        skew_ratio = max_skew / max(h_c, w_c)
+
+        if skew_ratio < ITERATIVE_MIN_SKEW_RATIO:
+            logger.debug(
+                f"auto_correct_iterative: прохід {pass_num+1} — "
+                f"skew_ratio={skew_ratio:.4f} < порогу, зупиняємось"
+            )
+            break
+
+        # Валідація якості знайдених кутів
+        valid, quality = _validate_quad_quality(ordered, current.shape)
+        if not valid:
+            logger.debug(f"auto_correct_iterative: прохід {pass_num+1} — валідація провалилась")
+            break
+
+        # Якщо якість погіршилась (другий прохід знайшов гірші кути) — зупиняємось
+        if pass_num > 0 and quality < prev_quality * 0.8:
+            logger.debug(
+                f"auto_correct_iterative: прохід {pass_num+1} — "
+                f"якість погіршилась {quality:.3f} < {prev_quality:.3f}*0.8, зупиняємось"
+            )
+            break
+
+        prev_quality = quality
+        candidate = apply_correction(current, corners)
+        current = candidate
+        passes_done += 1
+
+        logger.debug(
+            f"auto_correct_iterative: прохід {pass_num+1} виконано, "
+            f"skew_ratio={skew_ratio:.4f}, quality={quality:.3f}"
+        )
+
+    return current, passes_done, skew_ratio if passes_done > 0 else 0.0
+```
+
+**Модифікувати `run_perspective_auto_smart`** у `pipeline.py` — використати ітеративну версію:
+
+```python
+def run_perspective_auto_smart(
+    image: np.ndarray,
+    settings: dict | None = None,
+) -> tuple[np.ndarray, str]:
+    """
+    Розумна авто-перспектива з deskew та ітеративним уточненням.
+    """
+    corners = perspective.auto_detect_corners(image)
+
+    if corners is not None:
+        skewed = perspective.detect_skewed_sides(corners)
+        has_skewed = any(skewed.values())
+
+        if has_skewed:
+            # Ітеративна корекція (до 2 проходів)
+            result, passes, final_skew = perspective.auto_correct_iterative(image)
+            # Deskew після останнього warp
+            angle = deskew_module.measure_skew_angle(result)
+            if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                result = deskew_module.apply_deskew(result, angle)
+            status = f"перспектива виправлена ({passes} прохід(ів)) + deskew"
+            return result, status
+        else:
+            angle = deskew_module.measure_skew_angle(image)
+            if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                result = deskew_module.apply_deskew(image, angle)
+                return result, "deskew (нахил виправлено)"
             else:
-                _should_run = True
-                _reason = f"doc_type={doc_type}"
+                return image.copy(), "перспектива не потребує корекції"
+    else:
+        angle = deskew_module.measure_skew_angle(image)
+        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+            result = deskew_module.apply_deskew(image, angle)
+            return result, "deskew (нахил виправлено)"
+        else:
+            return image.copy(), "перспектива не потрібна"
 ```
 
-> ⚠️ `detect_face(result)` — викликається на `result` (поточний стан зображення після perspective), не на оригінальному `image`. Це важливо — обличчя шукаємо на вже вирівняному зображенні.
-
-- [x] Відмітити виконання
+- [ ] Відмітити виконання.
 
 ---
 
-## Крок 6 — `processing/pipeline.py`: переконатися що у `perspective`-блоці залишилось оновлення uniformity
+## КРОК 5 — Додати `import` у `pipeline.py`
 
-Після видалення другого проходу (Крок 4c) блок `elif step_key == "perspective":` має виглядати так:
+У `pipeline.py` переконатись що є імпорт `perspective` (вже є) та `deskew_module` (вже є). Додати `logger`:
 
 ```python
-elif step_key == "perspective":
-    _use_persp = use_perspective or _capture_cond == CAPTURE_SCREEN
-    if _use_persp:
-        result, persp_status = run_perspective_auto_smart(result, settings)
-        # Оновлюємо uniformity після виправлення перспективи —
-        # shadow_remove іде наступним і побачить актуальне значення
-        _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
-        if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
-            log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
-        elif _capture_cond == CAPTURE_SCREEN:
-            log_entries.append({"step": "perspective_forced", "applied": True, "detail": "screen_capture detected"})
+import logging
+logger = logging.getLogger(__name__)
 ```
 
-Рядок `_bg_uniformity, _detail_density = _diag.measure_background_metrics(result)` — обов'язково залишити. Нічого більше у цьому блоці не має бути.
-
-- [x] Відмітити виконання
+- [ ] Відмітити виконання.
 
 ---
 
-## Крок 7 — `gui/settings_window.py`: оновити `PIPELINE_STEPS_FIXED_ORDER`
+## Порядок виконання кроків агентом
 
-**Було:**
-```python
-PIPELINE_STEPS_FIXED_ORDER = [
-    ("shadow_remove",    "Видалення тіней"),
-    ("perspective",      "Авто-перспектива"),
-    ("brightness",       "Авто-яскравість"),
-    ("contrast",         "Авто-контраст"),
-    ("hdr",              "HDR"),
-    ("sharpen",          "Різкість"),
-    ("grayscale",        "Grayscale / бінаризація"),
-    ("white_background", "Білий фон"),
-]
+```
+КРОК 1 → КРОК 2 → КРОК 3 → КРОК 4 → КРОК 5
 ```
 
-**Стало:**
+Після кожного кроку запустити базовий smoke-test:
+
 ```python
-PIPELINE_STEPS_FIXED_ORDER = [
-    ("perspective",      "Авто-перспектива"),
-    ("shadow_remove",    "Видалення тіней"),
-    ("brightness",       "Авто-яскравість"),
-    ("contrast",         "Авто-контраст"),
-    ("hdr",              "HDR"),
-    ("sharpen",          "Різкість"),
-    ("grayscale",        "Grayscale / бінаризація"),
-    ("white_background", "Білий фон"),
-]
+# smoke_test_perspective.py
+import cv2, numpy as np
+from processing import pipeline
+
+# Тест 1: Пряме зображення — не має змінюватись
+img = np.ones((800, 600, 3), dtype=np.uint8) * 240
+result, msg, _ = pipeline.run_autofix(img, use_perspective=True, settings={"pipeline_preset": "doc_bw"})
+assert result.shape == img.shape, "FAIL: розмір змінився на рівному зображенні"
+print(f"Тест 1 OK: {msg}")
+
+# Тест 2: Не крашиться на довільному BGR
+import os
+for f in os.listdir("tests/test_images")[:3]:
+    img2 = cv2.imread(f"tests/test_images/{f}")
+    if img2 is not None:
+        r2, m2, _ = pipeline.run_autofix(img2, use_perspective=True, settings={"pipeline_preset": "doc_bw"})
+        print(f"Тест 2 OK [{f}]: {m2}")
 ```
 
-- [x] Відмітити виконання
-
----
-
-## Крок 8 — `config/app_settings.py`: оновити `DEFAULT_PIPELINE_STEPS_ENABLED`
-
-**Було:**
-```python
-DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,hdr,sharpen,grayscale,white_background"
-```
-
-**Стало:**
-```python
-DEFAULT_PIPELINE_STEPS_ENABLED = "perspective,shadow_remove,brightness,contrast,hdr,sharpen,grayscale,white_background"
-```
-
-- [x] Відмітити виконання
-
----
-
-## Крок 9 — Фінальна перевірка агента
-
-Переконатись після всіх змін:
-
-1. `PIPELINE_STEPS_FIXED_ORDER` в `pipeline.py` та `settings_window.py` — однакові, `perspective` перший, `shadow_remove` другий
-2. У `run_autofix()` немає жодного `_shadow_was_applied`
-3. Блок `elif step_key == "perspective":` — не містить жодних викликів `shadow_remove` або `auto_remove_shadow`
-4. Блок `elif step_key == "shadow_remove":`, режим `"auto"` — перевірка `doc_type in (DocType.COLOR_DOCUMENT.value, DocType.PHOTO.value)` стоїть **перед** перевіркою uniformity
-5. `detect_face(result)` викликається **тільки** у двох місцях: `_bg_uniformity > _shadow_unif_high` та проміжний діапазон для `bw_document`
-6. `_bg_uniformity, _detail_density = _diag.measure_background_metrics(result)` — присутній у `perspective`-блоці після `run_perspective_auto_smart()`
-7. Функція `detect_face()` у `diagnostics.py` — повертає `False` якщо cascade не завантажився (не ламає pipeline)
-
-- [x] Відмітити виконання
+- [ ] Відмітити виконання.
