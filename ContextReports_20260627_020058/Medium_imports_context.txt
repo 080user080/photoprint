@@ -38,9 +38,7 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: medium)
@@ -253,6 +251,12 @@ class MainWindow(QMainWindow):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
     def _apply_background_color(self):
         """Застосовує колір фону центрального віджета з налаштувань."""
+    def _apply_preview_colors(self):
+        """Застосовує кольори до прев'ю."""
+    def _apply_queue_colors(self):
+        """Застосовує кольори до списку черги."""
+    def _auto_contrast_color(bg_hex: str) -> str:
+        """Автоматично обирає контрастний колір тексту для заданого фону."""
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -321,6 +325,8 @@ class MainWindow(QMainWindow):
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
     def _set_status(self, text: str, timeout_ms: int):
+    def _reset_status_style(self):
+        """Скидає стиль статус-бару до стандартного."""
     def _set_file_status(self, filename: str):
     def _dump_widget_geometries(self) -> None:
         """Записує геометрію всіх віджетів з objectName у JSON для GUITester."""
@@ -359,6 +365,8 @@ class PreviewPanel(QWidget):
     def _build_ui(self):
     def set_before(self, image: np.ndarray):
     def set_after(self, image: np.ndarray):
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для прев'ю."""
     def set_autofix_applied(self, mode: str | None):
         """Візуальний індикатор застосованої автокорекції."""
     def clear(self):
@@ -385,6 +393,10 @@ class QueueView(QListWidget):
     def mark_done(self, idx: int) -> None:
     def mark_error(self, idx: int) -> None:
     def mark_skipped(self, idx: int) -> None:
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для всіх елементів."""
+    def _apply_colors(self):
+        """Застосувати поточні кольори до всіх елементів."""
     def get_all_paths(self) -> List[str]:
     def get_path(self, idx: int) -> Optional[str]:
     def clear_queue(self) -> None:
@@ -406,6 +418,7 @@ class QueueView(QListWidget):
   from PyQt6.QtCore import pyqtSignal
   from PyQt6.QtCore import Qt
   from PyQt6.QtGui import QColor
+  from PyQt6.QtWidgets import QCheckBox
   from config import app_settings
   from config.app_settings import DEFAULT_WORKER_THREADS
 
@@ -443,9 +456,13 @@ class SettingsWindow(QWidget):
     def _page_printer_mode(self) -> QWidget:
         """Сторінка принтера та режиму запуску."""
     def _page_appearance(self) -> QWidget:
-        """Сторінка вигляду — колір фону головного вікна."""
+        """Сторінка вигляду — кольори фону та тексту."""
+    def _on_auto_contrast_toggled(self, checked: bool):
+        """Вмикає/вимикає поля вибору кольору тексту."""
     def _choose_background_color(self):
         """Відкриває діалог вибору кольору."""
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
+        """Універсальний метод вибору кольору."""
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -603,6 +620,12 @@ def _is_flat_background(small: np.ndarray) -> bool:
     """Перевіряє, чи є зображення рівним фоном (flat_background):"""
 def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
     """Повертає тип документа: 'bw_document' | 'color_document' | 'photo' | 'flat_background'."""
+def _detect_screen_capture(small: np.ndarray) -> bool:
+    """Визначає, чи є зображення захопленням екрану (screen capture)."""
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+    """Визначає, чи зроблено фото на камеру телефону за кольоровим відтінком фону."""
+def classify_capture_conditions(image: np.ndarray, background_uniformity: float) -> str:
+    """Визначає умови зйомки зображення."""
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
@@ -620,9 +643,9 @@ def _auto_strength_factor(l_ch: np.ndarray) -> float:
     """Множитель 0..1 для strength, зависящий от собственного динамического"""
 def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
     """Внутренняя: применяет CLAHE к L-каналу и blend с оригиналом."""
-def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def apply(image: np.ndarray, strength: float, manual_mode: bool) -> np.ndarray:
     """Простой HDR эффект через CLAHE в канале яркости (LAB)."""
-def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None, manual_mode: bool) -> np.ndarray:
     """Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает"""
 
 ============================================================
@@ -914,165 +937,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
 
 ============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-============================================================
-# PhotoPrint
-
-Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
-
-## Функціональність
-
-- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
-- **Інтелектуальна авто-обробка:**
-  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
-  - Авто-яскравість на основі гістограми (5-95% перцентилів)
-  - Авто-контраст з адаптивними порогами
-  - Авто-різкість на основі аналізу blur (Laplacian variance)
-  - Авто-детекція перспективи з fallback
-- **Ручне коригування:**
-  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
-  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
-  - Скидання: Скинути перспективу, Скинути слайдери
-- **Пакетна обробка:** Авто та ручний режими для черги файлів
-- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
-- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
-- **Друк:** Відправка на принтер (priPrinter або інший)
-- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
-
-## Встановлення
-
-```bash
-pip install -r requirements.txt
-```
-
-## Запуск
-
-```bash
-python main.py
-```
-
-## Структура проєкту
-
-```
-photoprint/
-├── main.py                    # Точка входу
-├── requirements.txt
-├── status.md                  # Статус розробки та план
-├── README.md                  # Цей файл
-│
-├── config/
-│   ├── settings.ini           # Конфігураційний файл
-│   └── app_settings.py        # Читання/запис налаштувань
-│
-├── core/
-│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
-│   ├── saver.py               # Збереження JPG
-│   └── printer.py             # Відправка на принтер
-│
-├── processing/
-│   ├── autofix.py             # Pipeline для різних типів документів
-│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
-│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
-│   ├── hdr.py                 # HDR tone mapping
-│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
-│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
-│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
-│   ├── perspective.py         # Авто + ручна перспективна корекція
-│   └── pipeline.py            # Єдина точка входу для GUI
-│
-├── batch/
-│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
-│
-├── gui/
-│   ├── main_window.py         # Головне вікно
-│   ├── preview.py             # Прев'ю До/Після
-│   ├── queue_view.py          # Черга файлів з Drag & Drop
-│   ├── controls.py            # Слайдери та кнопки керування
-│   └── settings_window.py     # Вікно налаштувань
-│
-└── utils/
-    ├── file_utils.py          # Робота з файлами
-    ├── image_utils.py         # Утиліти numpy/OpenCV
-    ├── logger.py              # Логування
-    └── win_drop.py            # Windows Drag & Drop
-```
-
-## Використання
-
-### Базовий робочий процес
-
-1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
-2. **Оберіть режим:** **Авто** або **Ручний**
-3. **Авто режим:**
-   - Натисніть "Друкувати все"
-   - Програма автоматично класифікує, обробить і надрукує всі файли
-4. **Ручний режим:**
-   - Переглядайте кожне фото по черзі
-   - Використовуйте "Auto Fix" для автоматичної корекції
-   - Або налаштуйте вручну через слайдери
-   - Натисніть "Друк" або "Пропустити"
-
-### Слайдери
-
-- **Тіні (0.0-2.0):** Висвітлення темних областей
-- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
-- **Контраст (-1.0-1.0):** Зміна контрасту
-- **Різкість (0.0-1.0):** Збільшення різкості
-- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
-
-### Кнопки авто-корекції
-
-- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
-- **Авто контраст:** Автоматичне вирівнювання контрасту
-- **Авто різкість:** Автоматична різкість на основі аналізу blur
-
-### Перспектива
-
-- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
-- **Ручна перспектива:** Ручне встановлення 4 кутів документа
-- **Скинути перспективу:** Повернення до оригінальної перспективи
-
-### Налаштування
-
-Файл `config/settings.ini` — текстовий, редагується блокнотом.
-Або через кнопку **⚙ Налаштування** у програмі.
-
-**Доступні налаштування:**
-- Пороги класифікації документів
-- Сила авто-різкості та поріг blur
-- Параметри авто-яскравості/контрасту (перцентилі)
-- Налаштування бінаризації для ч-б документів
-- Якість JPG при збереженні
-- Папка для збереження оброблених файлів
-- Назва принтера за замовчуванням
-- Вікно програми (розмір, позиція)
-
-## Стан розробки
-
-Детальний статус розробки дивіться у файлі [status.md](status.md).
-
-**Фаза 1 (завершено):**
-- ✅ Авто-обробка з класифікацією документів
-- ✅ Окремі pipeline для ч-б, кольорових документів та фото
-- ✅ Авто-видалення градієнтних тіней (blur/divide)
-- ✅ Авто-яскравість, авто-контраст, авто-різкість
-- ✅ Авто-детекція перспективи
-- ✅ Запам'ятовування ручних корекцій
-- ✅ Логування
-
-**Фаза 2 (наступний пріоритет):**
-- Адаптивний HDR для фото документів
-- Юніт-тести
-- Оптимізація пам'яті
-- Підтримка RAW-форматів
-- Трей-режим
-
-## Ліцензія
-
-Проект розробляється для особистого використання.
-
-
-============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
 Імпорти:
@@ -1085,13 +949,3 @@ photoprint/
 
 Сутності:
 def main():
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-============================================================
-opencv-python>=4.8
-numpy>=1.24
-Pillow>=10.0
-pillow-heif>=0.13
-PyQt6>=6.5
-rawpy>=0.27

@@ -88,6 +88,10 @@ class QueueView(QListWidget):
         """Встановити кольори фону та тексту для всіх елементів."""
         self._bg_color = QColor(bg_color)
         self._text_color = QColor(text_color)
+        # Встановити фон самого віджета списку
+        self.setStyleSheet(
+            f"QListWidget {{ background-color: {bg_color}; }}"
+        )
         self._apply_colors()
 
     def _apply_colors(self):
@@ -156,7 +160,7 @@ class QueueView(QListWidget):
         name = os.path.basename(path)
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
-        item.setBackground(self._COLOR["pending"])
+        item.setBackground(self._bg_color)
         item.setForeground(self._text_color)
         item.setToolTip(path)
         self.addItem(item)
@@ -169,7 +173,8 @@ class QueueView(QListWidget):
         name = os.path.basename(path) if path else ""
         prefix = self._PREFIX.get(status, "")
         item.setText(prefix + name)
-        item.setBackground(self._COLOR.get(status, self._COLOR["pending"]))
+        bg = self._bg_color if status == "pending" else self._COLOR.get(status, self._bg_color)
+        item.setBackground(bg)
         item.setForeground(self._text_color)
         if status == "current":
             self.setCurrentRow(idx)

@@ -163,6 +163,9 @@ class MainWindow(QMainWindow):
     def _wait_for_threads(self):
     def _on_win_drop(self, paths: list[str]):
     def _apply_background_color(self):
+    def _apply_preview_colors(self):
+    def _apply_queue_colors(self):
+    def _auto_contrast_color(bg_hex: str) -> str:
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -210,6 +213,7 @@ class MainWindow(QMainWindow):
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
     def _set_status(self, text: str, timeout_ms: int):
+    def _reset_status_style(self):
     def _set_file_status(self, filename: str):
     def _dump_widget_geometries(self) -> None:
 
@@ -239,6 +243,7 @@ class PreviewPanel(QWidget):
     def _build_ui(self):
     def set_before(self, image: np.ndarray):
     def set_after(self, image: np.ndarray):
+    def set_colors(self, bg_color: str, text_color: str):
     def set_autofix_applied(self, mode: str | None):
     def clear(self):
     def enable_perspective_edit(self, corners: list[QPoint] | None):
@@ -257,6 +262,8 @@ class QueueView(QListWidget):
     def mark_done(self, idx: int) -> None:
     def mark_error(self, idx: int) -> None:
     def mark_skipped(self, idx: int) -> None:
+    def set_colors(self, bg_color: str, text_color: str):
+    def _apply_colors(self):
     def get_all_paths(self) -> List[str]:
     def get_path(self, idx: int) -> Optional[str]:
     def clear_queue(self) -> None:
@@ -294,7 +301,9 @@ class SettingsWindow(QWidget):
     def _page_format_save(self) -> QWidget:
     def _page_printer_mode(self) -> QWidget:
     def _page_appearance(self) -> QWidget:
+    def _on_auto_contrast_toggled(self, checked: bool):
     def _choose_background_color(self):
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -379,6 +388,9 @@ def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
 def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
 def _is_flat_background(small: np.ndarray) -> bool:
 def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
+def _detect_screen_capture(small: np.ndarray) -> bool:
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+def classify_capture_conditions(image: np.ndarray, background_uniformity: float) -> str:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
@@ -388,8 +400,8 @@ def adaptive_tile_grid(h: int, w: int, target_px: int) -> tuple[int, int]:
 def _apply_coring(diff: np.ndarray, noise_floor: float | None) -> np.ndarray:
 def _auto_strength_factor(l_ch: np.ndarray) -> float:
 def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
-def apply(image: np.ndarray, strength: float) -> np.ndarray:
-def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None) -> np.ndarray:
+def apply(image: np.ndarray, strength: float, manual_mode: bool) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None, manual_mode: bool) -> np.ndarray:
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py

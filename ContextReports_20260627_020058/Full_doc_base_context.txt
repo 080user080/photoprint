@@ -213,6 +213,12 @@ class MainWindow(QMainWindow):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
     def _apply_background_color(self):
         """Застосовує колір фону центрального віджета з налаштувань."""
+    def _apply_preview_colors(self):
+        """Застосовує кольори до прев'ю."""
+    def _apply_queue_colors(self):
+        """Застосовує кольори до списку черги."""
+    def _auto_contrast_color(bg_hex: str) -> str:
+        """Автоматично обирає контрастний колір тексту для заданого фону."""
     def _build_ui(self):
     def _btn_style(self, color):
     def _on_mode_changed(self, btn_id: int):
@@ -283,6 +289,8 @@ button_to_lock — кнопка яку заблокувати під час ви
     def _update_buttons(self):
     def _set_buttons_enabled(self, enabled: bool):
     def _set_status(self, text: str, timeout_ms: int):
+    def _reset_status_style(self):
+        """Скидає стиль статус-бару до стандартного."""
     def _set_file_status(self, filename: str):
     def _dump_widget_geometries(self) -> None:
         """Записує геометрію всіх віджетів з objectName у JSON для GUITester."""
@@ -314,6 +322,8 @@ class PreviewPanel(QWidget):
     def _build_ui(self):
     def set_before(self, image: np.ndarray):
     def set_after(self, image: np.ndarray):
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для прев'ю."""
     def set_autofix_applied(self, mode: str | None):
         """Візуальний індикатор застосованої автокорекції.
 
@@ -336,6 +346,10 @@ class QueueView(QListWidget):
     def mark_done(self, idx: int) -> None:
     def mark_error(self, idx: int) -> None:
     def mark_skipped(self, idx: int) -> None:
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для всіх елементів."""
+    def _apply_colors(self):
+        """Застосувати поточні кольори до всіх елементів."""
     def get_all_paths(self) -> List[str]:
     def get_path(self, idx: int) -> Optional[str]:
     def clear_queue(self) -> None:
@@ -385,9 +399,13 @@ class SettingsWindow(QWidget):
     def _page_printer_mode(self) -> QWidget:
         """Сторінка принтера та режиму запуску."""
     def _page_appearance(self) -> QWidget:
-        """Сторінка вигляду — колір фону головного вікна."""
+        """Сторінка вигляду — кольори фону та тексту."""
+    def _on_auto_contrast_toggled(self, checked: bool):
+        """Вмикає/вимикає поля вибору кольору тексту."""
     def _choose_background_color(self):
         """Відкриває діалог вибору кольору."""
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
+        """Універсальний метод вибору кольору."""
     def load_from_file(self):
     def _apply_settings(self, s: dict):
     def _collect_settings(self) -> dict:
@@ -604,6 +622,27 @@ bw_std_thresh: поріг стандартного відхилення a/b ка
     кольорових зображень з низькою насиченістю як чорно-білих документів.
 
 flat_background: рівний фон без документа (скріншоти, фото стіни тощо)."""
+def _detect_screen_capture(small: np.ndarray) -> bool:
+    """Визначає, чи є зображення захопленням екрану (screen capture).
+Аналізує краї зображення на наявність темних смуг (рамка UI/вікна).
+
+small: зменшене зображення BGR (до ~300px по більшій стороні)."""
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+    """Визначає, чи зроблено фото на камеру телефону за кольоровим відтінком фону.
+
+small: зменшене зображення BGR.
+bg_uniformity: background_uniformity метрика (0..1)."""
+def classify_capture_conditions(image: np.ndarray, background_uniformity: float) -> str:
+    """Визначає умови зйомки зображення.
+
+Повертає одне з:
+  "screen_capture" — захоплення екрану
+  "phone_camera"   — фото на телефон (кольоровий відтінок)
+  "flat_uniform"   — рівномірний фон (скан/плоский об'єкт)
+  "unknown"        — не визначено
+
+image: BGR uint8.
+background_uniformity: метрика однорідності фону (0..1)."""
 
 ============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
@@ -629,14 +668,14 @@ def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
     """Внутренняя: применяет CLAHE к L-каналу и blend с оригиналом.
 Использует адаптивный tile grid и авто-масштабирование strength.
 Возвращает обработанный L-канал."""
-def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def apply(image: np.ndarray, strength: float, manual_mode: bool) -> np.ndarray:
     """Простой HDR эффект через CLAHE в канале яркости (LAB).
 strength: 0.0 – без эффекта, 1.0 – максимальное вытягивание деталей.
 Возвращает uint8 BGR.
 
 Теперь является тонкой обёрткой над apply_adaptive(text_mask=None),
 что автоматически добавляет detail-mask + coring + auto-strength + adaptive tile grid."""
-def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None, manual_mode: bool) -> np.ndarray:
     """Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
 эффект в текстовых областях (чтобы не затемнять светлый фон вокруг текста)
 и на однотонных участках (фикс артефактов на белом/сером фоне).
@@ -649,6 +688,8 @@ auto_detail: если True (дефолт) — дополнительно огр�
              участках через processing.detail_map.detail_mask. Это и есть фикс
              артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
 noise_floor: порог coring для подавления шума. Если None — используется HDR_NOISE_FLOOR.
+manual_mode: если True — пропускает _auto_strength_factor, пропускает detail_mask,
+             использует HDR_MANUAL_NOISE_FLOOR для coring.
 
 Возвращает uint8 BGR."""
 

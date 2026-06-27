@@ -50,7 +50,7 @@ DEFAULT_MIN_WORKER_THREADS = 1
 
 # Константи для пресетів стратегій
 DEFAULT_PIPELINE_PRESET = "doc_bw"
-DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,hdr,sharpen,grayscale,white_background"
+DEFAULT_PIPELINE_STEPS_ENABLED = "perspective,shadow_remove,brightness,contrast,hdr,sharpen,grayscale,white_background"
 
 # Константи для вигляду
 DEFAULT_BACKGROUND_COLOR = "#E8E8E8"

@@ -327,6 +327,54 @@ def measure_background_metrics(image: np.ndarray) -> tuple[float, float]:
     return uniformity, detail_density
 
 
+# Константи для детекції обличчя
+FACE_DETECT_MAX_DIM = 400       # зменшуємо для швидкості (~50ms)
+FACE_DETECT_MIN_NEIGHBORS = 3
+FACE_DETECT_MIN_SIZE = (30, 30)
+FACE_DETECT_SCALE_FACTOR = 1.1
+
+
+def detect_face(image: np.ndarray) -> bool:
+    """
+    Швидка детекція обличчя через OpenCV Haar cascade.
+    Повертає True якщо знайдено хоча б одне обличчя.
+
+    Використовується як захист від auto shadow_remove на документах
+    з портретним фото (паспорт, посвідчення, студентський).
+    Запускається lazy — тільки коли uniformity висока і shadow_remove
+    взагалі міг би спрацювати.
+
+    Зменшує зображення до FACE_DETECT_MAX_DIM по більшій стороні.
+    Якщо cascade не завантажився — повертає False (не блокує pipeline).
+    """
+    h, w = image.shape[:2]
+    scale = min(FACE_DETECT_MAX_DIM / max(h, w), 1.0)
+    if scale < 1.0:
+        small = cv2.resize(
+            image,
+            (int(w * scale), int(h * scale)),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        small = image
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    cascade = cv2.CascadeClassifier(cascade_path)
+
+    if cascade.empty():
+        return False
+
+    faces = cascade.detectMultiScale(
+        gray,
+        scaleFactor=FACE_DETECT_SCALE_FACTOR,
+        minNeighbors=FACE_DETECT_MIN_NEIGHBORS,
+        minSize=FACE_DETECT_MIN_SIZE,
+    )
+    return len(faces) > 0
+
+
 # ---------------------------------------------------------------------------
 # Публічні функції
 # ---------------------------------------------------------------------------

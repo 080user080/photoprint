@@ -23,8 +23,8 @@ EPSILON = 0.001  # Поріг для ігнорування дуже малих 
 
 # Фіксований порядок кроків обробки (для пресетів)
 PIPELINE_STEPS_FIXED_ORDER = [
-    ("shadow_remove",    "Видалення тіней"),
     ("perspective",      "Авто-перспектива"),
+    ("shadow_remove",    "Видалення тіней"),
     ("brightness",       "Авто-яскравість"),
     ("contrast",         "Авто-контраст"),
     ("hdr",              "HDR"),
@@ -111,8 +111,8 @@ def run_autofix(
 
     # Визначаємо список увімкнених кроків згідно з пресетом
     _preset_steps_map = {
-        "doc_bw":    ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
-        "doc_color": ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "white_background"],
+        "doc_bw":    ["perspective", "shadow_remove", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
+        "doc_color": ["perspective", "shadow_remove", "brightness", "contrast", "sharpen", "white_background"],
         "photo":     ["perspective", "hdr", "sharpen"],
         "geometry":  ["perspective"],
     }
@@ -134,6 +134,15 @@ def run_autofix(
             line_count_min=classify_line_count_min,
         )
 
+    # Параметри shadow_remove
+    _shadow_coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
+    _shadow_detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
+    _shadow_detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
+    _shadow_is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
+    _shadow_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
+    _shadow_unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
+    _shadow_unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
+
     # Проходимо циклом по фіксованому порядку кроків
     for step_key, _ in PIPELINE_STEPS_FIXED_ORDER:
         # Якщо steps_enabled визначено і крок не в списку — пропускаємо
@@ -142,55 +151,67 @@ def run_autofix(
 
         elif step_key == "shadow_remove":
             shadow_mode = settings.get("shadow_remove_mode", "auto") if settings else "auto"
-            coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
-            detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
-            detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
-            is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
-            use_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
 
             if shadow_mode == "always":
                 # Примусово — для будь-якого типу документа
                 result = shadow_remove.remove_shadow(
                     result,
-                    is_color_document=is_color,
-                    coarse_blend=coarse_blend,
-                    bgr_mode=use_bgr_mode,
+                    is_color_document=_shadow_is_color,
+                    coarse_blend=_shadow_coarse_blend,
+                    bgr_mode=_shadow_bgr_mode,
                 )
                 log_entries.append({"step": "shadow_remove", "applied": True,
                                     "detail": "тіні видалено (примусово)"})
             elif shadow_mode == "never":
                 pass  # нічого не робимо
-            else:  # auto — з урахуванням background_uniformity та capture_conditions
+            else:  # auto — з урахуванням background_uniformity, doc_type та capture_conditions
                 _should_run = False
                 _reason = ""
-                # Отримуємо пороги з налаштувань
-                _unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
-                _unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
-                # screen_capture — не запускаємо shadow_remove (екран уже рівномірний)
+
                 if _capture_cond == CAPTURE_SCREEN:
+                    # screen_capture — не запускаємо (екран рівномірний, не тінь)
                     _should_run = False
-                    _reason = f"screen_capture"
-                elif _bg_uniformity > _unif_high:
-                    # Однорідний фон — запускаємо незалежно від doc_type
-                    _should_run = True
-                    _reason = f"uniformity={_bg_uniformity:.2f}>{_unif_high:.2f}"
-                elif _bg_uniformity < _unif_low:
+                    _reason = "screen_capture"
+                elif doc_type in (DocType.COLOR_DOCUMENT.value, DocType.PHOTO.value):
+                    # Кольорові документи та фото — не запускаємо в auto.
+                    # Паспорти, посвідчення, фотографії псуються shadow_remove.
+                    # Користувач може примусово увімкнути через режим "always".
+                    _should_run = False
+                    _reason = f"doc_type={doc_type} (auto skip)"
+                elif _bg_uniformity > _shadow_unif_high:
+                    # Однорідний фон bw_document / flat_background.
+                    # Додаткова перевірка: якщо є обличчя — це документ з портретом,
+                    # shadow_remove зіпсує фото особи.
+                    from processing import diagnostics as _diag_face
+                    if _diag_face.detect_face(result):
+                        _should_run = False
+                        _reason = f"face_detected (uniformity={_bg_uniformity:.2f})"
+                    else:
+                        _should_run = True
+                        _reason = f"uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
+                elif _bg_uniformity < _shadow_unif_low:
                     # Складний фон — не запускаємо
                     _should_run = False
-                    _reason = f"uniformity={_bg_uniformity:.2f}<{_unif_low:.2f}"
+                    _reason = f"uniformity={_bg_uniformity:.2f}<{_shadow_unif_low:.2f}"
                 else:
-                    # Проміжний діапазон — залишаємо стару логіку (тільки для документів)
+                    # Проміжний діапазон — тільки для bw_document,
+                    # і тільки якщо немає обличчя
                     if doc_type == DocType.BW_DOCUMENT.value:
-                        _should_run = True
-                        _reason = f"doc_type={doc_type}"
+                        from processing import diagnostics as _diag_face
+                        if _diag_face.detect_face(result):
+                            _should_run = False
+                            _reason = "face_detected (mid uniformity)"
+                        else:
+                            _should_run = True
+                            _reason = f"doc_type={doc_type}"
                 if _should_run:
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
-                        is_color_document=is_color,
-                        coarse_blend=coarse_blend,
-                        detect_threshold=detect_threshold,
-                        detect_ratio=detect_ratio,
-                        bgr_mode=use_bgr_mode,
+                        is_color_document=_shadow_is_color,
+                        coarse_blend=_shadow_coarse_blend,
+                        detect_threshold=_shadow_detect_threshold,
+                        detect_ratio=_shadow_detect_ratio,
+                        bgr_mode=_shadow_bgr_mode,
                     )
                     if had_shadow:
                         log_entries.append({"step": "shadow_remove", "applied": True,
@@ -226,6 +247,8 @@ def run_autofix(
             _use_persp = use_perspective or _capture_cond == CAPTURE_SCREEN
             if _use_persp:
                 result, persp_status = run_perspective_auto_smart(result, settings)
+                # Оновлюємо uniformity після виправлення перспективи
+                _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
                 if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
                     log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
                 elif _capture_cond == CAPTURE_SCREEN:

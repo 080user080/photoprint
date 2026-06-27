@@ -399,6 +399,8 @@ DEFAULT_SHADOW_DETECT_THRESHOLD = 80.0
 DEFAULT_SHADOW_DETECT_RATIO = 0.3
 DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
 DEFAULT_SHADOW_BGR_MODE = False
+DEFAULT_SHADOW_UNIFORMITY_LOW = 0.30    # нижній поріг однорідності фону
+DEFAULT_SHADOW_UNIFORMITY_HIGH = 0.55   # верхній поріг однорідності фону
 
 # Константи для паралельної обробки
 import os as _os
@@ -415,6 +417,11 @@ DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,
 
 # Константи для вигляду
 DEFAULT_BACKGROUND_COLOR = "#E8E8E8"
+DEFAULT_PREVIEW_BG_COLOR = "#E8E8E8"
+DEFAULT_PREVIEW_TEXT_COLOR = "#333333"
+DEFAULT_QUEUE_BG_COLOR = "#FFFFFF"
+DEFAULT_QUEUE_TEXT_COLOR = "#111111"
+DEFAULT_AUTO_CONTRAST_TEXT = True
 
 
 def _get_path(path=None):
@@ -464,6 +471,8 @@ def load(path=None) -> dict:
         "shadow_detect_ratio":       cfg.getfloat("processing",   "shadow_detect_ratio",       fallback=DEFAULT_SHADOW_DETECT_RATIO),
         "shadow_coarse_blend_color": cfg.getfloat("processing",   "shadow_coarse_blend_color", fallback=DEFAULT_SHADOW_COARSE_BLEND_COLOR),
         "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
+        "shadow_uniformity_low":     cfg.getfloat("processing",   "shadow_uniformity_low",     fallback=DEFAULT_SHADOW_UNIFORMITY_LOW),
+        "shadow_uniformity_high":    cfg.getfloat("processing",   "shadow_uniformity_high",    fallback=DEFAULT_SHADOW_UNIFORMITY_HIGH),
         "worker_threads": cfg.getint(
             "processing", "worker_threads",
             fallback=DEFAULT_WORKER_THREADS
@@ -473,6 +482,11 @@ def load(path=None) -> dict:
         "pipeline_steps_enabled": cfg.get("processing", "pipeline_steps_enabled", fallback=DEFAULT_PIPELINE_STEPS_ENABLED),
         # Вигляд
         "background_color": cfg.get("appearance", "background_color", fallback=DEFAULT_BACKGROUND_COLOR),
+        "preview_bg_color": cfg.get("appearance", "preview_bg_color", fallback=DEFAULT_PREVIEW_BG_COLOR),
+        "preview_text_color": cfg.get("appearance", "preview_text_color", fallback=DEFAULT_PREVIEW_TEXT_COLOR),
+        "queue_bg_color": cfg.get("appearance", "queue_bg_color", fallback=DEFAULT_QUEUE_BG_COLOR),
+        "queue_text_color": cfg.get("appearance", "queue_text_color", fallback=DEFAULT_QUEUE_TEXT_COLOR),
+        "auto_contrast_text": cfg.getboolean("appearance", "auto_contrast_text", fallback=DEFAULT_AUTO_CONTRAST_TEXT),
     }
 
 
@@ -524,6 +538,8 @@ def save(settings: dict, path=None):
     cfg["processing"]["shadow_bgr_mode"] = str(
         settings.get("shadow_bgr_mode", DEFAULT_SHADOW_BGR_MODE)
     ).lower()
+    cfg["processing"]["shadow_uniformity_low"] = str(settings.get("shadow_uniformity_low", DEFAULT_SHADOW_UNIFORMITY_LOW))
+    cfg["processing"]["shadow_uniformity_high"] = str(settings.get("shadow_uniformity_high", DEFAULT_SHADOW_UNIFORMITY_HIGH))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
     cfg["processing"]["worker_threads"] = str(
         settings.get("worker_threads", DEFAULT_WORKER_THREADS)
@@ -533,6 +549,11 @@ def save(settings: dict, path=None):
     # Вигляд
     cfg["appearance"] = {
         "background_color": settings.get("background_color", DEFAULT_BACKGROUND_COLOR),
+        "preview_bg_color": settings.get("preview_bg_color", DEFAULT_PREVIEW_BG_COLOR),
+        "preview_text_color": settings.get("preview_text_color", DEFAULT_PREVIEW_TEXT_COLOR),
+        "queue_bg_color": settings.get("queue_bg_color", DEFAULT_QUEUE_BG_COLOR),
+        "queue_text_color": settings.get("queue_text_color", DEFAULT_QUEUE_TEXT_COLOR),
+        "auto_contrast_text": str(settings.get("auto_contrast_text", DEFAULT_AUTO_CONTRAST_TEXT)).lower(),
     }
 
     target = _get_path(path)
@@ -1237,6 +1258,8 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._apply_default_mode()
+        self._apply_preview_colors()
+        self._apply_queue_colors()
         self._update_buttons()
 
         # Завантажуємо розмір вікна та ширину черги
@@ -1364,6 +1387,36 @@ class MainWindow(QMainWindow):
         central = self.centralWidget()
         if central is not None:
             central.setStyleSheet(f"background-color: {bg_color};")
+
+    def _apply_preview_colors(self):
+        """Застосовує кольори до прев'ю."""
+        bg_color = self._settings.get("preview_bg_color", "#E8E8E8")
+        text_color = self._settings.get("preview_text_color", "#333333")
+        auto_contrast = self._settings.get("auto_contrast_text", True)
+
+        if auto_contrast:
+            text_color = self._auto_contrast_color(bg_color)
+
+        self._preview.set_colors(bg_color, text_color)
+
+    def _apply_queue_colors(self):
+        """Застосовує кольори до списку черги."""
+        bg_color = self._settings.get("queue_bg_color", "#FFFFFF")
+        text_color = self._settings.get("queue_text_color", "#111111")
+        auto_contrast = self._settings.get("auto_contrast_text", True)
+
+        if auto_contrast:
+            text_color = self._auto_contrast_color(bg_color)
+
+        self._queue.set_colors(bg_color, text_color)
+
+    @staticmethod
+    def _auto_contrast_color(bg_hex: str) -> str:
+        """Автоматично обирає контрастний колір тексту для заданого фону."""
+        bg_hex = bg_hex.lstrip("#")
+        r, g, b = int(bg_hex[0:2], 16), int(bg_hex[2:4], 16), int(bg_hex[4:6], 16)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        return "#FFFFFF" if luminance < 128 else "#111111"
 
     def _build_ui(self):
         central = QWidget()
@@ -1565,15 +1618,16 @@ class MainWindow(QMainWindow):
         sb = self.statusBar()
         sb.setStyleSheet(
             "QStatusBar {"
-            "  color: #444444; font-size: 12px;"
+            "  color: #444444; font-size: 14px;"
             "  background: #D8DCE0;"
             "  border-top: 2px solid #BBBBBB;"
-            "  padding: 2px;"
+            "  padding: 4px 6px;"
+            "  min-height: 30px;"
             "}"
         )
 
         self._status_file_label = QLabel("")
-        self._status_file_label.setStyleSheet("color: #888888; font-size: 11px; padding-right: 8px;")
+        self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
         sb.addPermanentWidget(self._status_file_label)
 
     def _btn_style(self, color="#2E5FA3"):
@@ -1653,6 +1707,8 @@ class MainWindow(QMainWindow):
         self._processor.set_files(self._queue.get_all_paths())
         self._apply_default_mode()
         self._apply_background_color()
+        self._apply_preview_colors()
+        self._apply_queue_colors()
 
     def _open_settings(self):
         self._settings_win.load_from_file()
@@ -1836,7 +1892,21 @@ class MainWindow(QMainWindow):
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
             self._preview.set_autofix_applied("auto_fix")
-            self._set_status(status_msg)
+            # Побудова розгорнутого рядка з log_entries
+            if log_entries:
+                # Відфільтровуємо тільки applied кроки
+                applied = [e for e in log_entries if e.get("applied")]
+                # Виокремлюємо doc_type та color_mode на початок
+                type_parts = [e["detail"] for e in applied if e["step"] in ("doc_type", "color_mode")]
+                other_parts = [e["detail"] for e in applied if e["step"] not in ("doc_type", "color_mode")]
+                all_parts = type_parts + other_parts
+                detailed_status = "Auto Fix: " + " | ".join(all_parts)
+            else:
+                detailed_status = status_msg
+            self._set_status(detailed_status)
+            # Скидаємо стиль через таймер (1.5с)
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1500, lambda: self._reset_status_style())
             self._update_buttons()
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
@@ -1959,7 +2029,6 @@ class MainWindow(QMainWindow):
             result, status = payload
             self._base = result.copy()
             self._processed = result
-            self._preview.set_before(image_utils.make_preview(result))
             self._preview.set_after(image_utils.make_preview(result))
             if corners_before is not None:
                 self._perspective_corners = corners_before.copy()
@@ -2032,7 +2101,6 @@ class MainWindow(QMainWindow):
             # Якщо ручна перспектива не починалась — скидаємо до оригіналу
             self._base = self._orig.copy()
             self._processed = self._orig.copy()
-        self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
         self._perspective_corners = None  # скидаємо збережені кути
@@ -2373,7 +2441,51 @@ class MainWindow(QMainWindow):
             b.setEnabled(enabled)
 
     def _set_status(self, text: str, timeout_ms: int = 0):
-        self.statusBar().showMessage(text, timeout_ms)
+        sb = self.statusBar()
+        if text.startswith("Auto Fix:"):
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #006600; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        elif "Помилка" in text:
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #CC0000; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        else:
+            sb.setStyleSheet(
+                "QStatusBar {"
+                "  color: #444444; font-size: 14px;"
+                "  background: #D8DCE0;"
+                "  border-top: 2px solid #BBBBBB;"
+                "  padding: 4px 6px;"
+                "  min-height: 30px;"
+                "}"
+            )
+        sb.showMessage(text, timeout_ms)
+
+    def _reset_status_style(self):
+        """Скидає стиль статус-бару до стандартного."""
+        sb = self.statusBar()
+        sb.setStyleSheet(
+            "QStatusBar {"
+            "  color: #444444; font-size: 14px;"
+            "  background: #D8DCE0;"
+            "  border-top: 2px solid #BBBBBB;"
+            "  padding: 4px 6px;"
+            "  min-height: 30px;"
+            "}"
+        )
 
     def _set_file_status(self, filename: str):
         self._status_file_label.setText(filename)
@@ -2497,8 +2609,8 @@ class ImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)
-        # Сірий фон замість білого — запобігає білому спалаху при зміні зображення
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
+        self._default_bg = "#E8E8E8"
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px;")
         # Залишаємо місце навколо для точок що на краю
         self.setContentsMargins(IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN, IMAGE_MARGIN)
         self._pixmap_orig: QPixmap | None = None
@@ -2521,7 +2633,8 @@ class ImageLabel(QLabel):
         self._points = []
         self.clear()
         self.setText(text)
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px; color: #777777; font-size: 13px;")
+        text_color = "#777777"
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px; color: {text_color}; font-size: 13px;")
 
     def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None = None):
         self._edit_mode = enabled
@@ -2612,7 +2725,7 @@ class ImageLabel(QLabel):
         )
         self.setPixmap(scaled)
         # Залишаємо фон сірим, прибираємо тільки текстову стилізацію
-        self.setStyleSheet("background-color: #E8E8E8; border: 1px solid #CCCCCC; border-radius: 4px;")
+        self.setStyleSheet(f"background-color: {self._default_bg}; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def _img_rect(self) -> QRect | None:
         if not self.pixmap() or self.pixmap().isNull():
@@ -2656,6 +2769,8 @@ class PreviewPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._default_bg = "#E8E8E8"
+        self._text_color = "#333333"
         self._build_ui()
 
     def _build_ui(self):
@@ -2665,20 +2780,20 @@ class PreviewPanel(QWidget):
 
         # До
         left = QVBoxLayout()
-        lbl_b = QLabel("ДО")
-        lbl_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_b.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+        self._lbl_before = QLabel("ДО")
+        self._lbl_before.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lbl_before.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
         self._before = ImageLabel()
         self._before.set_placeholder()
         self._before.points_changed.connect(self.perspective_points_changed)
-        left.addWidget(lbl_b)
+        left.addWidget(self._lbl_before)
         left.addWidget(self._before)
 
         # Після
         right = QVBoxLayout()
         self._lbl_after = QLabel("ПІСЛЯ")
         self._lbl_after.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+        self._lbl_after.setStyleSheet("font-weight:bold; color:_preview_text; font-size:13px;")
         self._after = ImageLabel()
         self._after.set_placeholder("Тут з'явиться результат")
         right.addWidget(self._lbl_after)
@@ -2692,6 +2807,21 @@ class PreviewPanel(QWidget):
 
     def set_after(self, image: np.ndarray):
         self._after.set_image(image)
+
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для прев'ю."""
+        self._default_bg = bg_color
+        self._text_color = text_color
+        if hasattr(self, '_before'):
+            self._before._default_bg = bg_color
+        if hasattr(self, '_after'):
+            self._after._default_bg = bg_color
+        self._lbl_before.setStyleSheet(f"font-weight:bold; color:{text_color}; font-size:13px;")
+        self._lbl_after.setStyleSheet(f"font-weight:bold; color:{text_color}; font-size:13px;")
+        # Оновлюємо фон ImageLabel
+        for attr in ('_before', '_after'):
+            w = getattr(self, attr)
+            w.setStyleSheet(f"background-color: {bg_color}; border: 1px solid #CCCCCC; border-radius: 4px;")
 
     def set_autofix_applied(self, mode: str | None):
         """Візуальний індикатор застосованої автокорекції.
@@ -2707,7 +2837,7 @@ class PreviewPanel(QWidget):
             self._lbl_after.setStyleSheet("font-weight:bold; color:#006600; font-size:13px;")
         else:
             self._lbl_after.setText("ПІСЛЯ")
-            self._lbl_after.setStyleSheet("font-weight:bold; color:#333333; font-size:13px;")
+            self._lbl_after.setStyleSheet(f"font-weight:bold; color:{self._text_color}; font-size:13px;")
 
     def clear(self):
         self._before.set_placeholder()
@@ -2790,6 +2920,10 @@ class QueueView(QListWidget):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.itemClicked.connect(self._on_clicked)
 
+        # Кольори за замовчуванням
+        self._bg_color = COLOR_PENDING
+        self._text_color = COLOR_TEXT
+
     # ------------------------------------------------------------------
     # Публічний API
     # ------------------------------------------------------------------
@@ -2810,6 +2944,20 @@ class QueueView(QListWidget):
     def mark_done(self, idx: int) -> None:     self._set_status(idx, "done")
     def mark_error(self, idx: int) -> None:    self._set_status(idx, "error")
     def mark_skipped(self, idx: int) -> None:  self._set_status(idx, "skipped")
+
+    def set_colors(self, bg_color: str, text_color: str):
+        """Встановити кольори фону та тексту для всіх елементів."""
+        self._bg_color = QColor(bg_color)
+        self._text_color = QColor(text_color)
+        self._apply_colors()
+
+    def _apply_colors(self):
+        """Застосувати поточні кольори до всіх елементів."""
+        for i in range(self.count()):
+            item = self.item(i)
+            if item:
+                item.setBackground(self._bg_color)
+                item.setForeground(self._text_color)
 
     def get_all_paths(self) -> List[str]:
         return self._all_paths()
@@ -2870,7 +3018,7 @@ class QueueView(QListWidget):
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
         item.setBackground(self._COLOR["pending"])
-        item.setForeground(COLOR_TEXT)
+        item.setForeground(self._text_color)
         item.setToolTip(path)
         self.addItem(item)
 
@@ -2883,7 +3031,7 @@ class QueueView(QListWidget):
         prefix = self._PREFIX.get(status, "")
         item.setText(prefix + name)
         item.setBackground(self._COLOR.get(status, self._COLOR["pending"]))
-        item.setForeground(COLOR_TEXT)
+        item.setForeground(self._text_color)
         if status == "current":
             self.setCurrentRow(idx)
             self.scrollToItem(item)
@@ -2925,6 +3073,7 @@ import os as _os
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QCheckBox
 from config import app_settings
 from config.app_settings import DEFAULT_WORKER_THREADS
 
@@ -3308,6 +3457,44 @@ class SettingsWindow(QWidget):
         form.addRow("BGR-алгоритм (краще для деяких документів):",
                     self._cb_shadow_bgr_mode)
 
+        # --- Ступінь однорідності фону (uniformity) ---
+        uniformity_label = QLabel(
+            "Ступінь однорідності фону (uniformity)"
+        )
+        uniformity_label.setStyleSheet("font-weight:bold; margin-top:8px;")
+        form.addRow(uniformity_label)
+
+        uniformity_desc = QLabel(
+            "Uniformity — частка пікселів з однорідним фоном (0.0=складний, 1.0=рівномірний).\n"
+            "Якщо uniformity вище верхнього порогу — тіні видаляються завжди.\n"
+            "Нижче нижнього — ніколи. Між порогами — залежить від типу документа."
+        )
+        uniformity_desc.setStyleSheet("color:#555; font-size:11px; margin-bottom:4px;")
+        uniformity_desc.setWordWrap(True)
+        form.addRow(uniformity_desc)
+
+        self._spin_uniformity_low = QDoubleSpinBox()
+        self._spin_uniformity_low.setRange(0.0, 1.0)
+        self._spin_uniformity_low.setSingleStep(0.05)
+        self._spin_uniformity_low.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_low)
+        self._spin_uniformity_low.setToolTip(
+            "Якщо uniformity нижче цього порогу — тіні не видаляються.\n"
+            "Фон складний, ризик артефактів."
+        )
+        form.addRow("Нижній поріг (не видаляти <):", self._spin_uniformity_low)
+
+        self._spin_uniformity_high = QDoubleSpinBox()
+        self._spin_uniformity_high.setRange(0.0, 1.0)
+        self._spin_uniformity_high.setSingleStep(0.05)
+        self._spin_uniformity_high.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_high)
+        self._spin_uniformity_high.setToolTip(
+            "Якщо uniformity вище цього порогу — тіні видаляються завжди.\n"
+            "Фон однорідний, shadow_remove безпечний."
+        )
+        form.addRow("Верхній поріг (видаляти >):", self._spin_uniformity_high)
+
         return box
 
     def _page_classify(self) -> QWidget:
@@ -3493,40 +3680,117 @@ class SettingsWindow(QWidget):
         return container
 
     def _page_appearance(self) -> QWidget:
-        """Сторінка вигляду — колір фону головного вікна."""
+        """Сторінка вигляду — кольори фону та тексту."""
         box = QGroupBox("Вигляд")
         box.setStyleSheet(GROUPBOX_STYLE)
         form = QFormLayout(box)
 
-        # Рядок вибору кольору фону
-        color_row = QHBoxLayout()
-
+        # === Колір фону головного вікна ===
+        bg_row = QHBoxLayout()
         self._color_preview = QLabel()
         self._color_preview.setFixedSize(40, 24)
         self._color_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
-
         self._color_hex = QLineEdit()
         self._color_hex.setPlaceholderText("#E8E8E8")
         self._color_hex.setToolTip("Колір фону у форматі #RRGGBB")
+        btn_bg = QPushButton("…")
+        btn_bg.setFixedWidth(32)
+        btn_bg.clicked.connect(self._choose_background_color)
+        bg_row.addWidget(self._color_preview)
+        bg_row.addWidget(self._color_hex, 1)
+        bg_row.addWidget(btn_bg)
+        form.addRow("Колір фону:", bg_row)
 
-        btn_color = QPushButton("…")
-        btn_color.setFixedWidth(32)
-        btn_color.setToolTip("Вибрати колір")
-        btn_color.clicked.connect(self._choose_background_color)
+        # === Колір фону прев'ю "До/Після" ===
+        prev_bg_row = QHBoxLayout()
+        self._preview_bg_preview = QLabel()
+        self._preview_bg_preview.setFixedSize(40, 24)
+        self._preview_bg_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._preview_bg_hex = QLineEdit()
+        self._preview_bg_hex.setPlaceholderText("#E8E8E8")
+        self._preview_bg_hex.setToolTip("Колір фону прев'ю у форматі #RRGGBB")
+        btn_prev_bg = QPushButton("…")
+        btn_prev_bg.setFixedWidth(32)
+        btn_prev_bg.clicked.connect(lambda: self._choose_color(self._preview_bg_hex, self._preview_bg_preview))
+        prev_bg_row.addWidget(self._preview_bg_preview)
+        prev_bg_row.addWidget(self._preview_bg_hex, 1)
+        prev_bg_row.addWidget(btn_prev_bg)
+        form.addRow("Фон прев'ю:", prev_bg_row)
 
-        color_row.addWidget(self._color_preview)
-        color_row.addWidget(self._color_hex, 1)
-        color_row.addWidget(btn_color)
+        # === Колір тексту прев'ю (заголовки "ДО"/"ПІСЛЯ") ===
+        prev_text_row = QHBoxLayout()
+        self._preview_text_preview = QLabel()
+        self._preview_text_preview.setFixedSize(40, 24)
+        self._preview_text_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._preview_text_hex = QLineEdit()
+        self._preview_text_hex.setPlaceholderText("#333333")
+        self._preview_text_hex.setToolTip("Колір тексту заголовків у форматі #RRGGBB")
+        btn_prev_text = QPushButton("…")
+        btn_prev_text.setFixedWidth(32)
+        btn_prev_text.clicked.connect(lambda: self._choose_color(self._preview_text_hex, self._preview_text_preview))
+        prev_text_row.addWidget(self._preview_text_preview)
+        prev_text_row.addWidget(self._preview_text_hex, 1)
+        prev_text_row.addWidget(btn_prev_text)
+        form.addRow("Текст прев'ю:", prev_text_row)
 
-        form.addRow("Колір фону:", color_row)
+        # === Колір фону списку черги ===
+        queue_bg_row = QHBoxLayout()
+        self._queue_bg_preview = QLabel()
+        self._queue_bg_preview.setFixedSize(40, 24)
+        self._queue_bg_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._queue_bg_hex = QLineEdit()
+        self._queue_bg_hex.setPlaceholderText("#FFFFFF")
+        self._queue_bg_hex.setToolTip("Колір фону списку файлів у форматі #RRGGBB")
+        btn_queue_bg = QPushButton("…")
+        btn_queue_bg.setFixedWidth(32)
+        btn_queue_bg.clicked.connect(lambda: self._choose_color(self._queue_bg_hex, self._queue_bg_preview))
+        queue_bg_row.addWidget(self._queue_bg_preview)
+        queue_bg_row.addWidget(self._queue_bg_hex, 1)
+        queue_bg_row.addWidget(btn_queue_bg)
+        form.addRow("Фон черги:", queue_bg_row)
+
+        # === Колір тексту списку черги ===
+        queue_text_row = QHBoxLayout()
+        self._queue_text_preview = QLabel()
+        self._queue_text_preview.setFixedSize(40, 24)
+        self._queue_text_preview.setStyleSheet("border: 1px solid #888888; border-radius: 2px;")
+        self._queue_text_hex = QLineEdit()
+        self._queue_text_hex.setPlaceholderText("#111111")
+        self._queue_text_hex.setToolTip("Колір тексту списку файлів у форматі #RRGGBB")
+        btn_queue_text = QPushButton("…")
+        btn_queue_text.setFixedWidth(32)
+        btn_queue_text.clicked.connect(lambda: self._choose_color(self._queue_text_hex, self._queue_text_preview))
+        queue_text_row.addWidget(self._queue_text_preview)
+        queue_text_row.addWidget(self._queue_text_hex, 1)
+        queue_text_row.addWidget(btn_queue_text)
+        form.addRow("Текст черги:", queue_text_row)
+
+        # === Авто-контрастний текст ===
+        self._cb_auto_contrast = QCheckBox()
+        self._cb_auto_contrast.setChecked(True)
+        self._cb_auto_contrast.setToolTip("Автоматично обирати світлий/темний текст залежно від кольору фону для забезпечення читаємості")
+        self._cb_auto_contrast.toggled.connect(self._on_auto_contrast_toggled)
+        form.addRow("Авто-контрастний текст:", self._cb_auto_contrast)
 
         return box
 
+    def _on_auto_contrast_toggled(self, checked: bool):
+        """Вмикає/вимикає поля вибору кольору тексту."""
+        enabled = not checked
+        self._preview_text_hex.setEnabled(enabled)
+        self._preview_text_preview.setEnabled(enabled)
+        self._queue_text_hex.setEnabled(enabled)
+        self._queue_text_preview.setEnabled(enabled)
+
     def _choose_background_color(self):
         """Відкриває діалог вибору кольору."""
+        self._choose_color(self._color_hex, self._color_preview)
+
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
+        """Універсальний метод вибору кольору."""
         from PyQt6.QtWidgets import QColorDialog
 
-        current_text = self._color_hex.text().strip()
+        current_text = hex_edit.text().strip()
         if not current_text.startswith("#"):
             current_text = "#E8E8E8"
 
@@ -3537,11 +3801,11 @@ class SettingsWindow(QWidget):
         except Exception:
             current_color = QColor("#E8E8E8")
 
-        color = QColorDialog.getColor(current_color, self, "Виберіть колір фону")
+        color = QColorDialog.getColor(current_color, self, "Виберіть колір")
         if color.isValid():
-            hex_color = color.name()  # str у форматі #RRGGBB
-            self._color_hex.setText(hex_color)
-            self._color_preview.setStyleSheet(
+            hex_color = color.name()
+            hex_edit.setText(hex_color)
+            preview_label.setStyleSheet(
                 f"background-color: {hex_color}; border: 1px solid #888888; border-radius: 2px;"
             )
 
@@ -3569,6 +3833,8 @@ class SettingsWindow(QWidget):
         self._spin_shadow_detect_ratio.setValue(s.get("shadow_detect_ratio", 0.3))
         self._spin_shadow_coarse_blend.setValue(s.get("shadow_coarse_blend_color", 0.0))
         self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
+        self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
+        self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -3617,6 +3883,32 @@ class SettingsWindow(QWidget):
             f"background-color: {bg_color}; border: 1px solid #888888; border-radius: 2px;"
         )
 
+        preview_bg = s.get("preview_bg_color", "#E8E8E8")
+        self._preview_bg_hex.setText(preview_bg)
+        self._preview_bg_preview.setStyleSheet(
+            f"background-color: {preview_bg}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        preview_text = s.get("preview_text_color", "#333333")
+        self._preview_text_hex.setText(preview_text)
+        self._preview_text_preview.setStyleSheet(
+            f"background-color: {preview_text}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        queue_bg = s.get("queue_bg_color", "#FFFFFF")
+        self._queue_bg_hex.setText(queue_bg)
+        self._queue_bg_preview.setStyleSheet(
+            f"background-color: {queue_bg}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        queue_text = s.get("queue_text_color", "#111111")
+        self._queue_text_hex.setText(queue_text)
+        self._queue_text_preview.setStyleSheet(
+            f"background-color: {queue_text}; border: 1px solid #888888; border-radius: 2px;"
+        )
+
+        self._cb_auto_contrast.setChecked(s.get("auto_contrast_text", True))
+
     def _collect_settings(self) -> dict:
         return {
             "autofix_enabled":    self._cb_autofix.isChecked(),
@@ -3630,6 +3922,8 @@ class SettingsWindow(QWidget):
             "shadow_detect_ratio":       self._spin_shadow_detect_ratio.value(),
             "shadow_coarse_blend_color": self._spin_shadow_coarse_blend.value(),
             "shadow_bgr_mode":           self._cb_shadow_bgr_mode.isChecked(),
+            "shadow_uniformity_low":     self._spin_uniformity_low.value(),
+            "shadow_uniformity_high":    self._spin_uniformity_high.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
@@ -3657,6 +3951,11 @@ class SettingsWindow(QWidget):
             "minimize_to_tray":  self._cb_minimize_to_tray.isChecked(),
             "worker_threads": self._spin_worker_threads.value(),
             "background_color": self._color_hex.text().strip() or "#E8E8E8",
+            "preview_bg_color": self._preview_bg_hex.text().strip() or "#E8E8E8",
+            "preview_text_color": self._preview_text_hex.text().strip() or "#333333",
+            "queue_bg_color": self._queue_bg_hex.text().strip() or "#FFFFFF",
+            "queue_text_color": self._queue_text_hex.text().strip() or "#111111",
+            "auto_contrast_text": self._cb_auto_contrast.isChecked(),
         }
 
     def _save(self):
@@ -4674,6 +4973,19 @@ CHROMA_PIXEL_THRESHOLD = 10.0
 # Зменшено з 0.02 до 0.01 для більш чутливого виявлення кольору.
 COLOR_PIXEL_RATIO_MIN = 0.01
 
+# Умови зйомки
+SCREEN_EDGE_DARK_THRESHOLD = 40    # пікселі темніші за це — підозра на рамку UI
+SCREEN_EDGE_STRIP_WIDTH = 15       # ширина смуги по краях для аналізу
+SCREEN_EDGE_DARK_RATIO = 0.6       # якщо >60% пікселів смуги темні → screen_capture
+PHONE_WARM_B_THRESHOLD = 133       # b-канал LAB > цього → теплий відтінок фону
+PHONE_COOL_B_THRESHOLD = 123       # b-канал LAB < цього → холодний відтінок фону
+FLAT_UNIFORM_BG_THRESHOLD = 0.60   # background_uniformity > цього → flat_uniform
+
+CAPTURE_SCREEN = "screen_capture"
+CAPTURE_PHONE = "phone_camera"
+CAPTURE_FLAT = "flat_uniform"
+CAPTURE_UNKNOWN = "unknown"
+
 # Логгер для діагностики
 _logger = logging.getLogger(__name__)
 
@@ -4830,6 +5142,106 @@ def classify(
     _logger.debug("-> photo (color)")
     return "photo"
 
+
+# ---------------------------------------------------------------------------
+# Capture conditions classification (Задача 4)
+# ---------------------------------------------------------------------------
+
+
+def _detect_screen_capture(small: np.ndarray) -> bool:
+    """
+    Визначає, чи є зображення захопленням екрану (screen capture).
+    Аналізує краї зображення на наявність темних смуг (рамка UI/вікна).
+
+    small: зменшене зображення BGR (до ~300px по більшій стороні).
+    """
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    sw = min(SCREEN_EDGE_STRIP_WIDTH, w // 4)
+    sh = min(SCREEN_EDGE_STRIP_WIDTH, h // 4)
+    if sw < 2 or sh < 2:
+        return False
+
+    # Верхня, нижня, ліва, права смуги
+    strips = [
+        gray[:sh, :],           # верх
+        gray[h-sh:, :],         # низ
+        gray[:, :sw],           # ліво
+        gray[:, w-sw:],         # право
+    ]
+
+    dark_strip_count = 0
+    for strip in strips:
+        if strip.size == 0:
+            continue
+        dark_ratio = float(np.mean(strip < SCREEN_EDGE_DARK_THRESHOLD))
+        if dark_ratio > SCREEN_EDGE_DARK_RATIO:
+            dark_strip_count += 1
+
+    return dark_strip_count >= 2
+
+
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+    """
+    Визначає, чи зроблено фото на камеру телефону за кольоровим відтінком фону.
+
+    small: зменшене зображення BGR.
+    bg_uniformity: background_uniformity метрика (0..1).
+    """
+    if bg_uniformity < 0.4:
+        return False
+
+    lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
+    l_ch, a_ch, b_ch = cv2.split(lab)
+
+    # Пікселі світлого фону (L > 180)
+    bg_mask = l_ch > 180
+    bg_pixel_count = np.count_nonzero(bg_mask)
+    if bg_pixel_count < 0.05 * small.shape[0] * small.shape[1]:
+        return False
+
+    b_bg = b_ch[bg_mask]
+    b_median = float(np.median(b_bg))
+
+    return b_median > PHONE_WARM_B_THRESHOLD or b_median < PHONE_COOL_B_THRESHOLD
+
+
+def classify_capture_conditions(
+    image: np.ndarray,
+    background_uniformity: float = 0.5,
+) -> str:
+    """
+    Визначає умови зйомки зображення.
+
+    Повертає одне з:
+      "screen_capture" — захоплення екрану
+      "phone_camera"   — фото на телефон (кольоровий відтінок)
+      "flat_uniform"   — рівномірний фон (скан/плоский об'єкт)
+      "unknown"        — не визначено
+
+    image: BGR uint8.
+    background_uniformity: метрика однорідності фону (0..1).
+    """
+    # Ресайз до 300px по більшій стороні для швидкості
+    h, w = image.shape[:2]
+    max_side = max(h, w)
+    scale = min(300.0 / max_side, 1.0)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    small = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # 1. Перевірка на screen capture
+    if _detect_screen_capture(small):
+        return CAPTURE_SCREEN
+
+    # 2. Рівномірний фон
+    if background_uniformity > FLAT_UNIFORM_BG_THRESHOLD:
+        if _detect_phone_camera(small, background_uniformity):
+            return CAPTURE_PHONE
+        return CAPTURE_FLAT
+
+    return CAPTURE_UNKNOWN
+
 ```
 
 ============================================================
@@ -4859,6 +5271,7 @@ ADAPTIVE_HDR_BLEND_KERNEL = (15, 15)  # ядро для размытия мас�
 
 # --- Coring (подавление усиления шума) ---
 HDR_NOISE_FLOOR = 1.5  # уровни L (0-255); diff меньше этого обнуляется
+HDR_MANUAL_NOISE_FLOOR = 0.3   # знижений coring для ручного режиму
 
 # --- Адаптивный tile grid (resolution-independent CLAHE) ---
 HDR_TILE_TARGET_PX = 64   # желаемый размер тайла в пикселях
@@ -4927,7 +5340,7 @@ def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
     return cv2.addWeighted(l_ch, 1.0 - effective_strength, l_eq, effective_strength, 0)
 
 
-def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
+def apply(image: np.ndarray, strength: float = 0.5, manual_mode: bool = False) -> np.ndarray:
     """
     Простой HDR эффект через CLAHE в канале яркости (LAB).
     strength: 0.0 – без эффекта, 1.0 – максимальное вытягивание деталей.
@@ -4938,7 +5351,7 @@ def apply(image: np.ndarray, strength: float = 0.5) -> np.ndarray:
     """
     if strength <= HDR_THRESHOLD:
         return image.copy()
-    return apply_adaptive(image, strength=strength, text_mask=None)
+    return apply_adaptive(image, strength=strength, text_mask=None, manual_mode=manual_mode)
 
 
 def apply_adaptive(
@@ -4947,6 +5360,7 @@ def apply_adaptive(
     text_mask: np.ndarray | None = None,
     auto_detail: bool = True,
     noise_floor: float | None = None,
+    manual_mode: bool = False,
 ) -> np.ndarray:
     """
     Адаптивный HDR: применяет CLAKE ко всему изображению, но уменьшает
@@ -4961,6 +5375,8 @@ def apply_adaptive(
                  участках через processing.detail_map.detail_mask. Это и есть фикс
                  артефактов на белом/серо-светлом фоне. Работает независимо от text_mask.
     noise_floor: порог coring для подавления шума. Если None — используется HDR_NOISE_FLOOR.
+    manual_mode: если True — пропускает _auto_strength_factor, пропускает detail_mask,
+                 использует HDR_MANUAL_NOISE_FLOOR для coring.
 
     Возвращает uint8 BGR.
     """
@@ -4972,19 +5388,37 @@ def apply_adaptive(
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
 
-    l_hdr = _compute_hdr_lab(l_ch, strength)
+    # Якщо manual_mode — не використовуємо _auto_strength_factor, тобто ефективна сила = strength
+    if manual_mode:
+        effective_strength = strength
+    else:
+        effective_strength = strength * _auto_strength_factor(l_ch)
+
+    clip_limit = HDR_CLIP_LIMIT_BASE + effective_strength * HDR_CLIP_LIMIT_MULTIPLIER
+    tile_grid = adaptive_tile_grid(l_ch.shape[0], l_ch.shape[1])
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+    l_eq = clahe.apply(l_ch)
+
+    l_hdr = cv2.addWeighted(l_ch, 1.0 - effective_strength, l_eq, effective_strength, 0)
 
     l_ch_f = l_ch.astype(np.float32)
     l_hdr_f = l_hdr.astype(np.float32)
-    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=noise_floor)
+
+    # В ручному режимі використовуємо знижений noise_floor
+    if manual_mode:
+        nf = HDR_MANUAL_NOISE_FLOOR if noise_floor is None else noise_floor
+    else:
+        nf = noise_floor
+    diff = _apply_coring(l_hdr_f - l_ch_f, noise_floor=nf)
 
     # --- alpha map: базово "полный эффект" везде ---
     alpha_map = np.full(l_ch.shape, ADAPTIVE_HDR_ALPHA_BACKGROUND, dtype=np.float32)
 
     # --- ограничение на однотонных участках (новый, основной фикс) ---
-    if auto_detail:
+    # В ручному режимі пропускаємо detail_mask (ефект діє по всьому зображенню)
+    if auto_detail and not manual_mode:
         from processing import detail_map as detail_map_module
-        dmask = detail_map_module.detail_mask(l_ch, noise_floor=noise_floor)  # 0..1, 0=плоско
+        dmask = detail_map_module.detail_mask(l_ch, noise_floor=nf)  # 0..1, 0=плоско
         alpha_map *= dmask
 
     # --- существующее ограничение на тексте (как и раньше) ---
@@ -4999,6 +5433,7 @@ def apply_adaptive(
     merged = cv2.merge([l_result, a_ch, b_ch])
     result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
     return result
+
 ```
 
 ============================================================
@@ -5756,6 +6191,14 @@ def run_autofix(
     result = image.copy()
     log_entries: list[dict] = []
 
+    # Діагностика фону — до будь-якої обробки (Задача 3)
+    from processing import diagnostics as _diag
+    _bg_uniformity, _detail_density = _diag.measure_background_metrics(image)
+
+    # Класифікація умов зйомки (Задача 5)
+    from processing.doc_classifier import classify_capture_conditions, CAPTURE_SCREEN, CAPTURE_PHONE
+    _capture_cond = classify_capture_conditions(image, background_uniformity=_bg_uniformity)
+
     # Визначаємо список увімкнених кроків згідно з пресетом
     _preset_steps_map = {
         "doc_bw":    ["shadow_remove", "perspective", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
@@ -5781,6 +6224,17 @@ def run_autofix(
             line_count_min=classify_line_count_min,
         )
 
+    # Прапорець: чи застосовувався shadow_remove (щоб не повторювати)
+    _shadow_was_applied = False
+    # Параметри shadow_remove (використовуються в обох проходах)
+    _shadow_coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
+    _shadow_detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
+    _shadow_detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
+    _shadow_is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
+    _shadow_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
+    _shadow_unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
+    _shadow_unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
+
     # Проходимо циклом по фіксованому порядку кроків
     for step_key, _ in PIPELINE_STEPS_FIXED_ORDER:
         # Якщо steps_enabled визначено і крок не в списку — пропускаємо
@@ -5789,37 +6243,71 @@ def run_autofix(
 
         elif step_key == "shadow_remove":
             shadow_mode = settings.get("shadow_remove_mode", "auto") if settings else "auto"
-            coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
-            detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0
-            detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
-            is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
-            use_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
 
             if shadow_mode == "always":
                 # Примусово — для будь-якого типу документа
                 result = shadow_remove.remove_shadow(
                     result,
-                    is_color_document=is_color,
-                    coarse_blend=coarse_blend,
-                    bgr_mode=use_bgr_mode,
+                    is_color_document=_shadow_is_color,
+                    coarse_blend=_shadow_coarse_blend,
+                    bgr_mode=_shadow_bgr_mode,
                 )
+                _shadow_was_applied = True
                 log_entries.append({"step": "shadow_remove", "applied": True,
                                     "detail": "тіні видалено (примусово)"})
             elif shadow_mode == "never":
                 pass  # нічого не робимо
-            else:  # auto — тільки для документів, не для фото
-                if doc_type in (DocType.BW_DOCUMENT.value, DocType.COLOR_DOCUMENT.value):
+            else:  # auto — з урахуванням background_uniformity та capture_conditions
+                _should_run = False
+                _reason = ""
+                # screen_capture — не запускаємо shadow_remove (екран уже рівномірний)
+                if _capture_cond == CAPTURE_SCREEN:
+                    _should_run = False
+                    _reason = f"screen_capture"
+                elif _bg_uniformity > _shadow_unif_high:
+                    # Однорідний фон — запускаємо незалежно від doc_type
+                    _should_run = True
+                    _reason = f"uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
+                elif _bg_uniformity < _shadow_unif_low:
+                    # Складний фон — не запускаємо
+                    _should_run = False
+                    _reason = f"uniformity={_bg_uniformity:.2f}<{_shadow_unif_low:.2f}"
+                else:
+                    # Проміжний діапазон — залишаємо стару логіку (тільки для документів)
+                    if doc_type == DocType.BW_DOCUMENT.value:
+                        _should_run = True
+                        _reason = f"doc_type={doc_type}"
+                if _should_run:
+                    _shadow_was_applied = True
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
-                        is_color_document=is_color,
-                        coarse_blend=coarse_blend,
-                        detect_threshold=detect_threshold,
-                        detect_ratio=detect_ratio,
-                        bgr_mode=use_bgr_mode,
+                        is_color_document=_shadow_is_color,
+                        coarse_blend=_shadow_coarse_blend,
+                        detect_threshold=_shadow_detect_threshold,
+                        detect_ratio=_shadow_detect_ratio,
+                        bgr_mode=_shadow_bgr_mode,
                     )
                     if had_shadow:
                         log_entries.append({"step": "shadow_remove", "applied": True,
-                                           "detail": "тіні видалено"})
+                                           "detail": f"тіні видалено ({_reason})"})
+                    # Нейтралізація кольорового відтінку для phone_camera
+                    if had_shadow and _capture_cond == CAPTURE_PHONE:
+                        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+                        l_ch, a_ch, b_ch = cv2.split(lab)
+                        bg_mask = l_ch > 180
+                        bg_pixel_count = np.count_nonzero(bg_mask)
+                        if bg_pixel_count > 0:
+                            # Зсув a-каналу до нейтрального (128) на 30%
+                            a_bg = a_ch[bg_mask]
+                            b_bg = b_ch[bg_mask]
+                            a_shift = (128.0 - float(np.median(a_bg))) * 0.3
+                            b_shift = (128.0 - float(np.median(b_bg))) * 0.3
+                            a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
+                            b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
+                            merged = cv2.merge([l_ch, a_ch, b_ch])
+                            result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+                            log_entries.append({"step": "color_neutralize", "applied": True,
+                                               "detail": "нейтралізація відтінку"})
             # Висвітлення тіней — додаткове підсвічування (залишається як є)
             if shadow_highlight_strength > EPSILON:
                 result = shadow_highlight.apply_shadow_highlight(
@@ -5829,10 +6317,47 @@ def run_autofix(
                                    "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 
         elif step_key == "perspective":
-            if use_perspective:
+            # Для screen_capture — форсуємо perspective навіть якщо use_perspective=False
+            _use_persp = use_perspective or _capture_cond == CAPTURE_SCREEN
+            if _use_persp:
                 result, persp_status = run_perspective_auto_smart(result, settings)
+                # Оновлюємо uniformity після виправлення перспективи
+                _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
                 if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
                     log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
+                elif _capture_cond == CAPTURE_SCREEN:
+                    log_entries.append({"step": "perspective_forced", "applied": True, "detail": "screen_capture detected"})
+
+                # Другий прохід shadow_remove після перспективи (якщо ще не застосовувався)
+                if not _shadow_was_applied and _bg_uniformity > _shadow_unif_high:
+                    result, had_shadow = shadow_remove.auto_remove_shadow(
+                        result,
+                        is_color_document=_shadow_is_color,
+                        coarse_blend=_shadow_coarse_blend,
+                        detect_threshold=_shadow_detect_threshold,
+                        detect_ratio=_shadow_detect_ratio,
+                        bgr_mode=_shadow_bgr_mode,
+                    )
+                    if had_shadow:
+                        log_entries.append({"step": "shadow_remove", "applied": True,
+                                           "detail": f"тіні видалено (після перспективи, uniformity={_bg_uniformity:.2f})"})
+                    # Нейтралізація кольорового відтінку для phone_camera
+                    if had_shadow and _capture_cond == CAPTURE_PHONE:
+                        lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+                        l_ch, a_ch, b_ch = cv2.split(lab)
+                        bg_mask = l_ch > 180
+                        bg_pixel_count = np.count_nonzero(bg_mask)
+                        if bg_pixel_count > 0:
+                            a_bg = a_ch[bg_mask]
+                            b_bg = b_ch[bg_mask]
+                            a_shift = (128.0 - float(np.median(a_bg))) * 0.3
+                            b_shift = (128.0 - float(np.median(b_bg))) * 0.3
+                            a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
+                            b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
+                            merged = cv2.merge([l_ch, a_ch, b_ch])
+                            result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
+                            log_entries.append({"step": "color_neutralize", "applied": True,
+                                               "detail": "нейтралізація відтінку (після перспективи)"})
 
         elif step_key == "brightness":
             # Яскравість окремо не застосовується в autofix — вона в ручних налаштуваннях
@@ -5875,13 +6400,13 @@ def run_autofix(
             if had_white:
                 log_entries.append({"step": "white_background", "applied": True, "detail": "білий фон"})
 
-    # Додаємо інформацію про тип документа в лог
+    # Додаємо інформацію про тип документа в лог (з capture_cond)
     if doc_type == DocType.BW_DOCUMENT.value:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "ч-б документ"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"ч-б документ ({_capture_cond})"})
     elif doc_type == DocType.COLOR_DOCUMENT.value:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "кольоровий документ"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"кольоровий документ ({_capture_cond})"})
     else:
-        log_entries.append({"step": "doc_type", "applied": True, "detail": "фото"})
+        log_entries.append({"step": "doc_type", "applied": True, "detail": f"фото ({_capture_cond})"})
 
     # Формат виходу: якщо не "auto" — примусово конвертуємо
     if output_color_mode == "grayscale":
@@ -6119,9 +6644,9 @@ def run_manual_adjustments(
             gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
             from processing import text_mask as text_mask_module
             mask = text_mask_module.text_region_mask(gray)
-            result = hdr.apply_adaptive(result, strength=hdr_strength, text_mask=mask)
+            result = hdr.apply_adaptive(result, strength=hdr_strength, text_mask=mask, manual_mode=True)
         else:
-            result = hdr.apply(result, strength=hdr_strength)
+            result = hdr.apply(result, strength=hdr_strength, manual_mode=True)
     if sharpen_strength > EPSILON:
         result = sharpen.apply(result, strength=sharpen_strength)
     return result
