@@ -109,6 +109,10 @@ def run_autofix(
     from processing.doc_classifier import classify_capture_conditions, CAPTURE_SCREEN, CAPTURE_PHONE
     _capture_cond = classify_capture_conditions(image, background_uniformity=_bg_uniformity)
 
+    # Записуємо початкову однорідність фону в статус
+    log_entries.append({"step": "uniformity", "applied": True,
+                        "detail": f"фон={_bg_uniformity:.2f}"})
+
     # Визначаємо список увімкнених кроків згідно з пресетом
     _preset_steps_map = {
         "doc_bw":    ["perspective", "shadow_remove", "brightness", "contrast", "sharpen", "grayscale", "white_background"],
@@ -253,6 +257,10 @@ def run_autofix(
                     log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
                 elif _capture_cond == CAPTURE_SCREEN:
                     log_entries.append({"step": "perspective_forced", "applied": True, "detail": "screen_capture detected"})
+
+                # Записуємо оновлену однорідність після перспективи
+                log_entries.append({"step": "uniformity_updated", "applied": True,
+                                    "detail": f"фон={_bg_uniformity:.2f} (після перспективи)"})
 
         elif step_key == "brightness":
             # Яскравість окремо не застосовується в autofix — вона в ручних налаштуваннях

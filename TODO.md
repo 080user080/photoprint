@@ -75,7 +75,7 @@ def detect_face(image: np.ndarray) -> bool:
     return len(faces) > 0
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -111,7 +111,7 @@ PIPELINE_STEPS_FIXED_ORDER = [
 ]
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -137,7 +137,7 @@ _preset_steps_map = {
 }
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -199,7 +199,7 @@ if not _shadow_was_applied and _bg_uniformity > _shadow_unif_high:
                                "detail": "нейтралізація відтінку (після перспективи)"})
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -277,7 +277,7 @@ else:  # auto — з урахуванням background_uniformity, doc_type та
 
 > ⚠️ `detect_face(result)` — викликається на `result` (поточний стан зображення після perspective), не на оригінальному `image`. Це важливо — обличчя шукаємо на вже вирівняному зображенні.
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -301,7 +301,7 @@ elif step_key == "perspective":
 
 Рядок `_bg_uniformity, _detail_density = _diag.measure_background_metrics(result)` — обов'язково залишити. Нічого більше у цьому блоці не має бути.
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -335,7 +335,7 @@ PIPELINE_STEPS_FIXED_ORDER = [
 ]
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -351,7 +351,7 @@ DEFAULT_PIPELINE_STEPS_ENABLED = "shadow_remove,perspective,brightness,contrast,
 DEFAULT_PIPELINE_STEPS_ENABLED = "perspective,shadow_remove,brightness,contrast,hdr,sharpen,grayscale,white_background"
 ```
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
 
 ---
 
@@ -367,4 +367,4 @@ DEFAULT_PIPELINE_STEPS_ENABLED = "perspective,shadow_remove,brightness,contrast,
 6. `_bg_uniformity, _detail_density = _diag.measure_background_metrics(result)` — присутній у `perspective`-блоці після `run_perspective_auto_smart()`
 7. Функція `detect_face()` у `diagnostics.py` — повертає `False` якщо cascade не завантажився (не ламає pipeline)
 
-- [ ] Відмітити виконання
+- [x] Відмітити виконання
