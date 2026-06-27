@@ -38,9 +38,7 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: full_doc)
@@ -889,6 +887,54 @@ def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
 - Площа: не менше MIN_DOCUMENT_AREA_RATIO від кадру
 - Bounding box не займає > MAX_BORDER_AREA_RATIO площі кадру
 - Якщо bounding box торкається краю кадру з 2+ сторін — відхиляємо (фон/стіл)"""
+def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
+    """Детекція кутів документа через пошук домінантних горизонтальних
+та вертикальних ліній (HoughLinesP) та обчислення їх перетинів.
+
+Переваги перед контурним методом:
+- Працює коли контур документа не замкнений (тінь, перекриття)
+- Стійкий до схожого кольору документа та фону
+- Знаходить геометричну структуру навіть при розривах
+
+Алгоритм:
+1. Canny → HoughLinesP
+2. Класифікуємо лінії на горизонтальні та вертикальні
+3. Фільтруємо лінії біля країв кадру (рамка, не документ)
+4. Знаходимо 2 найдомінантніші H-лінії та 2 V-лінії
+5. Обчислюємо 4 перетини → кути документа
+6. Валідуємо через _validate_quad_quality
+
+Returns:
+    float32 array shape (4,2) або None"""
+def _cluster_parallel_lines(lines: list, axis: str, image_size: tuple, cluster_ratio: float) -> list:
+    """Об'єднує близькі паралельні лінії в одну (зважене середнє).
+
+Args:
+    lines: список (position, start, end, weight)
+    axis: "h" — горизонтальні (position = y), "v" — вертикальні (position = x)
+    image_size: (h, w)
+    cluster_ratio: відстань менше cluster_ratio * розмір → об'єднуємо
+
+Returns:
+    Відфільтрований список ліній (одна на кластер, найдовша)"""
+def _validate_quad_quality(pts: np.ndarray, image_shape: tuple) -> tuple[bool, float]:
+    """Геометрична валідація 4 знайдених кутів документа.
+
+Перевірки:
+1. Площа — від MIN_QUAD_AREA_RATIO до MAX_QUAD_AREA_RATIO кадру.
+2. Кути між сторонами — від CORNER_ANGLE_MIN_DEG до CORNER_ANGLE_MAX_DEG.
+   Ідеальний прямокутник = 90° у всіх 4 кутах.
+3. Прямолінійність сторін — середина кожної сторони не має відхилятись
+   від прямої між кутами більше ніж SIDE_STRAIGHTNESS_MAX_RATIO від довжини.
+
+Args:
+    pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL].
+    image_shape: (height, width) зображення.
+
+Returns:
+    (valid: bool, quality_score: float)
+    quality_score: 0..1, де 1 = ідеальний прямокутник.
+    valid=False якщо хоча б одна перевірка провалилась."""
 def _find_quad_contour(binary: np.ndarray, gray_shape: tuple) -> np.ndarray | None:
     """Шукає 4-кутний контур-документ з валідацією.
 Тепер використовує адаптивний APPROX_POLY_EPSILONS та solidity-перевірку."""
@@ -931,6 +977,22 @@ def auto_correct_partial(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, b
 
 Returns:
     (результат, знайдено)"""
+def auto_correct_iterative(image: np.ndarray, max_passes: int, max_dim: int) -> tuple[np.ndarray, int, float]:
+    """Ітеративна перспективна корекція: до max_passes проходів warp.
+
+Після кожного проходу перевіряємо залишкове викривлення.
+Якщо воно менше ITERATIVE_MIN_SKEW_RATIO — зупиняємось.
+Якщо якість другого результату гірша за перший — повертаємо перший.
+
+Args:
+    image: вхідне BGR зображення
+    max_passes: максимальна кількість проходів (рекомендовано 2)
+    max_dim: максимальний розмір для аналізу
+
+Returns:
+    (result, passes_done, final_skew_ratio)
+    passes_done: скільки проходів реально виконано
+    final_skew_ratio: залишкове викривлення після останнього проходу"""
 def _touches_image_border(cnt: np.ndarray, shape: tuple, margin: int) -> bool:
     """Перевіряє, чи торкається контур межі зображення.
 
@@ -969,6 +1031,7 @@ Returns:
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\pipeline.py
 ============================================================
 Імпорти:
+  import logging
   from enum import Enum
   from typing import Optional
   import cv2
@@ -1013,17 +1076,7 @@ def run_hdr(image: np.ndarray, strength: float, adaptive: bool) -> np.ndarray:
     """Тільки HDR tone mapping.
 adaptive: якщо True — використовує hdr.apply_adaptive з text_mask."""
 def run_perspective_auto_smart(image: np.ndarray, settings: dict | None) -> tuple[np.ndarray, str]:
-    """Розумна авто-перспектива з deskew.
-
-Логіка:
-- Шукає кути документа
-- Якщо знайдено викривлення перспективи — warp, потім вимірює кут на результаті warp і deskew
-- Якщо тільки нахил (кути є без перспективи) — тільки deskew на оригіналі
-- Якщо кутів немає — вимірює кут на оригіналі і deskew
-- Якщо нічого не знайдено — без змін
-
-Returns:
-    (result, status_message)"""
+    """Розумна авто-перспектива з deskew та ітеративним уточненням."""
 def run_perspective_auto(image: np.ndarray, partial: bool) -> tuple[np.ndarray, bool]:
     """Тільки авто-перспектива.
 Повертає (результат, знайдено).
@@ -1094,6 +1147,7 @@ Returns:
 Імпорти:
   import cv2
   import numpy
+  import logging
 
 Сутності:
 def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
@@ -1178,7 +1232,7 @@ Args:
 
 Returns:
     Оброблене BGR зображення без градієнтних тіней"""
-def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float, bgr_mode: bool) -> tuple[np.ndarray, bool]:
+def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float, bgr_mode: bool, background_uniformity: float) -> tuple[np.ndarray, bool]:
     """Автоматичне видалення тіней: спочатку перевіряє чи є тіні,
 потім застосовує remove_shadow якщо потрібно.
 
@@ -1192,12 +1246,13 @@ def _auto_kernel_size(image: np.ndarray) -> int:
 MORPH_CLOSE по суті no-op'ом (модель фону стає майже константою) —
 компенсацію великих тіней понад цю межу бере на себе прохід 2
 (_create_coarse_background), а не подальше зростання цього ядра."""
-def _detect_shadow(image: np.ndarray, threshold: float, ratio: float) -> bool:
+def _detect_shadow(image: np.ndarray, threshold: float, ratio: float, background_uniformity: float) -> bool:
     """Виявляє наявність нерівномірного освітлення (тіней) на зображенні.
 
-Дві перевірки:
-1. Зображення не надто розмите (Laplacian var >= порогу).
-2. Є темні ділянки з великим перепадом яскравості (p5/95 < ratio).
+Два незалежних шляхи детекції:
+- Шлях A (глобальний перцентиль): p_low < threshold та p_low/p_high < ratio.
+- Шлях B (рівномірний фон): аналіз std фонових пікселів по блоках,
+  якщо background_uniformity достатньо висока і Шлях A не спрацював.
 
 Тип документа (фото/кольоровий/чб) визначається зовні і не впливає на
 детекцію тіней — ця функція відповідає тільки на питання "чи є
@@ -1450,165 +1505,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
     def nativeEventFilter(self, event_type, message):
 
 ============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-============================================================
-# PhotoPrint
-
-Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
-
-## Функціональність
-
-- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
-- **Інтелектуальна авто-обробка:**
-  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
-  - Авто-яскравість на основі гістограми (5-95% перцентилів)
-  - Авто-контраст з адаптивними порогами
-  - Авто-різкість на основі аналізу blur (Laplacian variance)
-  - Авто-детекція перспективи з fallback
-- **Ручне коригування:**
-  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
-  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
-  - Скидання: Скинути перспективу, Скинути слайдери
-- **Пакетна обробка:** Авто та ручний режими для черги файлів
-- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
-- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
-- **Друк:** Відправка на принтер (priPrinter або інший)
-- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
-
-## Встановлення
-
-```bash
-pip install -r requirements.txt
-```
-
-## Запуск
-
-```bash
-python main.py
-```
-
-## Структура проєкту
-
-```
-photoprint/
-├── main.py                    # Точка входу
-├── requirements.txt
-├── status.md                  # Статус розробки та план
-├── README.md                  # Цей файл
-│
-├── config/
-│   ├── settings.ini           # Конфігураційний файл
-│   └── app_settings.py        # Читання/запис налаштувань
-│
-├── core/
-│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
-│   ├── saver.py               # Збереження JPG
-│   └── printer.py             # Відправка на принтер
-│
-├── processing/
-│   ├── autofix.py             # Pipeline для різних типів документів
-│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
-│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
-│   ├── hdr.py                 # HDR tone mapping
-│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
-│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
-│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
-│   ├── perspective.py         # Авто + ручна перспективна корекція
-│   └── pipeline.py            # Єдина точка входу для GUI
-│
-├── batch/
-│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
-│
-├── gui/
-│   ├── main_window.py         # Головне вікно
-│   ├── preview.py             # Прев'ю До/Після
-│   ├── queue_view.py          # Черга файлів з Drag & Drop
-│   ├── controls.py            # Слайдери та кнопки керування
-│   └── settings_window.py     # Вікно налаштувань
-│
-└── utils/
-    ├── file_utils.py          # Робота з файлами
-    ├── image_utils.py         # Утиліти numpy/OpenCV
-    ├── logger.py              # Логування
-    └── win_drop.py            # Windows Drag & Drop
-```
-
-## Використання
-
-### Базовий робочий процес
-
-1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
-2. **Оберіть режим:** **Авто** або **Ручний**
-3. **Авто режим:**
-   - Натисніть "Друкувати все"
-   - Програма автоматично класифікує, обробить і надрукує всі файли
-4. **Ручний режим:**
-   - Переглядайте кожне фото по черзі
-   - Використовуйте "Auto Fix" для автоматичної корекції
-   - Або налаштуйте вручну через слайдери
-   - Натисніть "Друк" або "Пропустити"
-
-### Слайдери
-
-- **Тіні (0.0-2.0):** Висвітлення темних областей
-- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
-- **Контраст (-1.0-1.0):** Зміна контрасту
-- **Різкість (0.0-1.0):** Збільшення різкості
-- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
-
-### Кнопки авто-корекції
-
-- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
-- **Авто контраст:** Автоматичне вирівнювання контрасту
-- **Авто різкість:** Автоматична різкість на основі аналізу blur
-
-### Перспектива
-
-- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
-- **Ручна перспектива:** Ручне встановлення 4 кутів документа
-- **Скинути перспективу:** Повернення до оригінальної перспективи
-
-### Налаштування
-
-Файл `config/settings.ini` — текстовий, редагується блокнотом.
-Або через кнопку **⚙ Налаштування** у програмі.
-
-**Доступні налаштування:**
-- Пороги класифікації документів
-- Сила авто-різкості та поріг blur
-- Параметри авто-яскравості/контрасту (перцентилі)
-- Налаштування бінаризації для ч-б документів
-- Якість JPG при збереженні
-- Папка для збереження оброблених файлів
-- Назва принтера за замовчуванням
-- Вікно програми (розмір, позиція)
-
-## Стан розробки
-
-Детальний статус розробки дивіться у файлі [status.md](status.md).
-
-**Фаза 1 (завершено):**
-- ✅ Авто-обробка з класифікацією документів
-- ✅ Окремі pipeline для ч-б, кольорових документів та фото
-- ✅ Авто-видалення градієнтних тіней (blur/divide)
-- ✅ Авто-яскравість, авто-контраст, авто-різкість
-- ✅ Авто-детекція перспективи
-- ✅ Запам'ятовування ручних корекцій
-- ✅ Логування
-
-**Фаза 2 (наступний пріоритет):**
-- Адаптивний HDR для фото документів
-- Юніт-тести
-- Оптимізація пам'яті
-- Підтримка RAW-форматів
-- Трей-режим
-
-## Ліцензія
-
-Проект розробляється для особистого використання.
-
-
-============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
 Імпорти:
@@ -1621,13 +1517,3 @@ photoprint/
 
 Сутності:
 def main():
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-============================================================
-opencv-python>=4.8
-numpy>=1.24
-Pillow>=10.0
-pillow-heif>=0.13
-PyQt6>=6.5
-rawpy>=0.27

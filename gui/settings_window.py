@@ -436,6 +436,18 @@ class SettingsWindow(QWidget):
         )
         form.addRow("Верхній поріг (видаляти >):", self._spin_uniformity_high)
 
+        self._spin_uniformity_photo_high = QDoubleSpinBox()
+        self._spin_uniformity_photo_high.setRange(0.0, 1.0)
+        self._spin_uniformity_photo_high.setSingleStep(0.05)
+        self._spin_uniformity_photo_high.setDecimals(2)
+        _set_spinbox_minw(self._spin_uniformity_photo_high)
+        self._spin_uniformity_photo_high.setToolTip(
+            "Поріг uniformity для фото (окремий, суворіший).\n"
+            "Якщо uniformity фото вище цього порогу і немає обличчя — тіні видаляються.\n"
+            "Фото пейзажів/портретів зазвичай мають низьку uniformity."
+        )
+        form.addRow("Поріг для фото (видаляти >):", self._spin_uniformity_photo_high)
+
         return box
 
     def _page_classify(self) -> QWidget:
@@ -776,6 +788,7 @@ class SettingsWindow(QWidget):
         self._cb_shadow_bgr_mode.setChecked(s.get("shadow_bgr_mode", False))
         self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
         self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
+        self._spin_uniformity_photo_high.setValue(s.get("shadow_uniformity_photo_high", 0.65))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -865,6 +878,7 @@ class SettingsWindow(QWidget):
             "shadow_bgr_mode":           self._cb_shadow_bgr_mode.isChecked(),
             "shadow_uniformity_low":     self._spin_uniformity_low.value(),
             "shadow_uniformity_high":    self._spin_uniformity_high.value(),
+            "shadow_uniformity_photo_high": self._spin_uniformity_photo_high.value(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 

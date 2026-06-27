@@ -1,0 +1,124 @@
+в"""
+Тести Шляху B — адаптивна детекція тіней на рівномірному фоні.
+Path A (глобальний перцентиль) не виявляє легкі градієнтні тіні при p5 > threshold=80.
+Path B аналізує std фонових пікселів по блоках, якщо background_uniformity >= 0.5.
+"""
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+import cv2
+import numpy as np
+from processing.shadow_remove import (
+    _detect_shadow,
+    SHADOW_UNIFORM_BG_UNIFORMITY_MIN,
+    SHADOW_UNIFORM_L_FLOOR,
+    SHADOW_UNIFORM_BLOCK_SIZE,
+    SHADOW_UNIFORM_STD_THRESHOLD,
+    SHADOW_UNIFORM_MIN_BG_RATIO,
+)
+
+
+def _make_gradient(h: int, w: int, base: int = 240, drop: int = 80) -> np.ndarray:
+    """Створює зображення з вертикальним градієнтом яскравості."""
+    img = np.full((h, w, 3), base, dtype=np.uint8)
+    for i in range(h):
+        shade = int(drop * (1 - i / h))
+        img[i, :, :] = np.clip(img[i, :, :].astype(int) - shade, 0, 255).astype(np.uint8)
+    return img
+
+
+class TestPathBConstants:
+    """Перевірка констант Шляху B."""
+
+    def test_constants_exist(self):
+        assert SHADOW_UNIFORM_BG_UNIFORMITY_MIN == 0.5
+        assert SHADOW_UNIFORM_L_FLOOR == 150
+        assert SHADOW_UNIFORM_BLOCK_SIZE == 32
+        assert SHADOW_UNIFORM_STD_THRESHOLD > 0
+        assert SHADOW_UNIFORM_MIN_BG_RATIO == 0.3
+
+
+class TestPathBNoShadow:
+    """Шлях B не повинен детектувати тінь на рівномірному фоні."""
+
+    def test_uniform_white(self):
+        """Рівномірний білий фон — тіні немає."""
+        img = np.full((256, 256, 3), 240, dtype=np.uint8)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
+        assert result is False
+
+    def test_uniform_gray(self):
+        """Рівномірний сірий фон — тіні немає."""
+        img = np.full((256, 256, 3), 180, dtype=np.uint8)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
+        assert result is False
+
+    def test_no_uniformity_param(self):
+        """Без background_uniformity Шлях B не активується."""
+        img = _make_gradient(256, 256, 240, 80)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.0)
+        assert result is False
+
+    def test_low_uniformity(self):
+        """При background_uniformity < 0.5 Шлях B не активується."""
+        img = _make_gradient(256, 256, 240, 80)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.4)
+        assert result is False
+
+
+class TestPathBShadowDetected:
+    """Шлях B детектує градієнтні тіні на рівномірному фоні."""
+
+    def test_strong_gradient(self):
+        """
+        Сильний градієнт 240->160 (drop=80).
+        mean_std ≈ 2.70, поріг 2.0 → True
+        """
+        img = _make_gradient(256, 256, 240, 80)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
+        assert result is True, "Strong gradient (drop=80) should be detected by Path B"
+
+    def test_light_gradient_under_threshold(self):
+        """
+        Легкий градієнт 220->190 (drop=30).
+        mean_std ≈ 1.06 < 2.0 → False (очікувано, поріг не долається)
+        """
+        img = _make_gradient(256, 256, 220, 30)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
+        # При поточному порозі 2.0 цей градієнт не детектується
+        # Якщо поріг буде знижено — тест потрібно оновити
+        assert result is False
+
+
+class TestPathAFallback:
+    """Шлях A все ще працює для темних тіней з достатнім ratio."""
+
+    def test_path_a_dark_full_range(self):
+        """
+        Темна тінь 30->220 (p5=30, p95≈200, ratio=0.15 < 0.3).
+        Шлях A спрацьовує.
+        """
+        img = np.full((256, 256, 3), 30, dtype=np.uint8)
+        for i in range(256):
+            img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
+        result = _detect_shadow(img, threshold=80, ratio=0.3)
+        assert result is True
+
+    def test_path_a_no_uniformity(self):
+        """Без background_uniformity Шлях A працює як і раніше."""
+        img = np.full((256, 256, 3), 30, dtype=np.uint8)
+        for i in range(256):
+            img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
+        result = _detect_shadow(img, threshold=80, ratio=0.3)
+        assert result is True
+
+    def test_path_a_with_uniformity_via_path_a(self):
+        """
+        Темна тінь p5=30 < 80 з ratio=0.15 < 0.3.
+        Шлях A спрацьовує навіть якщо передано background_uniformity.
+        """
+        img = np.full((256, 256, 3), 30, dtype=np.uint8)
+        for i in range(256):
+            img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
+        result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
+        assert result is True, "Path A should detect dark shadow regardless of uniformity param"

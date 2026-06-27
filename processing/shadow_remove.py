@@ -81,6 +81,9 @@
 
 import cv2
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Константи для background estimation (прохід 1 — морфологія)
 MORPH_MAX_ANALYSIS_SIDE = 1000   # макс. розмір сторони для морфології (пікселів); більше → downscale
@@ -133,6 +136,13 @@ SHADOW_RATIO_THRESHOLD = 0.45  # мінімальне відношення p5/p9
 # Константи для захисних механізмів
 MIN_IMAGE_SIDE = 100           # мінімальний розмір сторони для обробки
 LAPLACIAN_BLUR_THRESHOLD = 10.0 # якщо дисперсія Laplacian < 10 → занадто розмите
+
+# Константи для Шляху B — детекція тіней на рівномірному фоні
+SHADOW_UNIFORM_BG_UNIFORMITY_MIN = 0.5  # мін. background_uniformity для активації Шляху B
+SHADOW_UNIFORM_L_FLOOR = 150            # мін. L для пікселя щоб вважатись "фоновим"
+SHADOW_UNIFORM_BLOCK_SIZE = 32          # розмір блоку для локального std
+SHADOW_UNIFORM_STD_THRESHOLD = 2.0      # поріг std блоків для детекції тіні на рівномірному фоні
+SHADOW_UNIFORM_MIN_BG_RATIO = 0.3       # мін. частка фонових пікселів для аналізу
 
 
 def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
@@ -377,6 +387,7 @@ def auto_remove_shadow(
     detect_threshold: float = SHADOW_DETECT_THRESHOLD,
     detect_ratio: float = SHADOW_RATIO_THRESHOLD,
     bgr_mode: bool = BGR_MODE_DEFAULT,
+    background_uniformity: float = 0.0,
 ) -> tuple[np.ndarray, bool]:
     """
     Автоматичне видалення тіней: спочатку перевіряє чи є тіні,
@@ -384,7 +395,8 @@ def auto_remove_shadow(
 
     Повертає (результат, чи_були_тіні).
     """
-    has_shadow = _detect_shadow(image, threshold=detect_threshold, ratio=detect_ratio)
+    has_shadow = _detect_shadow(image, threshold=detect_threshold, ratio=detect_ratio,
+                                background_uniformity=background_uniformity)
     if not has_shadow:
         return image.copy(), False
 
@@ -427,13 +439,15 @@ def _detect_shadow(
     image: np.ndarray,
     threshold: float = SHADOW_DETECT_THRESHOLD,
     ratio: float = SHADOW_RATIO_THRESHOLD,
+    background_uniformity: float = 0.0,
 ) -> bool:
     """
     Виявляє наявність нерівномірного освітлення (тіней) на зображенні.
 
-    Дві перевірки:
-    1. Зображення не надто розмите (Laplacian var >= порогу).
-    2. Є темні ділянки з великим перепадом яскравості (p5/95 < ratio).
+    Два незалежних шляхи детекції:
+    - Шлях A (глобальний перцентиль): p_low < threshold та p_low/p_high < ratio.
+    - Шлях B (рівномірний фон): аналіз std фонових пікселів по блоках,
+      якщо background_uniformity достатньо висока і Шлях A не спрацював.
 
     Тип документа (фото/кольоровий/чб) визначається зовні і не впливає на
     детекцію тіней — ця функція відповідає тільки на питання "чи є
@@ -451,12 +465,52 @@ def _detect_shadow(
     if laplacian_var < LAPLACIAN_BLUR_THRESHOLD:
         return False
 
-    # Перевірка 2: основна — є темні ділянки з великим перепадом яскравості
+    # --- Шлях A: основна логіка — глобальний перцентиль ---
     p_low = float(np.percentile(l, SHADOW_DETECT_PERCENTILE))
     p_high = float(np.percentile(l, 100 - SHADOW_DETECT_PERCENTILE))
 
     if p_low < threshold:
         ratio_val = p_low / max(p_high, 1.0)
-        return ratio_val < ratio
+        if ratio_val < ratio:
+            return True
+
+    # --- Шлях B: аналіз нерівномірності фонових пікселів для рівномірного фону ---
+    if background_uniformity >= SHADOW_UNIFORM_BG_UNIFORMITY_MIN:
+        bg_mask = l > SHADOW_UNIFORM_L_FLOOR
+        bg_ratio = float(np.count_nonzero(bg_mask)) / float(bg_mask.size)
+
+        if bg_ratio >= SHADOW_UNIFORM_MIN_BG_RATIO:
+            bs = SHADOW_UNIFORM_BLOCK_SIZE
+            h_blocks = h // bs
+            w_blocks = w // bs
+            if h_blocks > 0 and w_blocks > 0:
+                l_crop = l[:h_blocks * bs, :w_blocks * bs]
+                bg_mask_crop = bg_mask[:h_blocks * bs, :w_blocks * bs]
+
+                # Reshape: (h_blocks, bs, w_blocks, bs)
+                blocks_l = l_crop.reshape(h_blocks, bs, w_blocks, bs)
+                blocks_mask = bg_mask_crop.reshape(h_blocks, bs, w_blocks, bs)
+
+                # std для кожного блоку тільки по фонових пікселях
+                stds = []
+                for bi in range(h_blocks):
+                    for bj in range(w_blocks):
+                        block = blocks_l[bi, :, bj, :]
+                        bmask = blocks_mask[bi, :, bj, :]
+                        bg_pixels = block[bmask]
+                        if len(bg_pixels) > 10:
+                            stds.append(float(np.std(bg_pixels)))
+
+                if stds:
+                    mean_std = float(np.mean(stds))
+                    path_b_result = mean_std > SHADOW_UNIFORM_STD_THRESHOLD
+                    logger.debug(
+                        "Path B: uniformity=%.3f bg_ratio=%.3f mean_std=%.2f "
+                        "threshold=%.1f bg_pixels=%d → %s",
+                        background_uniformity, bg_ratio, mean_std,
+                        SHADOW_UNIFORM_STD_THRESHOLD, len(stds),
+                        path_b_result,
+                    )
+                    return path_b_result
 
     return False

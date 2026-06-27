@@ -38,6 +38,9 @@ DEFAULT_SHADOW_COARSE_BLEND_COLOR = 0.0
 DEFAULT_SHADOW_BGR_MODE = False
 DEFAULT_SHADOW_UNIFORMITY_LOW = 0.30    # нижній поріг однорідності фону
 DEFAULT_SHADOW_UNIFORMITY_HIGH = 0.55   # верхній поріг однорідності фону
+DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH = 0.65  # верхній поріг для фото (суворіший)
+DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD = 2.0   # поріг std блоків для детекції тіні на рівномірному фоні
+DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE = 32        # розмір блоку для локального std
 
 # Константи для паралельної обробки
 import os as _os
@@ -110,6 +113,9 @@ def load(path=None) -> dict:
         "shadow_bgr_mode":           cfg.getboolean("processing", "shadow_bgr_mode",           fallback=DEFAULT_SHADOW_BGR_MODE),
         "shadow_uniformity_low":     cfg.getfloat("processing",   "shadow_uniformity_low",     fallback=DEFAULT_SHADOW_UNIFORMITY_LOW),
         "shadow_uniformity_high":    cfg.getfloat("processing",   "shadow_uniformity_high",    fallback=DEFAULT_SHADOW_UNIFORMITY_HIGH),
+        "shadow_uniformity_photo_high": cfg.getfloat("processing", "shadow_uniformity_photo_high", fallback=DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH),
+        "shadow_uniform_std_threshold": cfg.getfloat("processing", "shadow_uniform_std_threshold", fallback=DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD),
+        "shadow_uniform_block_size":     cfg.getint("processing", "shadow_uniform_block_size",     fallback=DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE),
         "worker_threads": cfg.getint(
             "processing", "worker_threads",
             fallback=DEFAULT_WORKER_THREADS
@@ -177,6 +183,9 @@ def save(settings: dict, path=None):
     ).lower()
     cfg["processing"]["shadow_uniformity_low"] = str(settings.get("shadow_uniformity_low", DEFAULT_SHADOW_UNIFORMITY_LOW))
     cfg["processing"]["shadow_uniformity_high"] = str(settings.get("shadow_uniformity_high", DEFAULT_SHADOW_UNIFORMITY_HIGH))
+    cfg["processing"]["shadow_uniformity_photo_high"] = str(settings.get("shadow_uniformity_photo_high", DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH))
+    cfg["processing"]["shadow_uniform_std_threshold"] = str(settings.get("shadow_uniform_std_threshold", DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD))
+    cfg["processing"]["shadow_uniform_block_size"] = str(settings.get("shadow_uniform_block_size", DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
     cfg["processing"]["worker_threads"] = str(
         settings.get("worker_threads", DEFAULT_WORKER_THREADS)

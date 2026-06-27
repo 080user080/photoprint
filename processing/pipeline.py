@@ -3,11 +3,14 @@ Pipeline — єдина точка входу для GUI.
 GUI викликає тільки pipeline, не знає про внутрішні модулі.
 """
 
+import logging
 from enum import Enum
 from typing import Optional
 import cv2
 import numpy as np
 from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew as deskew_module
+
+logger = logging.getLogger(__name__)
 
 
 class DocType(str, Enum):
@@ -129,6 +132,27 @@ def run_autofix(
             _enabled_str = settings.get("pipeline_steps_enabled", "")
             _steps_enabled = [k.strip() for k in _enabled_str.split(",") if k.strip()] if _enabled_str else None
 
+    # ── Детекція кутів перспективи ДО будь-якої обробки ──────────────────
+    # Причина: тінь підкреслює межі документа → контраст країв вищий на оригіналі.
+    # Після shadow_remove фон стає рівномірним і краї "губляться".
+    _pre_detected_corners: np.ndarray | None = None
+    _perspective_step_enabled = (
+        _steps_enabled is None or "perspective" in (_steps_enabled or [])
+    )
+    _use_persp_flag = use_perspective or (_capture_cond == CAPTURE_SCREEN)
+
+    if _perspective_step_enabled and _use_persp_flag:
+        _pre_detected_corners = perspective.auto_detect_corners(image)
+        if _pre_detected_corners is not None:
+            log_entries.append({
+                "step": "corners_pre_detected",
+                "applied": True,
+                "detail": "кути знайдено до обробки",
+            })
+            logger.debug("run_autofix: кути детектовано ДО обробки")
+        else:
+            logger.debug("run_autofix: кути не знайдено ДО обробки, спробуємо після")
+
     # Спочатку визначаємо тип документа (до будь-якої обробки!)
     if doc_type is None:
         doc_type = doc_classifier.classify(
@@ -176,12 +200,39 @@ def run_autofix(
                     # screen_capture — не запускаємо (екран рівномірний, не тінь)
                     _should_run = False
                     _reason = "screen_capture"
-                elif doc_type in (DocType.COLOR_DOCUMENT.value, DocType.PHOTO.value):
-                    # Кольорові документи та фото — не запускаємо в auto.
-                    # Паспорти, посвідчення, фотографії псуються shadow_remove.
-                    # Користувач може примусово увімкнути через режим "always".
-                    _should_run = False
-                    _reason = f"doc_type={doc_type} (auto skip)"
+                elif doc_type == DocType.PHOTO.value:
+                    # Фото — запускаємо ТІЛЬКИ при високій однорідності фону.
+                    # Фото документа на білому фоні (зроблене на телефон) має високу uniformity.
+                    # Пейзажі, портрети — низьку uniformity, тому автоматично захищені.
+                    _shadow_unif_high_photo = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
+                    if _bg_uniformity > _shadow_unif_high_photo:
+                        # Додаткова перевірка: якщо є обличчя — не видаляємо тіні
+                        from processing import diagnostics as _diag_face_photo
+                        if _diag_face_photo.detect_face(result):
+                            _should_run = False
+                            _reason = f"photo face_detected (uniformity={_bg_uniformity:.2f})"
+                        else:
+                            _should_run = True
+                            _reason = f"photo uniformity={_bg_uniformity:.2f}>{_shadow_unif_high_photo:.2f}"
+                    elif _bg_uniformity < _shadow_unif_low:
+                        # Складний фон — не запускаємо
+                        _should_run = False
+                        _reason = f"photo low uniformity={_bg_uniformity:.2f}"
+                    else:
+                        # Проміжний діапазон — фото ризиковані, краще консервативно
+                        _should_run = False
+                        _reason = f"photo mid uniformity={_bg_uniformity:.2f}"
+                elif doc_type == DocType.COLOR_DOCUMENT.value:
+                    # Кольоровий документ — запускаємо ТІЛЬКИ при високій однорідності фону,
+                    # інакше ризикуємо зіпсувати кольоровий фон/зображення на документі.
+                    # Паспорти, посвідчення з кольоровим фоном псуються shadow_remove,
+                    # але якщо фон реально рівномірний (білий/однотонний) — тіні треба прибрати.
+                    if _bg_uniformity > _shadow_unif_high:
+                        _should_run = True
+                        _reason = f"color_doc uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
+                    else:
+                        _should_run = False
+                        _reason = f"color_doc low uniformity={_bg_uniformity:.2f}"
                 elif _bg_uniformity > _shadow_unif_high:
                     # Однорідний фон bw_document / flat_background.
                     # Додаткова перевірка: якщо є обличчя — це документ з портретом,
@@ -216,6 +267,7 @@ def run_autofix(
                         detect_threshold=_shadow_detect_threshold,
                         detect_ratio=_shadow_detect_ratio,
                         bgr_mode=_shadow_bgr_mode,
+                        background_uniformity=_bg_uniformity,
                     )
                     if had_shadow:
                         log_entries.append({"step": "shadow_remove", "applied": True,
@@ -247,17 +299,50 @@ def run_autofix(
                                    "detail": f"підсвічування {shadow_highlight_strength:.2f}"})
 
         elif step_key == "perspective":
-            # Для screen_capture — форсуємо perspective навіть якщо use_perspective=False
             _use_persp = use_perspective or _capture_cond == CAPTURE_SCREEN
             if _use_persp:
-                result, persp_status = run_perspective_auto_smart(result, settings)
-                # Оновлюємо uniformity після виправлення перспективи
-                _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
-                if persp_status not in ("перспектива не потрібна", "перспектива не потребує корекції"):
-                    log_entries.append({"step": "perspective", "applied": True, "detail": persp_status})
-                elif _capture_cond == CAPTURE_SCREEN:
-                    log_entries.append({"step": "perspective_forced", "applied": True, "detail": "screen_capture detected"})
-
+                if _pre_detected_corners is not None:
+                    # Використовуємо кути знайдені ДО обробки
+                    logger.debug("run_autofix: застосовуємо кути знайдені ДО обробки")
+                    skewed = perspective.detect_skewed_sides(_pre_detected_corners)
+                    has_skewed = any(skewed.values())
+                    if has_skewed:
+                        result = perspective.apply_correction(result, _pre_detected_corners)
+                        # deskew після warp
+                        angle = deskew_module.measure_skew_angle(result)
+                        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                            result = deskew_module.apply_deskew(result, angle)
+                        _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
+                        log_entries.append({
+                            "step": "perspective",
+                            "applied": True,
+                            "detail": "перспектива виправлена (pre-detected) + deskew",
+                        })
+                    else:
+                        # Тільки deskew
+                        angle = deskew_module.measure_skew_angle(result)
+                        if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
+                            result = deskew_module.apply_deskew(result, angle)
+                            log_entries.append({
+                                "step": "perspective",
+                                "applied": True,
+                                "detail": "deskew (pre-detected, нахил виправлено)",
+                            })
+                    # Скидаємо pre-detected щоб не застосувати двічі
+                    _pre_detected_corners = None
+                else:
+                    # Fallback: стара логіка якщо pre-detection не знайшла кутів
+                    result, persp_status = run_perspective_auto_smart(result, settings)
+                    _bg_uniformity, _detail_density = _diag.measure_background_metrics(result)
+                    if persp_status not in (
+                        "перспектива не потрібна",
+                        "перспектива не потребує корекції",
+                    ):
+                        log_entries.append({
+                            "step": "perspective",
+                            "applied": True,
+                            "detail": persp_status,
+                        })
                 # Записуємо оновлену однорідність після перспективи
                 log_entries.append({"step": "uniformity_updated", "applied": True,
                                     "detail": f"фон={_bg_uniformity:.2f} (після перспективи)"})
@@ -378,36 +463,24 @@ def run_perspective_auto_smart(
     settings: dict | None = None,
 ) -> tuple[np.ndarray, str]:
     """
-    Розумна авто-перспектива з deskew.
-
-    Логіка:
-    - Шукає кути документа
-    - Якщо знайдено викривлення перспективи — warp, потім вимірює кут на результаті warp і deskew
-    - Якщо тільки нахил (кути є без перспективи) — тільки deskew на оригіналі
-    - Якщо кутів немає — вимірює кут на оригіналі і deskew
-    - Якщо нічого не знайдено — без змін
-
-    Returns:
-        (result, status_message)
+    Розумна авто-перспектива з deskew та ітеративним уточненням.
     """
-    # 1. Спробувати знайти кути документа
     corners = perspective.auto_detect_corners(image)
 
     if corners is not None:
-        # 2. Перевірити чи є викривлення перспективи
         skewed = perspective.detect_skewed_sides(corners)
         has_skewed = any(skewed.values())
 
         if has_skewed:
-            # Warp
-            result = perspective.apply_correction(image, corners)
-            # Вимірюємо кут НА РЕЗУЛЬТАТІ warp (кут вже інший)
+            # Ітеративна корекція (до 2 проходів)
+            result, passes, final_skew = perspective.auto_correct_iterative(image)
+            # Deskew після останнього warp
             angle = deskew_module.measure_skew_angle(result)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
                 result = deskew_module.apply_deskew(result, angle)
-            return result, "перспектива виправлена + deskew"
+            status = f"перспектива виправлена ({passes} прохід(ів)) + deskew"
+            return result, status
         else:
-            # Тільки deskew на оригіналі (якщо потрібно)
             angle = deskew_module.measure_skew_angle(image)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
                 result = deskew_module.apply_deskew(image, angle)
@@ -415,7 +488,6 @@ def run_perspective_auto_smart(
             else:
                 return image.copy(), "перспектива не потребує корекції"
     else:
-        # Кути не знайдено — тільки deskew (якщо потрібно)
         angle = deskew_module.measure_skew_angle(image)
         if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
             result = deskew_module.apply_deskew(image, angle)

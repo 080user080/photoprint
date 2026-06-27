@@ -544,6 +544,12 @@ def _try_canny(gray: np.ndarray) -> np.ndarray | None:
     """Друга спроба — через Canny edge detection."""
 def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
     """Третя спроба (fallback) — беремо найбільший контур та його bounding box."""
+def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
+    """Детекція кутів документа через пошук домінантних горизонтальних"""
+def _cluster_parallel_lines(lines: list, axis: str, image_size: tuple, cluster_ratio: float) -> list:
+    """Об'єднує близькі паралельні лінії в одну (зважене середнє)."""
+def _validate_quad_quality(pts: np.ndarray, image_shape: tuple) -> tuple[bool, float]:
+    """Геометрична валідація 4 знайдених кутів документа."""
 def _find_quad_contour(binary: np.ndarray, gray_shape: tuple) -> np.ndarray | None:
     """Шукає 4-кутний контур-документ з валідацією."""
 def _validate_document(approx: np.ndarray, image_shape: tuple) -> bool:
@@ -558,6 +564,8 @@ def apply_partial_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarr
     """Виправляє перспективу лише для "кривих" сторін документа."""
 def auto_correct_partial(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, bool]:
     """Авто-детект + часткова корекція перспективи в одному виклику."""
+def auto_correct_iterative(image: np.ndarray, max_passes: int, max_dim: int) -> tuple[np.ndarray, int, float]:
+    """Ітеративна перспективна корекція: до max_passes проходів warp."""
 def _touches_image_border(cnt: np.ndarray, shape: tuple, margin: int) -> bool:
     """Перевіряє, чи торкається контур межі зображення."""
 def _solidity(cnt: np.ndarray) -> float:
@@ -586,7 +594,7 @@ def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float,
 def run_hdr(image: np.ndarray, strength: float, adaptive: bool) -> np.ndarray:
     """Тільки HDR tone mapping."""
 def run_perspective_auto_smart(image: np.ndarray, settings: dict | None) -> tuple[np.ndarray, str]:
-    """Розумна авто-перспектива з deskew."""
+    """Розумна авто-перспектива з deskew та ітеративним уточненням."""
 def run_perspective_auto(image: np.ndarray, partial: bool) -> tuple[np.ndarray, bool]:
     """Тільки авто-перспектива."""
 def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool) -> np.ndarray:
@@ -628,11 +636,11 @@ def _remove_shadow_bgr(image: np.ndarray, kernel_size: int, coarse_pass: bool) -
     """Видаляє тіні через морфологічну обробку кожного BGR-каналу окремо."""
 def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool, is_color_document: bool, coarse_blend: float, bgr_mode: bool) -> np.ndarray:
     """Видаляє градієнтні тіні з документа через background estimation."""
-def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float, bgr_mode: bool) -> tuple[np.ndarray, bool]:
+def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float, bgr_mode: bool, background_uniformity: float) -> tuple[np.ndarray, bool]:
     """Автоматичне видалення тіней: спочатку перевіряє чи є тіні,"""
 def _auto_kernel_size(image: np.ndarray) -> int:
     """Обчислює оптимальний розмір ядра на основі розміру зображення."""
-def _detect_shadow(image: np.ndarray, threshold: float, ratio: float) -> bool:
+def _detect_shadow(image: np.ndarray, threshold: float, ratio: float, background_uniformity: float) -> bool:
     """Виявляє наявність нерівномірного освітлення (тіней) на зображенні."""
 
 ============================================================
