@@ -52,6 +52,7 @@ class ImageLabel(QLabel):
     """QLabel з підтримкою drag 4 точок перспективи."""
 
     points_changed = pyqtSignal(list)   # list[QPoint] у координатах зображення
+    points_released = pyqtSignal(list)  # list[QPoint] — емітується лише в mouseReleaseEvent
 
     _COLORS = [COLOR_TL, COLOR_TR, COLOR_BR, COLOR_BL]
     _LABELS = [LABEL_TL, LABEL_TR, LABEL_BR, LABEL_BL]
@@ -163,6 +164,8 @@ class ImageLabel(QLabel):
 
     def mouseReleaseEvent(self, event):
         self._drag_idx = -1
+        if self._edit_mode and len(self._points) == CORNER_COUNT:
+            self.points_released.emit(list(self._points))
 
     # --- Внутрішнє ---
 
@@ -218,6 +221,7 @@ class ImageLabel(QLabel):
 
 class PreviewPanel(QWidget):
     perspective_points_changed = pyqtSignal(list)
+    perspective_points_released = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -238,6 +242,7 @@ class PreviewPanel(QWidget):
         self._before = ImageLabel()
         self._before.set_placeholder()
         self._before.points_changed.connect(self.perspective_points_changed)
+        self._before.points_released.connect(self.perspective_points_released)
         left.addWidget(self._lbl_before)
         left.addWidget(self._before)
 

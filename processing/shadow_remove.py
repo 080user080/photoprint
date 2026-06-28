@@ -252,6 +252,10 @@ def _remove_shadow_bgr(
     Видаляє тіні через морфологічну обробку кожного BGR-каналу окремо.
     Алгоритм з shadow_remove_gui.py — дає кращі результати для деяких
     типів документів з рівномірним кольоровим фоном.
+
+    Після злиття каналів виконується пост-обробка (Блок 6):
+    - Детекція артефактів: пікселі де L < 30 або chroma > 25
+    - Заміна артефактних пікселів на колір фону документа
     """
     if kernel_size == 0:
         kernel_size = _auto_kernel_size(image)
@@ -275,7 +279,78 @@ def _remove_shadow_bgr(
 
         result_channels.append(normed)
 
-    return cv2.merge(result_channels)
+    result = cv2.merge(result_channels)
+
+    # --- Блок 6: пост-обробка артефактів ---
+    _fix_bgr_artifacts(result, image)
+
+    return result
+
+
+def _fix_bgr_artifacts(result: np.ndarray, original: np.ndarray) -> None:
+    """
+    Виправляє кольорові артефакти після BGR-обробки.
+    Модифікує result in-place.
+
+    Завдання 6.1: детектує пікселі з артефактами (L < 30 або chroma > 25).
+    Завдання 6.2: замінює їх на колір фону (медіанний колір пікселів L > 220).
+
+    Args:
+        result: BGR зображення після _remove_shadow_bgr (змінюється in-place)
+        original: оригінальне BGR зображення (до обробки)
+    """
+    h, w = result.shape[:2]
+
+    # Конвертуємо результат у LAB
+    result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l_res, a_res, b_res = cv2.split(result_lab)
+
+    # Завдання 6.1: маска артефактів
+    dark_mask = l_res < 30
+    a_f = a_res.astype(np.float32)
+    b_f = b_res.astype(np.float32)
+    chroma = np.sqrt((a_f - 128.0) ** 2 + (b_f - 128.0) ** 2)
+    color_noise_mask = chroma > 25.0
+    artifact_mask = dark_mask | color_noise_mask
+
+    artifact_count = np.count_nonzero(artifact_mask)
+    if artifact_count == 0:
+        return
+    logger.debug(f"_fix_bgr_artifacts: знайдено {artifact_count} артефактних пікселів")
+
+    # Завдання 6.2: визначення кольору фону
+    orig_lab = cv2.cvtColor(original, cv2.COLOR_BGR2LAB)
+    l_orig, a_orig, b_orig = cv2.split(orig_lab)
+    bg_mask = l_orig > 220
+    bg_pixel_count = np.count_nonzero(bg_mask)
+
+    if bg_pixel_count > h * w * 0.05:
+        # Медіанний колір фону по кожному каналу BGR
+        bg_b = np.median(original[:, :, 0][bg_mask]).astype(np.uint8)
+        bg_g = np.median(original[:, :, 1][bg_mask]).astype(np.uint8)
+        bg_r = np.median(original[:, :, 2][bg_mask]).astype(np.uint8)
+        bg_color = (int(bg_b), int(bg_g), int(bg_r))
+    else:
+        bg_color = (255, 255, 255)
+
+    # Замінюємо артефактні пікселі на bg_color
+    result[artifact_mask] = bg_color
+
+    # Злегка розмиваємо межу між заміненими і нормальними пікселями
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    border_mask = cv2.dilate(artifact_mask.astype(np.uint8), kernel_dilate, iterations=1)
+    # Виключаємо оригінальні артефакти з border, щоб не розмивати їх знову
+    border_only = border_mask.astype(bool) & ~artifact_mask
+    if np.any(border_only):
+        blurred = cv2.GaussianBlur(result, (3, 3), 1.0)
+        # Змішуємо тільки border-пікселі
+        alpha = 0.5
+        result[border_only] = (
+            (result[border_only].astype(np.float32) * (1.0 - alpha) +
+             blurred[border_only].astype(np.float32) * alpha)
+        ).astype(np.uint8)
+
+    logger.debug(f"_fix_bgr_artifacts: замінено {artifact_count} пікселів кольором {bg_color}")
 
 
 def remove_shadow(
@@ -466,8 +541,8 @@ def _detect_shadow(
         return False
 
     # --- Шлях A: основна логіка — глобальний перцентиль ---
-    p_low = float(np.percentile(l, SHADOW_DETECT_PERCENTILE))
-    p_high = float(np.percentile(l, 100 - SHADOW_DETECT_PERCENTILE))
+    p_low = float(np.percentile(l.astype(np.float64), SHADOW_DETECT_PERCENTILE))
+    p_high = float(np.percentile(l.astype(np.float64), 100 - SHADOW_DETECT_PERCENTILE))
 
     if p_low < threshold:
         ratio_val = p_low / max(p_high, 1.0)
@@ -499,7 +574,7 @@ def _detect_shadow(
                         bmask = blocks_mask[bi, :, bj, :]
                         bg_pixels = block[bmask]
                         if len(bg_pixels) > 10:
-                            stds.append(float(np.std(bg_pixels)))
+                            stds.append(float(np.std(bg_pixels.astype(np.float64))))
 
                 if stds:
                     mean_std = float(np.mean(stds))

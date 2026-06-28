@@ -396,7 +396,16 @@ class SettingsWindow(QWidget):
         form.addRow("2-й прохід для кольорових (0=вимк, 1=повний):", self._spin_shadow_coarse_blend)
 
         self._cb_shadow_bgr_mode = QCheckBox()
-        form.addRow("BGR-алгоритм (краще для деяких документів):",
+        self._cb_shadow_bgr_mode.setToolTip(
+            "Обробляє кожен колірний канал окремо. "
+            "Краще для документів з рівномірним кольоровим фоном."
+        )
+        self._cb_shadow_bgr_mode.setToolTip(
+            "Обробляє кожен колірний канал (R, G, B) окремо.\n"
+            "Краще для документів з рівномірним кольоровим фоном\n"
+            "де стандартний режим залишає кольорові артефакти."
+        )
+        form.addRow("Канальний режим тіней (для складних випадків):",
                     self._cb_shadow_bgr_mode)
 
         # --- Ступінь однорідності фону (uniformity) ---
@@ -448,6 +457,32 @@ class SettingsWindow(QWidget):
             "Фото пейзажів/портретів зазвичай мають низьку uniformity."
         )
         form.addRow("Поріг для фото (видаляти >):", self._spin_uniformity_photo_high)
+
+        # --- Параметри детекції тіні на рівномірному фоні (Завдання 1.3) ---
+        unif_label = QLabel("Детекція тіні на рівномірному фоні")
+        unif_label.setStyleSheet("font-weight:bold; margin-top:8px;")
+        form.addRow(unif_label)
+
+        self._spin_uniform_std_threshold = QDoubleSpinBox()
+        self._spin_uniform_std_threshold.setRange(0.5, 20.0)
+        self._spin_uniform_std_threshold.setSingleStep(0.5)
+        self._spin_uniform_std_threshold.setDecimals(1)
+        _set_spinbox_minw(self._spin_uniform_std_threshold)
+        self._spin_uniform_std_threshold.setToolTip(
+            "Поріг стандартного відхилення для детекції тіні на рівномірному фоні.\n"
+            "Чим вище значення, тим чутливіша детекція."
+        )
+        form.addRow("Поріг std для детекції тіні на рівному фоні:", self._spin_uniform_std_threshold)
+
+        self._spin_uniform_block_size = QSpinBox()
+        self._spin_uniform_block_size.setRange(8, 64)
+        self._spin_uniform_block_size.setSingleStep(8)
+        _set_spinbox_minw(self._spin_uniform_block_size)
+        self._spin_uniform_block_size.setToolTip(
+            "Розмір блоку аналізу (px) для локального std.\n"
+            "Менший блок = детальніший аналіз, більший = швидше."
+        )
+        form.addRow("Розмір блоку аналізу (px):", self._spin_uniform_block_size)
 
         return box
 
@@ -790,6 +825,8 @@ class SettingsWindow(QWidget):
         self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
         self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
         self._spin_uniformity_photo_high.setValue(s.get("shadow_uniformity_photo_high", 0.65))
+        self._spin_uniform_std_threshold.setValue(s.get("shadow_uniform_std_threshold", 2.0))
+        self._spin_uniform_block_size.setValue(s.get("shadow_uniform_block_size", 32))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -880,6 +917,8 @@ class SettingsWindow(QWidget):
             "shadow_uniformity_low":     self._spin_uniformity_low.value(),
             "shadow_uniformity_high":    self._spin_uniformity_high.value(),
             "shadow_uniformity_photo_high": self._spin_uniformity_photo_high.value(),
+            "shadow_uniform_std_threshold": self._spin_uniform_std_threshold.value(),
+            "shadow_uniform_block_size":    int(self._spin_uniform_block_size.value()),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 

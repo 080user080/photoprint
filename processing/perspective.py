@@ -251,20 +251,31 @@ def _detect_with_rotation_candidates(gray: np.ndarray) -> np.ndarray | None:
             continue
         rh, rw = rotated.shape[:2]
         score = _score_quad(corners, rotated.shape)
+        # Завдання 1.2: бонус 10% для оригінальної орієнтації
+        if angle == 0:
+            score = score * 1.10
         if score <= best_score:
             continue
         # Перераховуємо координати назад у простір оригінального gray
         if angle == 0:
             back = corners
         elif angle == 90:
-            # (x, y) у rotated → (y, w - x) у оригіналі (де w = h оригіналу)
-            back = np.array([[c[1], w - c[0]] for c in corners], dtype=np.float32)
+            # ROTATE_90_CLOCKWISE: rotated має розміри (w, h) → rh=w, rw=h
+            # Зворотня трансформація: (x, y) у rotated → (rh-1-y, x) в оригіналі
+            back = np.array([[rh - 1 - c[1], c[0]] for c in corners], dtype=np.float32)
         elif angle == 180:
-            # (x, y) у rotated → (w - x, h - y) у оригіналі (rw==w, rh==h при 180°)
-            back = np.array([[w - c[0], h - c[1]] for c in corners], dtype=np.float32)
+            # ROTATE_180: rotated має розміри (h, w) → rh=h, rw=w
+            # Зворотня трансформація: (x, y) у rotated → (rw-1-x, rh-1-y) в оригіналі
+            back = np.array([[rw - 1 - c[0], rh - 1 - c[1]] for c in corners], dtype=np.float32)
         elif angle == 270:
-            # (x, y) у rotated → (h - y, x) у оригіналі
-            back = np.array([[h - c[1], c[0]] for c in corners], dtype=np.float32)
+            # ROTATE_90_COUNTERCLOCKWISE: rotated має розміри (w, h) → rh=w, rw=h
+            # Зворотня трансформація: (x, y) у rotated → (y, rw-1-x) в оригіналі
+            back = np.array([[c[1], rw - 1 - c[0]] for c in corners], dtype=np.float32)
+        # Завдання 1.3: валідація орієнтації квадрилатераля після _order_points
+        ordered_back = _order_points(back)
+        if not _is_clockwise(ordered_back):
+            logger.debug(f"_detect_with_rotation_candidates: angle={angle} — не за годинниковою стрілкою, відхиляємо")
+            continue
         best_score = score
         best_corners = back
 
@@ -760,6 +771,27 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def _is_clockwise(pts: np.ndarray) -> bool:
+    """
+    Перевіряє чи впорядковані точки [TL, TR, BR, BL] за годинниковою стрілкою.
+    Використовує знак cross product суми по 4-кутнику.
+    
+    Args:
+        pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL]
+    
+    Returns:
+        True якщо точки йдуть за годинниковою стрілкою
+    """
+    # Cross product sum для 4-кутника: (x1*y2 - x2*y1) + (x2*y3 - x3*y2) + ...
+    # > 0 = clockwise, < 0 = counter-clockwise
+    total = 0.0
+    n = len(pts)
+    for i in range(n):
+        j = (i + 1) % n
+        total += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1])
+    return total > 0
+
+
 def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
     Обчислює розміри вихідного зображення та dst-точки.
@@ -917,6 +949,7 @@ def auto_correct_iterative(
     image: np.ndarray,
     max_passes: int = ITERATIVE_MAX_PASSES,
     max_dim: int = MAX_ANALYSIS_DIM,
+    partial: bool = False,
 ) -> tuple[np.ndarray, int, float]:
     """
     Ітеративна перспективна корекція: до max_passes проходів warp.
@@ -929,6 +962,7 @@ def auto_correct_iterative(
         image: вхідне BGR зображення
         max_passes: максимальна кількість проходів (рекомендовано 2)
         max_dim: максимальний розмір для аналізу
+        partial: якщо True — використовує apply_partial_correction замість apply_correction
 
     Returns:
         (result, passes_done, final_skew_ratio)
@@ -986,7 +1020,7 @@ def auto_correct_iterative(
             break
 
         prev_quality = quality
-        candidate = apply_correction(current, corners)
+        candidate = apply_partial_correction(current, corners) if partial else apply_correction(current, corners)
         current = candidate
         passes_done += 1
 

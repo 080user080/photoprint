@@ -154,6 +154,14 @@ def run_autofix(
         else:
             logger.debug("run_autofix: кути не знайдено ДО обробки, спробуємо після")
 
+    # Завдання 4.1: color_cast ДО класифікації документа
+    # (після детекції кутів, але до класифікації)
+    _had_color_cast = False
+    result, _had_color_cast = color_cast.correct_color_cast(result)
+    if _had_color_cast:
+        log_entries.append({"step": "color_cast_pre", "applied": True,
+                            "detail": "відтінок нейтралізовано до класифікації"})
+
     # Спочатку визначаємо тип документа (до будь-якої обробки!)
     if doc_type is None:
         doc_type = doc_classifier.classify(
@@ -171,6 +179,13 @@ def run_autofix(
     _shadow_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
     _shadow_unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
     _shadow_unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
+
+    # Завдання 1.6: detect_face один раз на початку, щоб не викликати до 3 разів
+    from processing import diagnostics as _diag_face_once
+    _face_detected: bool | None = None
+    if doc_type != DocType.PHOTO.value:
+        # Фото перевіряється окремо всередині циклу
+        _face_detected = _diag_face_once.detect_face(result)
 
     # Проходимо циклом по фіксованому порядку кроків
     for step_key, _ in PIPELINE_STEPS_FIXED_ORDER:
@@ -206,6 +221,9 @@ def run_autofix(
                     # Фото документа на білому фоні (зроблене на телефон) має високу uniformity.
                     # Пейзажі, портрети — низьку uniformity, тому автоматично захищені.
                     _shadow_unif_high_photo = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
+                    # Завдання 4.2: знизити поріг для CAPTURE_PHONE
+                    if _capture_cond == CAPTURE_PHONE:
+                        _shadow_unif_high_photo = _shadow_unif_high_photo * 0.85
                     if _bg_uniformity > _shadow_unif_high_photo:
                         # Додаткова перевірка: якщо є обличчя — не видаляємо тіні
                         from processing import diagnostics as _diag_face_photo
@@ -238,8 +256,7 @@ def run_autofix(
                     # Однорідний фон bw_document / flat_background.
                     # Додаткова перевірка: якщо є обличчя — це документ з портретом,
                     # shadow_remove зіпсує фото особи.
-                    from processing import diagnostics as _diag_face
-                    if _diag_face.detect_face(result):
+                    if _face_detected:
                         _should_run = False
                         _reason = f"face_detected (uniformity={_bg_uniformity:.2f})"
                     else:
@@ -253,13 +270,17 @@ def run_autofix(
                     # Проміжний діапазон — тільки для bw_document,
                     # і тільки якщо немає обличчя
                     if doc_type == DocType.BW_DOCUMENT.value:
-                        from processing import diagnostics as _diag_face
-                        if _diag_face.detect_face(result):
-                            _should_run = False
-                            _reason = "face_detected (mid uniformity)"
-                        else:
+                        # Завдання 4.3: якщо був color cast — завжди запускаємо shadow_remove
+                        if _had_color_cast:
                             _should_run = True
-                            _reason = f"doc_type={doc_type}"
+                            _reason = f"bw_document + color_cast"
+                        else:
+                            if _face_detected:
+                                _should_run = False
+                                _reason = "face_detected (mid uniformity)"
+                            else:
+                                _should_run = True
+                                _reason = f"doc_type={doc_type}"
                 if _should_run:
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
@@ -284,8 +305,8 @@ def run_autofix(
                             a_bg = a_ch[bg_mask]
                             b_bg = b_ch[bg_mask]
                             # посилено з 0.3 до 0.7: відтінок телефонної камери потребує сильнішої корекції
-                            a_shift = (128.0 - float(np.median(a_bg))) * 0.7
-                            b_shift = (128.0 - float(np.median(b_bg))) * 0.7
+                            a_shift = (128.0 - float(np.median(a_bg.astype(np.float64)))) * 0.7
+                            b_shift = (128.0 - float(np.median(b_bg.astype(np.float64)))) * 0.7
                             a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
                             b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
                             merged = cv2.merge([l_ch, a_ch, b_ch])
@@ -377,7 +398,9 @@ def run_autofix(
         elif step_key == "sharpen":
             # Різкість застосовується згідно з типом документа
             if doc_type == DocType.BW_DOCUMENT.value:
-                result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
+                # Завдання 1.5: тільки sharpen, без auto_contrast+grayscale всередині
+                # (contrast і grayscale виконуються окремими кроками пізніше)
+                result = sharpen.apply(result, strength=sharpen_strength)
                 log_entries.append({"step": "sharpen", "applied": True, "detail": f"різкість {sharpen_strength:.2f}"})
                 if bw_binary:
                     log_entries.append({"step": "binary", "applied": True, "detail": "бінаризація"})
@@ -484,7 +507,8 @@ def run_perspective_auto_smart(
 
         if has_skewed:
             # Ітеративна корекція (до 2 проходів)
-            result, passes, final_skew = perspective.auto_correct_iterative(image)
+            _partial_val = settings.get("partial_perspective", False) if settings else False
+            result, passes, final_skew = perspective.auto_correct_iterative(image, partial=_partial_val)
             # Deskew після останнього warp
             angle = deskew_module.measure_skew_angle(result)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:

@@ -47,28 +47,35 @@ def apply(
     return result
 
 
-def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, binary: bool = False) -> np.ndarray:
+def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, do_binary: bool = False,
+                      skip_contrast: bool = False, skip_grayscale: bool = False) -> np.ndarray:
     """
     Pipeline для чорно-білих документів.
     Без HDR (щоб не псувати чіткість тексту).
     Послідовність: CLAHE → Auto-Contrast → Sharpen → Grayscale → [бінаризація].
     Параметр binary=False за замовчуванням (grayscale зберігає напівтони, бінаризація — чистий чорно-білий).
+
+    Args:
+        skip_contrast: якщо True — пропустити auto_contrast (для сумісності з pipeline, де contrast окремий крок)
+        skip_grayscale: якщо True — пропустити to_grayscale (для сумісності з pipeline, де grayscale окремий крок)
     """
     result = _step_lab_clahe_normalize(image, aggressive=True)  # Агресивний для ч-б
-    result = bc.auto_contrast(result)
+    if not skip_contrast:
+        result = bc.auto_contrast(result)
     result = sharpen_module.apply(result, strength=sharpen_strength)
-    result = bc.to_grayscale(result)
+    if not skip_grayscale:
+        result = bc.to_grayscale(result)
 
-    if binary:
+    if do_binary:
         # Адаптивна бінаризація: збереже текст навіть при нерівному освітленні
         # adaptiveThreshold очікує grayscale (1 канал)
         gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        binary = cv2.adaptiveThreshold(gray, BINARY_MAX_VALUE,
-                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv2.THRESH_BINARY,
-                                     BINARY_BLOCK_SIZE, BINARY_C)
+        bin_img = cv2.adaptiveThreshold(gray, BINARY_MAX_VALUE,
+                                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY,
+                                        BINARY_BLOCK_SIZE, BINARY_C)
         # Конвертуємо назад у BGR для сумісності з pipeline
-        result = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        result = cv2.cvtColor(bin_img, cv2.COLOR_GRAY2BGR)
     return result
 
 
@@ -107,7 +114,7 @@ def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool = True) -> np.
 
     if aggressive:
         # Агресивний normalize — тільки для ч-б документів
-        l_norm = cv2.normalize(l_clahe, None, 0, 255, cv2.NORM_MINMAX)
+        l_norm = cv2.normalize(l_clahe, np.empty_like(l_clahe), 0, 255, cv2.NORM_MINMAX)
     else:
         # Фото/кольорові документи: CLAHE-ефект застосовуємо тільки там,
         # де є реальна локальна деталізація. На плоских/світлих ділянках

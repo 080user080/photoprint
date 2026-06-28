@@ -112,13 +112,15 @@ class BatchProcessor:
         self,
         on_progress: Callable[[int, int, str], None] | None = None,
         on_error:    Callable[[int, str, str], None] | None = None,
+        on_print_progress: Callable[[int, int, str], None] | None = None,
     ) -> int:
         """
         Паралельна обробка файлів через ThreadPoolExecutor.
         Фаза 1: завантаження + pipeline — паралельно (N потоків).
         Фаза 2: друк — послідовно в порядку черги (щоб зберегти порядок).
 
-        on_progress(current_1based, total, filename)
+        on_progress(current_1based, total, filename)     — для фази 1 (обробка)
+        on_print_progress(current_1based, total, filename) — для фази 2 (друк)
         on_error(index, filename, message)
         Повертає кількість успішно надрукованих.
         """
@@ -182,7 +184,7 @@ class BatchProcessor:
 
         # --- Фаза 1: паралельна обробка ---
         # results_map: idx -> (path, processed_image | Exception)
-        results_map: dict[int, tuple[str, object]] = {}
+        results_map: dict[int, tuple[str, np.ndarray | Exception]] = {}
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             future_to_idx: dict[Future, int] = {
@@ -215,6 +217,10 @@ class BatchProcessor:
             if isinstance(result, Exception):
                 continue   # вже повідомили через on_error
 
+            # Завдання 2.4: прогрес друку
+            if on_print_progress:
+                on_print_progress(i + 1, total, filename)
+
             processed = result
             try:
                 printer_module.print_image(
@@ -231,7 +237,7 @@ class BatchProcessor:
                     on_error(i, filename, str(exc))
             finally:
                 del processed
-                results_map[i] = (path, None)   # звільняємо пам'ять
+                del results_map[i]   # звільняємо пам'ять
 
         self._index = total
         return printed

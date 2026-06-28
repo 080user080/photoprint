@@ -13,6 +13,8 @@ from typing import Optional, Dict, Any
 import numpy as np
 import cv2
 
+from PyQt6.QtWidgets import QSizePolicy
+
 # OpenCV threading / OpenCL (Task 3)
 cv2.setNumThreads(cv2.getNumberOfCPUs())
 if cv2.ocl.haveOpenCL():
@@ -72,9 +74,10 @@ MODE_MANUAL_ID = 1
 # ---------------------------------------------------------------------------
 
 class AutoWorker(QObject):
-    progress = pyqtSignal(int, int, str)   # (1-based index, total, filename)
-    error    = pyqtSignal(int, str, str)   # (index, filename, message)
-    finished = pyqtSignal(int)             # кількість надрукованих
+    progress = pyqtSignal(int, int, str)        # (1-based index, total, filename) — фаза 1 (обробка)
+    print_progress = pyqtSignal(int, int, str) # (1-based index, total, filename) — фаза 2 (друк)
+    error    = pyqtSignal(int, str, str)        # (index, filename, message)
+    finished = pyqtSignal(int)                  # кількість надрукованих
 
     def __init__(self, processor: BatchProcessor):
         super().__init__()
@@ -83,6 +86,7 @@ class AutoWorker(QObject):
     def run(self):
         count = self._p.run_auto(
             on_progress=lambda c, t, f: self.progress.emit(c, t, f),
+            on_print_progress=lambda c, t, f: self.print_progress.emit(c, t, f),
             on_error=lambda i, f, m: self.error.emit(i, f, m),
         )
         self.finished.emit(count)
@@ -151,6 +155,18 @@ class MainWindow(QMainWindow):
         # Завантажуємо розмір вікна та ширину черги
         self._load_window_geometry()
 
+        # Завдання 2.1: Debounce для слайдерів
+        self._controls_timer = QTimer()
+        self._controls_timer.setSingleShot(True)
+        self._controls_timer.setInterval(120)
+        self._controls_timer.timeout.connect(self._on_controls_changed_debounced)
+
+        # Завдання 2.2: Відкладене збереження геометрії
+        self._save_geometry_timer = QTimer()
+        self._save_geometry_timer.setSingleShot(True)
+        self._save_geometry_timer.setInterval(1000)
+        self._save_geometry_timer.timeout.connect(self._save_window_geometry)
+
         # Трей-іконка (PRIO 9)
         self._tray_icon: Optional[QSystemTrayIcon] = None
         self._setup_tray()
@@ -212,15 +228,79 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """
-        Перевизначення closeEvent:
+        Перевизначення closeEvent (Завд. 2.3):
+        - Показуємо QProgressDialog асинхронно, не блокуємо GUI.
         - Якщо minimize_to_tray == True — ховаємо в трей.
-        - Інакше — завершуємо програму.
         """
-        image_utils.preview_cache_clear()  # очищуємо кеш прев'ю при закритті
+        image_utils.preview_cache_clear()
         
-        # Чекаємо завершення активних потоків перед закриттям
-        self._wait_for_threads()
+        # Завдання 2.3: асинхронне очікування потоків
+        if self._has_running_threads():
+            from PyQt6.QtWidgets import QProgressDialog
+            self._close_progress = QProgressDialog(
+                "Завершення обробки...", "Примусово закрити", 0, 0, self
+            )
+            self._close_progress.setWindowTitle("Завершення роботи")
+            self._close_progress.setCancelButtonText("Примусово закрити")
+            self._close_progress.canceled.connect(self._force_close)
+            self._close_progress.show()
+            self._close_start_time = QTimer()  # зберігаємо час початку очікування
+            import time
+            self._close_start_ms = int(time.time() * 1000)  # ms timestamp
+            event.ignore()
+            QTimer.singleShot(100, self._check_threads_and_close)
+            return
         
+        self._do_close(event)
+
+    def _has_running_threads(self) -> bool:
+        """Перевіряє чи є активні фонові потоки."""
+        auto_running = (hasattr(self, '_auto_thread') and self._auto_thread is not None 
+                        and self._auto_thread.isRunning())
+        single_running = (hasattr(self, '_single_thread') and self._single_thread is not None 
+                          and self._single_thread.isRunning())
+        return auto_running or single_running
+
+    def _check_threads_and_close(self):
+        """Завдання 2.3: перевіряє чи завершились потоки, закриває коли готово."""
+        import time
+        elapsed = int(time.time() * 1000) - self._close_start_ms
+        
+        if not self._has_running_threads():
+            # Потоки завершились — закриваємо
+            if hasattr(self, '_close_progress') and self._close_progress is not None:
+                self._close_progress.close()
+                self._close_progress = None
+            self._do_close(None)
+            return
+        
+        if elapsed > 5000:
+            # Минуло >5с — примусово
+            self._logger.warning("Завдання 2.3: примусове закриття через 5с таймаут")
+            self._force_close()
+            return
+        
+        # Ще чекаємо
+        QTimer.singleShot(100, self._check_threads_and_close)
+
+    def _force_close(self):
+        """Примусове закриття — зупиняємо потоки та закриваємо."""
+        self._logger.info("_force_close: примусове завершення потоків")
+        if hasattr(self, '_close_progress') and self._close_progress is not None:
+            self._close_progress.close()
+            self._close_progress = None
+        
+        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
+            self._auto_thread.requestInterruption()
+            self._auto_thread.quit()
+            self._auto_thread.wait(1000)
+        if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
+            self._cleanup_single_thread()
+        
+        QApplication.quit()
+
+    def _do_close(self, event):
+        """Фактичне закриття — зберігаємо геометрію та закриваємо."""
         if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
             self._save_window_geometry()
             self.hide()
@@ -230,25 +310,18 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,
             )
-            event.ignore()
+            if event is not None:
+                event.ignore()
         else:
             self._save_window_geometry()
-            event.accept()
+            if event is not None:
+                event.accept()
+            else:
+                QApplication.quit()
 
     def _wait_for_threads(self):
-        """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
-        # Чекаємо на авто-потік (пакетний режим)
-        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
-            self._logger.info("Очікування завершення AutoWorkerThread...")
-            self._auto_thread.requestInterruption()
-            self._auto_thread.quit()
-            if not self._auto_thread.wait(5000):
-                self._logger.warning("AutoWorkerThread не завершився за 5с")
-        
-        # Чекаємо на single-image потік
-        if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
-            self._logger.info("Очікування завершення SingleImageWorkerThread...")
-            self._cleanup_single_thread()
+        """Завдання 2.3: застарілий синхронний метод — тепер не використовується."""
+        pass
 
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
@@ -350,7 +423,8 @@ class MainWindow(QMainWindow):
         center.setSpacing(CENTER_LAYOUT_SPACING)
 
         self._preview = PreviewPanel()
-        self._preview.perspective_points_changed.connect(self._on_persp_pts)
+        self._preview.perspective_points_changed.connect(self._on_persp_pts_light)
+        self._preview.perspective_points_released.connect(self._on_persp_pts_heavy)
 
         self._progress = QProgressBar()
         self._progress.setVisible(False)
@@ -566,9 +640,9 @@ class MainWindow(QMainWindow):
         app_settings.save(self._settings)
 
     def resizeEvent(self, event):
-        """Перевизначення resizeEvent для збереження розміру вікна."""
+        """Перевизначення resizeEvent — відкладене збереження через таймер (Завд. 2.2)."""
         super().resizeEvent(event)
-        self._save_window_geometry()
+        self._save_geometry_timer.start()
 
     def _on_shadow_mode_changed(self, btn_id: int):
         """Зміна режиму видалення тіней через радіокнопки."""
@@ -582,7 +656,7 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, s: dict):
         self._settings = s
         self._processor = BatchProcessor(self._settings)
-        self._processor.set_files(self._queue.get_all_paths())
+        self._sync_processor_with_queue()
         self._apply_default_mode()
         self._apply_background_color()
         self._apply_preview_colors()
@@ -597,6 +671,10 @@ class MainWindow(QMainWindow):
     # Черга
     # ------------------------------------------------------------------
 
+    def _sync_processor_with_queue(self):
+        """Завдання 2.5: синхронізує _processor з _queue."""
+        self._processor.set_files(self._queue.get_all_paths())
+
     def _on_files_added(self, paths: list[str]):
         """Спільний обробник після додавання файлів будь-яким способом."""
         supported = file_utils.filter_supported(paths)
@@ -604,7 +682,7 @@ class MainWindow(QMainWindow):
             self._set_status("Жоден з файлів не підтримується")
             return
         was_empty = self._processor.total == 0
-        self._processor.add_files(supported)
+        # Завдання 2.5: не оновлюємо _processor тут, тільки чергу
         self._set_status(
             f"Додано {len(supported)} файл(ів). Всього у черзі: {self._processor.total}"
         )
@@ -679,6 +757,12 @@ class MainWindow(QMainWindow):
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
         try:
+            # Завдання 2.1: зупиняємо попередній фоновий потік, якщо ще виконується
+            if self._single_thread is not None and self._single_thread.isRunning():
+                self._logger.warning("_on_queue_selection: попередній потік ще виконується — очищуємо")
+                self._cleanup_single_thread()
+            # Завдання 2.2: очищуємо кеш прев'ю перед завантаженням нового файлу
+            image_utils.preview_cache_clear()
             # Скидаємо режим редагування перспективи для попереднього зображення
             self._preview.disable_perspective_edit()
             self._store_current_settings()
@@ -730,6 +814,8 @@ class MainWindow(QMainWindow):
         s = self._settings
         vals = self._controls.values()
         base_snapshot = self._base.copy()   # знімок щоб не передавати self в інший потік
+        # Завдання 2.3: зберігаємо _current_path на момент запуску
+        path_snapshot = self._current_path
 
         def _work():
             if s.get("autofix_enabled", True):
@@ -768,6 +854,10 @@ class MainWindow(QMainWindow):
 
         def _on_done(payload):
             result, status_msg, log_entries = payload
+            # Завдання 2.3: ігноруємо результат, якщо файл вже змінився
+            if self._current_path != path_snapshot:
+                self._logger.debug("_do_autofix_classic: файл змінився, ігноруємо застарілий результат")
+                return
             self._base = result.copy()      # <-- ФІКСУЄМО в _base
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -792,6 +882,11 @@ class MainWindow(QMainWindow):
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
     def _on_controls_changed(self, vals: dict = None):
+        """Завдання 2.1: Debounce — тільки запускає таймер, не обробляє негайно.
+        При reset_all викликається безпосередньо."""
+        self._controls_timer.start()
+
+    def _on_controls_changed_debounced(self, vals: dict = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
         if self._base is None and self._base_for_perspective is None:
             return
@@ -906,6 +1001,7 @@ class MainWindow(QMainWindow):
         self._run_in_background(_work, _on_done)
 
     def _do_persp_auto(self):
+        # Завдання 3.5: фіксуємо розмір панелей (буде розморожено при скиданні перспективи)
         """Авто-детекція перспективи: коміт попередньої, знімок, авто, показ результатів."""
         if self._orig is None or self._base is None:
             return
@@ -955,6 +1051,11 @@ class MainWindow(QMainWindow):
                 # straight/corrected: показати кути, увійти в perspective-режим
                 corners = corners_before if corners_before is not None else pipeline.detect_corners(result)
                 if corners is not None:
+                    # Завдання 3.3: валідація точок у межах зображення
+                    if not self._validate_corners_in_bounds(corners, self._base_for_perspective):
+                        self._logger.debug("_do_persp_auto: кути поза межами, fallback до default")
+                        corners = self._default_perspective_corners(self._base_for_perspective)
+                        status = "Документ не знайдено — встановіть точки вручну (auto-detect поза межами)"
                     self._perspective_corners = corners.copy()
                     self._show_perspective_points(corners, status)
                 else:
@@ -963,6 +1064,8 @@ class MainWindow(QMainWindow):
                     self._set_status(status)
                 # Оновлюємо BEFORE з джерелом
                 prev_source = image_utils.make_preview(self._base_for_perspective)
+                # Завдання 3.5: фіксуємо розмір панелей (якщо увійшли в перспективу)
+                self._freeze_preview_panels()
                 self._preview.set_before(prev_source)
                 # Результат (perspective applied) — показуємо на AFTER
                 self._processed = result
@@ -1002,6 +1105,18 @@ class MainWindow(QMainWindow):
             dtype=np.float32,
         )
 
+    def _freeze_preview_panels(self) -> None:
+        """Фіксує розмір панелей прев'ю під час редагування перспективи (Завд. 3.5)."""
+        for panel in (self._preview._before, self._preview._after):
+            panel.setFixedSize(panel.size())
+
+    def _unfreeze_preview_panels(self) -> None:
+        """Відновлює автоматичний ресайз панелей прев'ю (Завд. 3.5)."""
+        for panel in (self._preview._before, self._preview._after):
+            panel.setMinimumSize(280, 280)
+            panel.setMaximumSize(16777215, 16777215)
+            panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
     def _show_perspective_points(
         self, corners: np.ndarray, status_msg: str
     ) -> None:
@@ -1015,6 +1130,14 @@ class MainWindow(QMainWindow):
         pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
         self._preview.enable_perspective_edit(pts)
         self._set_status(status_msg)
+
+    def _validate_corners_in_bounds(self, corners: np.ndarray, image: np.ndarray) -> bool:
+        """Перевіряє чи всі кути в межах [-20%, 120%] розміру зображення."""
+        h, w = image.shape[:2]
+        for c in corners:
+            if c[0] < -w * 0.2 or c[0] > w * 1.2 or c[1] < -h * 0.2 or c[1] > h * 1.2:
+                return False
+        return True
 
     def _default_perspective_corners(self, image: np.ndarray) -> np.ndarray:
         """Повертає кути 80% центру зображення (10% відступ з кожного краю)."""
@@ -1071,8 +1194,21 @@ class MainWindow(QMainWindow):
                 corners = self._default_perspective_corners(self._base_for_perspective)
                 status = "Встановіть кути вручну (документ не знайдено)"
         else:
-            status = "Тягніть кути для корекції перспективи" + \
-                " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
+            # Завдання 7.1: валідація — чи точки в межах [-20%, 120%] від розмірів зображення
+            h_img, w_img = self._base_for_perspective.shape[:2]
+            x_min, y_min = corners.min(axis=0)
+            x_max, y_max = corners.max(axis=0)
+            margin_x = int(w_img * 0.20)
+            margin_y = int(h_img * 0.20)
+            # Якщо точки виходять за межі — fallback до default
+            if (x_min < -margin_x or x_max > w_img - 1 + margin_x or
+                y_min < -margin_y or y_max > h_img - 1 + margin_y):
+                self._logger.debug("_do_persp_manual: точки за межами +-20%, fallback до default")
+                corners = self._default_perspective_corners(self._base_for_perspective)
+                status = "Документ не знайдено — встановіть точки вручну (auto-detect поза межами)"
+            else:
+                status = "Тягніть кути для корекції перспективи" + \
+                    " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
         # Зберігаємо кути у просторі зображення
         self._perspective_corners = corners
         # Оновлюємо BEFORE: показуємо джерело (до перспективи)
@@ -1087,6 +1223,8 @@ class MainWindow(QMainWindow):
             self._preview.set_after(image_utils.make_preview(persp_result))
         except Exception:
             self._preview.set_after(prev_source)
+        # Завдання 3.5: фіксуємо розмір панелей
+        self._freeze_preview_panels()
         # Виставляємо точки на BEFORE
         pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
         self._preview.enable_perspective_edit(pts)
@@ -1112,6 +1250,8 @@ class MainWindow(QMainWindow):
         self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
+        # Завдання 3.5: розморожуємо панелі
+        self._unfreeze_preview_panels()
         self._perspective_corners = None  # скидаємо збережені кути
         self._perspective_cached_result = None
         self._set_status("Перспективу скинуто")
@@ -1136,8 +1276,17 @@ class MainWindow(QMainWindow):
         # Зберігаємо скинуті налаштування для поточного файлу
         self._store_current_settings()
 
-    def _on_persp_pts(self, points: list) -> None:
-        """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
+    def _on_persp_pts_light(self, points: list) -> None:
+        """Завдання 3.1: Легкий обробник — тільки перемальовка точок на BEFORE.
+        Викликається при кожному mousemove (points_changed)."""
+        if self._base_for_perspective is None or len(points) != 4:
+            return
+        # Тільки оновлюємо відображення точок (self._before.update() вже викликано)
+        # Ніяких важких обчислень
+
+    def _on_persp_pts_heavy(self, points: list) -> None:
+        """Завдання 3.1: Важкий обробник — запускає pipeline.
+        Викликається тільки при mouseRelease (points_released)."""
         if self._base_for_perspective is None or len(points) != 4:
             return
         try:
@@ -1297,6 +1446,7 @@ class MainWindow(QMainWindow):
         self._worker.moveToThread(self._auto_thread)
         self._auto_thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_auto_progress)
+        self._worker.print_progress.connect(self._on_auto_print_progress)
         self._worker.error.connect(self._on_auto_error)
         self._worker.finished.connect(self._on_auto_done)
         self._worker.finished.connect(self._auto_thread.quit)
@@ -1304,10 +1454,14 @@ class MainWindow(QMainWindow):
         self._auto_thread.start()
 
     def _on_auto_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 1 (обробка)."""
         self._progress.setValue(cur)
-        # При паралельній обробці не знаємо точний індекс —
-        # просто оновлюємо статус без позначення конкретного рядка
-        self._set_status(f"Оброблено {cur}/{total}: {fname}")
+        self._set_status(f"Обробка {cur}/{total}: {fname}")
+
+    def _on_auto_print_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 2 (друк)."""
+        self._progress.setValue(total + cur)  # total = offset після фази 1
+        self._set_status(f"Друк {cur}/{total}: {fname}")
 
     def _on_auto_error(self, idx: int, fname: str, msg: str):
         self._queue.mark_error(idx)

@@ -46,6 +46,7 @@ class _SliderRow(QWidget):
         super().__init__(parent)
         self._min = min_val
         self._max = max_val
+        self._default = default
         self._scale = SLIDER_SCALE
 
         layout = QHBoxLayout(self)
@@ -97,7 +98,7 @@ class _SliderRow(QWidget):
             self._slider.blockSignals(False)
 
     def reset(self) -> None:
-        self.set_value(0.0, silent=True)
+        self.set_value(self._default, silent=True)
 
 
 class ControlsPanel(QWidget):
