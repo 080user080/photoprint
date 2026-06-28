@@ -51,7 +51,7 @@ PADDING_RATIO = 0.06  # 6% від розміру з кожного боку
 # 0.03 (3%) — для документа 800px поріг ~24px.
 # Значення 0.01 (1%) було надто чутливим: шум детекції кутів (>8px)
 # спричиняв хибне спрацювання warp на рівних документах.
-PARTIAL_SKEW_THRESHOLD_RATIO = 0.03  # 3% від ширини/висоти документа
+PARTIAL_SKEW_THRESHOLD_RATIO = 0.015  # знижено з 0.03: телефонні фото мають невелике але реальне викривлення
 
 # ---- Нові константи (PRIO 3) ----
 
@@ -85,7 +85,7 @@ HOUGH_THETA = np.pi / 180
 HOUGH_THRESHOLD_LINES = 80        # мінімальна кількість голосів
 HOUGH_MIN_LINE_LENGTH_RATIO = 0.15 # мінімальна довжина лінії = 15% від min(h,w)
 HOUGH_MAX_LINE_GAP = 20
-HOUGH_ANGLE_TOLERANCE_DEG = 15.0   # допуск: лінія вважається "горизонтальною" або "вертикальною"
+HOUGH_ANGLE_TOLERANCE_DEG = 20.0   # допуск: лінія вважається "горизонтальною" або "вертикальною"; збільшено з 15° для повернутих зображень
 HOUGH_MARGIN_RATIO = 0.03          # відступ від краю кадру для фільтрації країв рамки
 
 # Ітеративне уточнення
@@ -129,7 +129,7 @@ def auto_detect_corners(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> n
         logger.debug(f"auto_detect_corners: resize не потрібен")
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    corners_small = _detect_corners_impl(gray)
+    corners_small = _detect_with_rotation_candidates(gray)
 
     if corners_small is None:
         logger.debug("auto_detect_corners: кути не знайдено")
@@ -185,65 +185,90 @@ def auto_correct(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> tuple[np
 def _detect_corners_impl(gray: np.ndarray) -> np.ndarray | None:
     """
     Внутрішня функція — шукає кути на зображенні ~800px.
-    Спроби в порядку надійності + CLAHE-версії при нерівному освітленні.
+    Збирає всі кандидати з множинних методів, оцінює через _score_quad,
+    повертає найкращого. Fallback — найбільший контур.
     """
-    logger.debug("_detect_corners_impl: початок пошуку кутів")
+    logger.debug("_detect_corners_impl: початок пошуку кутів (scoring-based)")
 
-    # Спроба 1: Adaptive Threshold (для ч-б документів)
-    corners = _try_adaptive_threshold(gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через Adaptive Threshold")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
-
-    logger.debug("_detect_corners_impl: Adaptive Threshold не знайшов, пробуємо Canny")
-
-    # Спроба 2: Canny Edge Detection (для кольорових/фото)
-    corners = _try_canny(gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через Canny")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
-
-    logger.debug("_detect_corners_impl: Canny не знайшов, пробуємо CLAHE + Adaptive Threshold")
-
-    # Спроба 1b: CLAHE + Adaptive Threshold (для нерівного освітлення)
     clahe_gray = _apply_clahe(gray)
-    corners = _try_adaptive_threshold(clahe_gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через CLAHE + Adaptive Threshold")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
+    candidates = []  # list[tuple[score, corners]]
 
-    logger.debug("_detect_corners_impl: CLAHE + Adaptive Threshold не знайшов, пробуємо CLAHE + Canny")
+    methods = [
+        ("adaptive",        lambda g: _try_adaptive_threshold(g)),
+        ("canny",           lambda g: _try_canny(g)),
+        ("clahe+adaptive",  lambda g: _try_adaptive_threshold(clahe_gray)),
+        ("clahe+canny",     lambda g: _try_canny(clahe_gray)),
+        ("hough",           lambda g: _try_hough_lines(g)),
+        ("external_contour", lambda g: _try_external_contour(g)),
+    ]
 
-    # Спроба 2b: CLAHE + Canny (для нерівного освітлення)
-    corners = _try_canny(clahe_gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через CLAHE + Canny")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
+    for name, fn in methods:
+        corners = fn(gray)
+        if corners is not None:
+            score = _score_quad(corners, gray.shape)
+            if score > 0.0:
+                refined = _refine_corners_subpix(gray, corners)
+                candidates.append((score, refined))
+                logger.debug(f"_detect_corners_impl: {name} score={score:.3f}")
 
-    logger.debug("_detect_corners_impl: CLAHE+Canny не знайшов, пробуємо Hough Lines")
+    if not candidates:
+        # Fallback: largest contour
+        logger.debug("_detect_corners_impl: жоден метод не знайшов, пробуємо fallback bounding box")
+        corners = _try_largest_contour(gray)
+        if corners is not None:
+            refined = _refine_corners_subpix(gray, corners)
+            return refined
+        logger.debug("_detect_corners_impl: жоден метод не знайшов кути")
+        return None
 
-    # Спроба 3: Hough Lines (новий метод)
-    corners = _try_hough_lines(gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через Hough Lines")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
+    # Повертаємо кандидата з найвищим скором
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_corners = candidates[0]
+    logger.debug(f"_detect_corners_impl: вибрано score={best_score:.3f} з {len(candidates)} кандидатів")
+    return best_corners
 
-    logger.debug("_detect_corners_impl: Hough не знайшов, пробуємо fallback bounding box")
 
-    # Спроба 4: Fallback — найбільший bounding box
-    corners = _try_largest_contour(gray)
-    if corners is not None:
-        logger.debug("_detect_corners_impl: кути знайдено через fallback bounding box")
-        corners = _refine_corners_subpix(gray, corners)
-        return corners
+def _detect_with_rotation_candidates(gray: np.ndarray) -> np.ndarray | None:
+    """
+    Пробує детекцію для 4 орієнтацій зображення (0°, 90°, 180°, 270°).
+    Якщо знаходить кути — перераховує їх координати назад у простір оригіналу.
+    Повертає найкращий результат або None.
+    """
+    h, w = gray.shape[:2]
+    best_score = 0.0
+    best_corners = None
 
-    logger.debug("_detect_corners_impl: жоден метод не знайшов кути")
-    return None
+    rotations = [
+        (0,   gray),
+        (90,  cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)),
+        (180, cv2.rotate(gray, cv2.ROTATE_180)),
+        (270, cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+    ]
+
+    for angle, rotated in rotations:
+        corners = _detect_corners_impl(rotated)
+        if corners is None:
+            continue
+        rh, rw = rotated.shape[:2]
+        score = _score_quad(corners, rotated.shape)
+        if score <= best_score:
+            continue
+        # Перераховуємо координати назад у простір оригінального gray
+        if angle == 0:
+            back = corners
+        elif angle == 90:
+            # (x, y) у rotated → (y, w - x) у оригіналі (де w = h оригіналу)
+            back = np.array([[c[1], w - c[0]] for c in corners], dtype=np.float32)
+        elif angle == 180:
+            # (x, y) у rotated → (w - x, h - y) у оригіналі (rw==w, rh==h при 180°)
+            back = np.array([[w - c[0], h - c[1]] for c in corners], dtype=np.float32)
+        elif angle == 270:
+            # (x, y) у rotated → (h - y, x) у оригіналі
+            back = np.array([[h - c[1], c[0]] for c in corners], dtype=np.float32)
+        best_score = score
+        best_corners = back
+
+    return best_corners
 
 
 def _try_adaptive_threshold(gray: np.ndarray) -> np.ndarray | None:
@@ -484,6 +509,22 @@ def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
     return corners
 
 
+def _try_external_contour(gray: np.ndarray) -> np.ndarray | None:
+    """
+    Fallback для документів з багатою внутрішньою текстурою (гільош, орнамент).
+    Використовує сильне розмиття щоб прибрати внутрішню текстуру,
+    залишаючи тільки зовнішні межі документа.
+    """
+    # Сильне розмиття прибирає внутрішній орнамент
+    blurred = cv2.GaussianBlur(gray, (31, 31), 0)
+    # Otsu threshold шукає глобальний розподіл (документ vs фон)
+    _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Морфологія для закриття дрібних прогалин
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return _find_quad_contour(closed, gray.shape)
+
+
 def _cluster_parallel_lines(
     lines: list,
     axis: str,
@@ -650,7 +691,8 @@ def _find_quad_contour(binary: np.ndarray, gray_shape: tuple) -> np.ndarray | No
             continue
 
         # Border-перевірка (контур не має торкатись межі кадру, якщо площа велика)
-        if _touches_image_border(cnt, gray_shape) and area > image_area * MAX_BORDER_AREA_RATIO:
+        # пом'якшено: документ може торкатись країв кадру
+        if _touches_image_border(cnt, gray_shape) and area > image_area * 0.98:
             continue
 
         # Адаптивний epsilon: пробуємо кілька значень
@@ -713,8 +755,8 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     rect[0] = pts[np.argmin(s)]   # TL — мінімальна сума x+y
     rect[2] = pts[np.argmax(s)]   # BR — максимальна сума x+y
     diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]  # TR — мінімальна різниця y-x
-    rect[3] = pts[np.argmax(diff)]  # BL — максимальна різниця y-x
+    rect[1] = pts[np.argmax(diff)]  # TR — максимальна x - y
+    rect[3] = pts[np.argmin(diff)]  # BL — мінімальна x - y
     return rect
 
 
@@ -954,6 +996,52 @@ def auto_correct_iterative(
         )
 
     return current, passes_done, skew_ratio if passes_done > 0 else 0.0
+
+
+def _score_quad(pts: np.ndarray, image_shape: tuple) -> float:
+    """
+    Скоринг знайденого квадрилатераля: 0.0 (поганий) → 1.0 (ідеальний).
+    Критерії: площа, кути ~90°, відступ від краю.
+    """
+    h, w = image_shape[:2]
+    image_area = float(h * w)
+    ordered = _order_points(pts.astype(np.float32))
+    tl, tr, br, bl = ordered
+
+    # Площа: 15–85% кадру = ідеально
+    area = float(cv2.contourArea(ordered))
+    ratio = area / image_area
+    if ratio < 0.10 or ratio > MAX_QUAD_AREA_RATIO:
+        return 0.0
+    # Пік скору на ratio ≈ 0.60 (вище для телефонних фото де документ займає більше кадру)
+    area_score = 1.0 - abs(ratio - 0.60) / 0.37
+
+    # Кути між сторонами: ближче до 90° = краще
+    sides = [tr - tl, br - tr, bl - br, tl - bl]
+    angle_devs = []
+    for i in range(4):
+        v1 = sides[i].astype(np.float64)
+        v2 = sides[(i + 1) % 4].astype(np.float64)
+        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if n1 < 1.0 or n2 < 1.0:
+            return 0.0
+        cos_a = np.clip(np.dot(v1, v2) / (n1 * n2), -1.0, 1.0)
+        angle = float(np.degrees(np.arccos(cos_a)))
+        angle_devs.append(abs(angle - 90.0))
+    angle_score = 1.0 - float(np.mean(angle_devs)) / 45.0
+    angle_score = max(0.0, angle_score)
+
+    # Відступ від краю: кути не мають торкатися кадру
+    margin = 0.04
+    pts_xs = [tl[0], tr[0], br[0], bl[0]]
+    pts_ys = [tl[1], tr[1], br[1], bl[1]]
+    touches_edge = (
+        min(pts_xs) < w * margin or max(pts_xs) > w * (1 - margin) or
+        min(pts_ys) < h * margin or max(pts_ys) > h * (1 - margin)
+    )
+    margin_score = 0.6 if touches_edge else 1.0
+
+    return area_score * 0.45 + angle_score * 0.45 + margin_score * 0.10
 
 
 # ---------------------------------------------------------------------------

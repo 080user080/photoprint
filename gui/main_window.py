@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self._single_worker: Optional[SingleImageWorker] = None
         self._single_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
+        self._perspective_cached_result: Optional[np.ndarray] = None  # кеш perspective для слайдерів
         self._drop_filter: Optional[DropEventFilter] = None
         self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
         self._per_file: Dict[str, Dict[str, Any]] = {}  # збережені налаштування слайдерів по файлу
@@ -413,13 +414,6 @@ class MainWindow(QMainWindow):
             b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
-        self._btn_apply_perspective = QPushButton("✔ Застосувати перспективу")
-        self._btn_apply_perspective.setObjectName("btn_apply_perspective")
-        self._btn_apply_perspective.setFixedHeight(BUTTON_HEIGHT)
-        self._btn_apply_perspective.setStyleSheet(self._btn_style("#2E7A3A"))
-        self._btn_apply_perspective.clicked.connect(self._do_apply_perspective)
-        self._btn_apply_perspective.setVisible(False)
-
         # Група радіокнопок для режиму тіней
         shadow_group_widget = QWidget()
         shadow_layout = QHBoxLayout(shadow_group_widget)
@@ -463,7 +457,6 @@ class MainWindow(QMainWindow):
 
         buttons_row.addWidget(self._btn_autofix)
         buttons_row.addWidget(shadow_group_widget)
-        buttons_row.addWidget(self._btn_apply_perspective)
         buttons_row.addWidget(self._btn_print)
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
@@ -648,6 +641,8 @@ class MainWindow(QMainWindow):
         self._base_for_perspective = None
         self._processed = None
         self._perspective_corners = None  # скидаємо кути перспективи
+        self._perspective_cached_result = None
+        self._preview.disable_perspective_edit()
         self._current_path = None
         self._per_file.clear()
         image_utils.preview_cache_clear()
@@ -714,16 +709,6 @@ class MainWindow(QMainWindow):
     def _do_autofix(self):
         self._do_autofix_classic()
 
-    def _do_apply_perspective(self):
-        if self._processed is not None:
-            self._base = self._processed.copy()
-            self._base_for_perspective = None
-            self._preview.disable_perspective_edit()
-            self._btn_apply_perspective.setVisible(False)
-            self._on_controls_changed()
-            self._update_buttons()
-            self._set_status("Перспективу застосовано")
-
     def _do_autofix_classic(self):
         if self._orig is None:
             self._set_status("Спочатку оберіть файл")
@@ -731,6 +716,16 @@ class MainWindow(QMainWindow):
         if self._single_thread is not None and self._single_thread.isRunning():
             self._logger.warning("AutoFix: попередній потік ще виконується — чекаємо завершення")
             self._cleanup_single_thread()
+
+        # Commit перспективи перед autofix
+        if self._base_for_perspective is not None and self._perspective_corners is not None:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
+            self._base_for_perspective = None
+            self._perspective_corners = None
+            self._perspective_cached_result = None
+            self._preview.disable_perspective_edit()
 
         s = self._settings
         vals = self._controls.values()
@@ -798,12 +793,26 @@ class MainWindow(QMainWindow):
 
     def _on_controls_changed(self, vals: dict = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
-        if self._base is None:
+        if self._base is None and self._base_for_perspective is None:
             return
         try:
             vals = self._controls.values()
+
+            # Визначаємо базу з урахуванням активної перспективи
+            if (self._base_for_perspective is not None
+                    and self._perspective_corners is not None):
+                # Використовуємо кешований результат перспективи, якщо є
+                base_for_sliders = self._perspective_cached_result
+                if base_for_sliders is None:
+                    base_for_sliders = pipeline.run_perspective_manual(
+                        self._base_for_perspective, self._perspective_corners
+                    )
+                    self._perspective_cached_result = base_for_sliders
+            else:
+                base_for_sliders = self._base
+
             result = pipeline.run_manual_adjustments(
-                self._base,
+                base_for_sliders,
                 brightness=vals["brightness"],
                 contrast=vals["contrast"],
                 sharpen_strength=vals["sharpen_strength"],
@@ -897,12 +906,20 @@ class MainWindow(QMainWindow):
         self._run_in_background(_work, _on_done)
 
     def _do_persp_auto(self):
-        """Авто-детекція перспективи з deskew та fallback до ручного режиму."""
+        """Авто-детекція перспективи: коміт попередньої, знімок, авто, показ результатів."""
         if self._orig is None or self._base is None:
             return
         if self._single_thread is not None and self._single_thread.isRunning():
             self._set_status("⏳ Зачекайте, операція ще виконується")
             return
+
+        # Commit попередньої перспективи якщо була
+        if self._base_for_perspective is not None and self._perspective_corners is not None:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
+
+        # Зберігаємо знімок _base ДО будь-яких змін
         self._base_for_perspective = self._base.copy()
         base_snapshot = self._base.copy()
         corners_before = pipeline.detect_corners(base_snapshot)
@@ -912,64 +929,170 @@ class MainWindow(QMainWindow):
 
         def _on_done(payload):
             result, status = payload
-            self._base = result.copy()
-            self._processed = result
-            self._preview.set_after(image_utils.make_preview(result))
-            if corners_before is not None:
-                self._perspective_corners = corners_before.copy()
-                self._show_perspective_points(corners_before, status)
-            else:
+
+            # Визначаємо режим за статусом
+            if "перспектива не" in status:
+                # noop: нічого не знайдено
+                self._base_for_perspective = None
                 self._perspective_corners = None
+                self._base = base_snapshot.copy()
+                self._processed = result
+                self._preview.set_before(image_utils.make_preview(self._base))
+                self._preview.set_after(image_utils.make_preview(result))
+                self._preview.disable_perspective_edit()
                 self._set_status(status)
+            elif "deskew" in status and corners_before is None:
+                # deskew only: коміт у _base, без входу в perspective-режим
+                self._base_for_perspective = None
+                self._perspective_corners = None
+                self._base = result.copy()
+                self._processed = result
+                self._preview.set_before(image_utils.make_preview(self._base))
+                self._preview.set_after(image_utils.make_preview(result))
+                self._preview.disable_perspective_edit()
+                self._set_status(status)
+            else:
+                # straight/corrected: показати кути, увійти в perspective-режим
+                corners = corners_before if corners_before is not None else pipeline.detect_corners(result)
+                if corners is not None:
+                    self._perspective_corners = corners.copy()
+                    self._show_perspective_points(corners, status)
+                else:
+                    self._perspective_corners = None
+                    self._preview.disable_perspective_edit()
+                    self._set_status(status)
+                # Оновлюємо BEFORE з джерелом
+                prev_source = image_utils.make_preview(self._base_for_perspective)
+                self._preview.set_before(prev_source)
+                # Результат (perspective applied) — показуємо на AFTER
+                self._processed = result
+                self._preview.set_after(image_utils.make_preview(result))
+
             self._on_controls_changed()
-            self._btn_apply_perspective.setVisible(True)
             self._update_buttons()
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
-    def _show_perspective_points(self, corners: np.ndarray, status_msg: str):
-        """Показує 4 точки перспективи на прев'ю (на базовому зображенні _base)."""
-        if self._base is None:
-            return
-        base_h, base_w = self._base.shape[:2]
-        prev = image_utils.make_preview(self._base)
+    def _corners_to_preview_pts(
+        self,
+        corners: np.ndarray,
+        source: np.ndarray,
+    ) -> list[QPoint]:
+        """Масштабує кути з простору source у простір make_preview(source)."""
+        prev = image_utils.make_preview(source)
         prev_h, prev_w = prev.shape[:2]
-        sx = prev_w / max(base_w, 1)
-        sy = prev_h / max(base_h, 1)
-        pts = [QPoint(int(p[0] * sx), int(p[1] * sy)) for p in corners]
+        src_h, src_w = source.shape[:2]
+        sx = prev_w / max(src_w, 1)
+        sy = prev_h / max(src_h, 1)
+        return [QPoint(int(c[0] * sx), int(c[1] * sy)) for c in corners]
+
+    def _preview_pts_to_corners(
+        self,
+        points: list[QPoint],
+        source: np.ndarray,
+    ) -> np.ndarray:
+        """Масштабує точки з простору make_preview(source) у простір source."""
+        prev = image_utils.make_preview(source)
+        prev_h, prev_w = prev.shape[:2]
+        src_h, src_w = source.shape[:2]
+        sx = src_w / max(prev_w, 1)
+        sy = src_h / max(prev_h, 1)
+        return np.array(
+            [[p.x() * sx, p.y() * sy] for p in points],
+            dtype=np.float32,
+        )
+
+    def _show_perspective_points(
+        self, corners: np.ndarray, status_msg: str
+    ) -> None:
+        """corners — у просторі _base_for_perspective."""
+        if self._base_for_perspective is None:
+            return
+        # Оновлюємо BEFORE: показуємо джерело (до перспективи)
+        prev_source = image_utils.make_preview(self._base_for_perspective)
+        self._preview.set_before(prev_source)
+        # Масштабуємо кути
+        pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
         self._preview.enable_perspective_edit(pts)
         self._set_status(status_msg)
 
+    def _default_perspective_corners(self, image: np.ndarray) -> np.ndarray:
+        """Повертає кути 80% центру зображення (10% відступ з кожного краю)."""
+        h, w = image.shape[:2]
+        margin_x = int(w * 0.10)
+        margin_y = int(h * 0.10)
+        return np.array([
+            [margin_x, margin_y],
+            [w - margin_x, margin_y],
+            [w - margin_x, h - margin_y],
+            [margin_x, h - margin_y],
+        ], dtype=np.float32)
+
     def _do_persp_manual_fallback(self):
-        """Ручний режим з дефолтними точками по кутах базового зображення _base."""
-        if self._base is None:
+        """Ручний режим з дефолтними точками (80% центру _base_for_perspective)."""
+        source = self._base_for_perspective if self._base_for_perspective is not None else self._base
+        if source is None:
             return
-        base_h, base_w = self._base.shape[:2]
-        prev = image_utils.make_preview(self._base)
-        prev_h, prev_w = prev.shape[:2]
-        m = 2
-        pts = [
-            QPoint(m,          m),
-            QPoint(prev_w - m, m),
-            QPoint(prev_w - m, prev_h - m),
-            QPoint(m,          prev_h - m),
-        ]
+        corners = self._default_perspective_corners(source)
+        self._perspective_corners = corners
+        pts = self._corners_to_preview_pts(corners, source)
         self._preview.enable_perspective_edit(pts)
         self._set_status("Документ не знайдено — встановіть точки вручну")
 
-    def _do_persp_manual(self):
-        """Ручна корекція: пробуємо знайти точки авто на _base, інакше дефолтні."""
-        if self._orig is None or self._base is None:
+    def _do_persp_manual(self) -> None:
+        """Ручна корекція: коміт попередньої, знімок, детекція, показ точок."""
+        if self._base is None:
             return
-        # Зберігаємо знімок _base — всі подальші перетягування точок
-        # будуть застосовуватись до цього знімку, а не до вже трансформованого _base
+        # Commit попередньої перспективи якщо була
+        if self._base_for_perspective is not None and self._perspective_corners is not None:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
+        # Зберігаємо знімок джерела
         self._base_for_perspective = self._base.copy()
-        corners = pipeline.detect_corners(self._base)
-        if corners is not None:
-            self._show_perspective_points(corners, "Тягніть точки для корекції перспективи")
+        self._preview.disable_perspective_edit()
+        self._perspective_cached_result = None
+        # Спробуємо детектувати кути
+        corners = pipeline.detect_corners(self._base_for_perspective)
+        if corners is None:
+            # Спроба 2: з пониженим порогом площі через _try_external_contour
+            from processing.perspective import _try_external_contour, _refine_corners_subpix, _order_points
+            import cv2 as _cv2
+            _gray = _cv2.cvtColor(self._base_for_perspective, _cv2.COLOR_BGR2GRAY)
+            _small_scale = min(800 / max(_gray.shape[:2]), 1.0)
+            _small = _cv2.resize(_gray, None, fx=_small_scale, fy=_small_scale) if _small_scale < 1.0 else _gray
+            corners = _try_external_contour(_small)
+            if corners is not None:
+                corners = (corners / _small_scale).astype(np.float32)
+                corners = _refine_corners_subpix(_gray, corners)
+                status = "Тягніть кути для корекції перспективи (знайдено резервним методом)" + \
+                    " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
+            else:
+                corners = self._default_perspective_corners(self._base_for_perspective)
+                status = "Встановіть кути вручну (документ не знайдено)"
         else:
-            self._do_persp_manual_fallback()
-        self._btn_apply_perspective.setVisible(True)
+            status = "Тягніть кути для корекції перспективи" + \
+                " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
+        # Зберігаємо кути у просторі зображення
+        self._perspective_corners = corners
+        # Оновлюємо BEFORE: показуємо джерело (до перспективи)
+        prev_source = image_utils.make_preview(self._base_for_perspective)
+        self._preview.set_before(prev_source)
+        # Показуємо live результат на AFTER
+        try:
+            persp_result = pipeline.run_perspective_manual(
+                self._base_for_perspective, corners
+            )
+            self._processed = persp_result
+            self._preview.set_after(image_utils.make_preview(persp_result))
+        except Exception:
+            self._preview.set_after(prev_source)
+        # Виставляємо точки на BEFORE
+        pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
+        self._preview.enable_perspective_edit(pts)
+        self._set_status(status)
+        # Застосовуємо слайдери до результату перспективи
+        self._on_controls_changed()
         self._update_buttons()
 
     def _do_persp_reset(self):
@@ -986,10 +1109,11 @@ class MainWindow(QMainWindow):
             # Якщо ручна перспектива не починалась — скидаємо до оригіналу
             self._base = self._orig.copy()
             self._processed = self._orig.copy()
+        self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
         self._perspective_corners = None  # скидаємо збережені кути
-        self._btn_apply_perspective.setVisible(False)
+        self._perspective_cached_result = None
         self._set_status("Перспективу скинуто")
         self._update_buttons()
         # Після скидання перспективи застосовуємо поточні слайдери
@@ -1006,35 +1130,36 @@ class MainWindow(QMainWindow):
         self._preview.set_after(image_utils.make_preview(self._orig))
         self._preview.set_autofix_applied(None)
         self._perspective_corners = None  # скидаємо збережені кути перспективи
-        self._btn_apply_perspective.setVisible(False)
+        self._perspective_cached_result = None
         self._set_status("Всі корекції скинуто")
         self._update_buttons()
         # Зберігаємо скинуті налаштування для поточного файлу
         self._store_current_settings()
 
-    def _on_persp_pts(self, points: list):
+    def _on_persp_pts(self, points: list) -> None:
         """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
-        if self._base is None or len(points) != 4:
+        if self._base_for_perspective is None or len(points) != 4:
             return
         try:
-            # Використовуємо знімок _base зроблений ДО початку ручної перспективи.
-            # Це гарантує що кожне перетягування точки застосовується до незміненого
-            # зображення, а не до результату попередньої трансформації.
-            source = self._base_for_perspective if self._base_for_perspective is not None else self._base
-            base_h, base_w = source.shape[:2]
-            prev = image_utils.make_preview(source)
-            prev_h, prev_w = prev.shape[:2]
-            # Координати точок — у системі прев'ю (≤900px).
-            # Масштабуємо назад в розмір базового зображення source
-            scale_x = base_w / max(prev_w, 1)
-            scale_y = base_h / max(prev_h, 1)
-            corners = np.array(
-                [[p.x() * scale_x, p.y() * scale_y] for p in points],
-                dtype=np.float32
+            corners = self._preview_pts_to_corners(points, self._base_for_perspective)
+            self._perspective_corners = corners
+            persp_result = pipeline.run_perspective_manual(
+                self._base_for_perspective, corners
             )
-            result = pipeline.run_perspective_manual(source, corners)
-            # НЕ оновлюємо _base тут — це робиться лише після підтвердження
-            # (друк, авто-фікс тощо). _base залишається = _base_for_perspective.
+            # Кешуємо результат перспективи для _on_controls_changed
+            self._perspective_cached_result = persp_result
+            # Накладаємо слайдери
+            vals = self._controls.values()
+            result = pipeline.run_manual_adjustments(
+                persp_result,
+                brightness=vals["brightness"],
+                contrast=vals["contrast"],
+                sharpen_strength=vals["sharpen_strength"],
+                hdr_strength=vals["hdr_strength"],
+                grayscale=vals["grayscale"],
+                shadow_highlight_strength=vals["shadow_highlight"],
+                contrast_mode=self._settings.get("contrast_mode", "linear"),
+            )
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
         except Exception as e:
@@ -1047,9 +1172,14 @@ class MainWindow(QMainWindow):
 
     def _do_print_current(self):
         # Якщо є незафіксована ручна перспектива — фіксуємо
-        if self._base_for_perspective is not None and self._processed is not None:
-            self._base = self._processed.copy()
+        if self._base_for_perspective is not None and self._perspective_corners is not None:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
             self._base_for_perspective = None
+            self._perspective_corners = None
+            self._perspective_cached_result = None
+            self._preview.disable_perspective_edit()
         # Правильна перевірка numpy array через "is not None"
         image = self._processed if self._processed is not None else self._base
         if image is None:
@@ -1202,6 +1332,15 @@ class MainWindow(QMainWindow):
     def _load_next_manual(self):
         # Зберігаємо налаштування поточного файлу перед переходом
         self._store_current_settings()
+        # Commit перспективи перед переходом
+        if self._base_for_perspective is not None and self._perspective_corners is not None:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
+            self._base_for_perspective = None
+            self._perspective_corners = None
+            self._perspective_cached_result = None
+            self._preview.disable_perspective_edit()
         if not self._processor.has_next():
             self._set_status("Всі файли оброблено ✓")
             self._preview.clear()
@@ -1309,17 +1448,21 @@ class MainWindow(QMainWindow):
         has_queue = bool(self._queue.get_all_paths())
         has_img   = self._orig is not None
         is_batch  = self._radio_auto.isChecked()
-        has_pending_persp = self._base_for_perspective is not None
+        in_persp  = self._base_for_perspective is not None
 
         self._btn_print_all.setEnabled(has_queue and is_batch)
         self._btn_print_all.setToolTip(
             "" if is_batch else "Доступно тільки в Пакетному режимі"
         )
         self._btn_print.setEnabled(has_img)
-        self._btn_skip.setEnabled(self._processor.has_next() and not is_batch)
-        self._btn_autofix.setEnabled(has_img and not has_pending_persp)
+        self._btn_skip.setEnabled(
+            self._processor.has_next() and not is_batch
+        )
+        # Авто Фікс доступний і під час редагування перспективи
+        self._btn_autofix.setEnabled(has_img)
         self._btn_save_img.setEnabled(has_img)
-        self._btn_apply_perspective.setVisible(has_pending_persp)
+        # Кнопка скидання перспективи — тільки в perspective-режимі
+        # (вона вже є в controls, не потребує додаткового управління)
 
     def _set_buttons_enabled(self, enabled: bool):
         for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all):

@@ -140,6 +140,7 @@ PRESETS = {
 PIPELINE_STEPS_FIXED_ORDER = [
     ("perspective",      "Авто-перспектива"),
     ("shadow_remove",    "Видалення тіней"),
+    ("color_cast",       "Нейтралізація відтінку"),
     ("brightness",       "Авто-яскравість"),
     ("contrast",         "Авто-контраст"),
     ("hdr",              "HDR"),

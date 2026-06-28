@@ -8,7 +8,7 @@ from enum import Enum
 from typing import Optional
 import cv2
 import numpy as np
-from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew as deskew_module
+from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew as deskew_module, color_cast
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ EPSILON = 0.001  # Поріг для ігнорування дуже малих 
 PIPELINE_STEPS_FIXED_ORDER = [
     ("perspective",      "Авто-перспектива"),
     ("shadow_remove",    "Видалення тіней"),
+    ("color_cast",       "Нейтралізація відтінку"),
     ("brightness",       "Авто-яскравість"),
     ("contrast",         "Авто-контраст"),
     ("hdr",              "HDR"),
@@ -282,14 +283,24 @@ def run_autofix(
                             # Зсув a-каналу до нейтрального (128) на 30%
                             a_bg = a_ch[bg_mask]
                             b_bg = b_ch[bg_mask]
-                            a_shift = (128.0 - float(np.median(a_bg))) * 0.3
-                            b_shift = (128.0 - float(np.median(b_bg))) * 0.3
+                            # посилено з 0.3 до 0.7: відтінок телефонної камери потребує сильнішої корекції
+                            a_shift = (128.0 - float(np.median(a_bg))) * 0.7
+                            b_shift = (128.0 - float(np.median(b_bg))) * 0.7
                             a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
                             b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
                             merged = cv2.merge([l_ch, a_ch, b_ch])
                             result = cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
                             log_entries.append({"step": "color_neutralize", "applied": True,
                                                "detail": "нейтралізація відтінку"})
+        elif step_key == "color_cast":
+            # --- Корекція кольорового відтінку фону ---
+            # Виконується після shadow_remove, бо тіні можуть спотворювати аналіз кольору
+            if doc_type in (DocType.COLOR_DOCUMENT.value, DocType.BW_DOCUMENT.value):
+                result, had_cast = color_cast.correct_color_cast(result)
+                if had_cast:
+                    log_entries.append({"step": "color_cast", "applied": True,
+                                        "detail": "відтінок нейтралізовано"})
+
             # Висвітлення тіней — додаткове підсвічування (залишається як є)
             if shadow_highlight_strength > EPSILON:
                 result = shadow_highlight.apply_shadow_highlight(
