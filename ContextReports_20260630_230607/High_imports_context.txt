@@ -39,9 +39,7 @@ utils\file_utils.py
 utils\image_utils.py
 utils\logger.py
 utils\win_drop.py
-README.md
 main.py
-requirements.txt
 
 ============================================================
 ДЕТАЛІЗАЦІЯ КОДУ (рівень: high)
@@ -172,13 +170,15 @@ class BatchProcessor:
         self,
         on_progress: Callable[[int, int, str], None] | None = None,
         on_error:    Callable[[int, str, str], None] | None = None,
+        on_print_progress: Callable[[int, int, str], None] | None = None,
     ) -> int:
         """
         Паралельна обробка файлів через ThreadPoolExecutor.
         Фаза 1: завантаження + pipeline — паралельно (N потоків).
         Фаза 2: друк — послідовно в порядку черги (щоб зберегти порядок).
 
-        on_progress(current_1based, total, filename)
+        on_progress(current_1based, total, filename)     — для фази 1 (обробка)
+        on_print_progress(current_1based, total, filename) — для фази 2 (друк)
         on_error(index, filename, message)
         Повертає кількість успішно надрукованих.
         """
@@ -242,7 +242,7 @@ class BatchProcessor:
 
         # --- Фаза 1: паралельна обробка ---
         # results_map: idx -> (path, processed_image | Exception)
-        results_map: dict[int, tuple[str, object]] = {}
+        results_map: dict[int, tuple[str, np.ndarray | Exception]] = {}
 
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             future_to_idx: dict[Future, int] = {
@@ -275,6 +275,10 @@ class BatchProcessor:
             if isinstance(result, Exception):
                 continue   # вже повідомили через on_error
 
+            # Завдання 2.4: прогрес друку
+            if on_print_progress:
+                on_print_progress(i + 1, total, filename)
+
             processed = result
             try:
                 printer_module.print_image(
@@ -291,7 +295,7 @@ class BatchProcessor:
                     on_error(i, filename, str(exc))
             finally:
                 del processed
-                results_map[i] = (path, None)   # звільняємо пам'ять
+                del results_map[i]   # звільняємо пам'ять
 
         self._index = total
         return printed
@@ -403,6 +407,7 @@ DEFAULT_SHADOW_BGR_MODE = False
 DEFAULT_SHADOW_UNIFORMITY_LOW = 0.30    # нижній поріг однорідності фону
 DEFAULT_SHADOW_UNIFORMITY_HIGH = 0.55   # верхній поріг однорідності фону
 DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH = 0.65  # верхній поріг для фото (суворіший)
+DEFAULT_SHADOW_REMOVE_MODE = "auto"           # auto / always / never
 DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD = 2.0   # поріг std блоків для детекції тіні на рівномірному фоні
 DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE = 32        # розмір блоку для локального std
 
@@ -478,6 +483,7 @@ def load(path=None) -> dict:
         "shadow_uniformity_low":     cfg.getfloat("processing",   "shadow_uniformity_low",     fallback=DEFAULT_SHADOW_UNIFORMITY_LOW),
         "shadow_uniformity_high":    cfg.getfloat("processing",   "shadow_uniformity_high",    fallback=DEFAULT_SHADOW_UNIFORMITY_HIGH),
         "shadow_uniformity_photo_high": cfg.getfloat("processing", "shadow_uniformity_photo_high", fallback=DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH),
+        "shadow_remove_mode":            cfg.get("processing",    "shadow_remove_mode",            fallback=DEFAULT_SHADOW_REMOVE_MODE),
         "shadow_uniform_std_threshold": cfg.getfloat("processing", "shadow_uniform_std_threshold", fallback=DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD),
         "shadow_uniform_block_size":     cfg.getint("processing", "shadow_uniform_block_size",     fallback=DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE),
         "worker_threads": cfg.getint(
@@ -548,6 +554,7 @@ def save(settings: dict, path=None):
     cfg["processing"]["shadow_uniformity_low"] = str(settings.get("shadow_uniformity_low", DEFAULT_SHADOW_UNIFORMITY_LOW))
     cfg["processing"]["shadow_uniformity_high"] = str(settings.get("shadow_uniformity_high", DEFAULT_SHADOW_UNIFORMITY_HIGH))
     cfg["processing"]["shadow_uniformity_photo_high"] = str(settings.get("shadow_uniformity_photo_high", DEFAULT_SHADOW_UNIFORMITY_PHOTO_HIGH))
+    cfg["processing"]["shadow_remove_mode"] = settings.get("shadow_remove_mode", DEFAULT_SHADOW_REMOVE_MODE)
     cfg["processing"]["shadow_uniform_std_threshold"] = str(settings.get("shadow_uniform_std_threshold", DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD))
     cfg["processing"]["shadow_uniform_block_size"] = str(settings.get("shadow_uniform_block_size", DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE))
     cfg["general"]["minimize_to_tray"] = str(settings.get("minimize_to_tray", DEFAULT_MINIMIZE_TO_TRAY)).lower()
@@ -908,6 +915,7 @@ class _SliderRow(QWidget):
         super().__init__(parent)
         self._min = min_val
         self._max = max_val
+        self._default = default
         self._scale = SLIDER_SCALE
 
         layout = QHBoxLayout(self)
@@ -959,7 +967,7 @@ class _SliderRow(QWidget):
             self._slider.blockSignals(False)
 
     def reset(self) -> None:
-        self.set_value(0.0, silent=True)
+        self.set_value(self._default, silent=True)
 
 
 class ControlsPanel(QWidget):
@@ -1138,6 +1146,8 @@ from typing import Optional, Dict, Any
 import numpy as np
 import cv2
 
+from PyQt6.QtWidgets import QSizePolicy
+
 # OpenCV threading / OpenCL (Task 3)
 cv2.setNumThreads(cv2.getNumberOfCPUs())
 if cv2.ocl.haveOpenCL():
@@ -1191,15 +1201,47 @@ DROP_SETUP_DELAY_MS = 300
 MODE_AUTO_ID = 0
 MODE_MANUAL_ID = 1
 
+# Константа для стилю статус-бару (щоб уникнути дублювання CSS)
+_STATUS_BAR_STYLE = (
+    "QStatusBar {"
+    "  color: #444444; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
+
+_STATUS_BAR_STYLE_SUCCESS = (
+    "QStatusBar {"
+    "  color: #006600; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
+
+_STATUS_BAR_STYLE_ERROR = (
+    "QStatusBar {"
+    "  color: #CC0000; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
+
 
 # ---------------------------------------------------------------------------
 # Worker для авто-режиму (окремий потік — GUI не зависає)
 # ---------------------------------------------------------------------------
 
 class AutoWorker(QObject):
-    progress = pyqtSignal(int, int, str)   # (1-based index, total, filename)
-    error    = pyqtSignal(int, str, str)   # (index, filename, message)
-    finished = pyqtSignal(int)             # кількість надрукованих
+    progress = pyqtSignal(int, int, str)        # (1-based index, total, filename) — фаза 1 (обробка)
+    print_progress = pyqtSignal(int, int, str) # (1-based index, total, filename) — фаза 2 (друк)
+    error    = pyqtSignal(int, str, str)        # (index, filename, message)
+    finished = pyqtSignal(int)                  # кількість надрукованих
 
     def __init__(self, processor: BatchProcessor):
         super().__init__()
@@ -1208,6 +1250,7 @@ class AutoWorker(QObject):
     def run(self):
         count = self._p.run_auto(
             on_progress=lambda c, t, f: self.progress.emit(c, t, f),
+            on_print_progress=lambda c, t, f: self.print_progress.emit(c, t, f),
             on_error=lambda i, f, m: self.error.emit(i, f, m),
         )
         self.finished.emit(count)
@@ -1276,6 +1319,18 @@ class MainWindow(QMainWindow):
         # Завантажуємо розмір вікна та ширину черги
         self._load_window_geometry()
 
+        # Завдання 2.1: Debounce для слайдерів
+        self._controls_timer = QTimer()
+        self._controls_timer.setSingleShot(True)
+        self._controls_timer.setInterval(120)
+        self._controls_timer.timeout.connect(self._on_controls_changed_debounced)
+
+        # Завдання 2.2: Відкладене збереження геометрії
+        self._save_geometry_timer = QTimer()
+        self._save_geometry_timer.setSingleShot(True)
+        self._save_geometry_timer.setInterval(1000)
+        self._save_geometry_timer.timeout.connect(self._save_window_geometry)
+
         # Трей-іконка (PRIO 9)
         self._tray_icon: Optional[QSystemTrayIcon] = None
         self._setup_tray()
@@ -1292,23 +1347,31 @@ class MainWindow(QMainWindow):
         hwnd = int(self.winId())
         register_drop_window(hwnd)
         self._drop_filter = DropEventFilter(self._on_win_drop)
-        QApplication.instance().installNativeEventFilter(self._drop_filter)
+        instance = QApplication.instance()
+        if instance is not None:
+            instance.installNativeEventFilter(self._drop_filter)
 
     def _setup_tray(self):
         """Ініціалізація QSystemTrayIcon (PRIO 9)."""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self._logger.debug("Трей недоступний на цій системі")
             return
-        icon = self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+        style = self.style()
+        if style is not None:
+            icon = style.standardIcon(style.StandardPixmap.SP_ComputerIcon)
+        else:
+            icon = QIcon()
         self._tray_icon = QSystemTrayIcon(icon, self)
         self._tray_icon.setToolTip("PhotoPrint")
 
         menu = QMenu()
         act_show = menu.addAction("Відкрити")
-        act_show.triggered.connect(self._show_from_tray)
+        if act_show is not None:
+            act_show.triggered.connect(self._show_from_tray)
         menu.addSeparator()
         act_quit = menu.addAction("Вихід")
-        act_quit.triggered.connect(self._quit_app)
+        if act_quit is not None:
+            act_quit.triggered.connect(self._quit_app)
 
         self._tray_icon.setContextMenu(menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
@@ -1337,15 +1400,79 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """
-        Перевизначення closeEvent:
+        Перевизначення closeEvent (Завд. 2.3):
+        - Показуємо QProgressDialog асинхронно, не блокуємо GUI.
         - Якщо minimize_to_tray == True — ховаємо в трей.
-        - Інакше — завершуємо програму.
         """
-        image_utils.preview_cache_clear()  # очищуємо кеш прев'ю при закритті
+        image_utils.preview_cache_clear()
         
-        # Чекаємо завершення активних потоків перед закриттям
-        self._wait_for_threads()
+        # Завдання 2.3: асинхронне очікування потоків
+        if self._has_running_threads():
+            from PyQt6.QtWidgets import QProgressDialog
+            self._close_progress = QProgressDialog(
+                "Завершення обробки...", "Примусово закрити", 0, 0, self
+            )
+            self._close_progress.setWindowTitle("Завершення роботи")
+            self._close_progress.setCancelButtonText("Примусово закрити")
+            self._close_progress.canceled.connect(self._force_close)
+            self._close_progress.show()
+            self._close_start_time = QTimer()  # зберігаємо час початку очікування
+            import time
+            self._close_start_ms = int(time.time() * 1000)  # ms timestamp
+            event.ignore()
+            QTimer.singleShot(100, self._check_threads_and_close)
+            return
         
+        self._do_close(event)
+
+    def _has_running_threads(self) -> bool:
+        """Перевіряє чи є активні фонові потоки."""
+        auto_running = (hasattr(self, '_auto_thread') and self._auto_thread is not None 
+                        and self._auto_thread.isRunning())
+        single_running = (hasattr(self, '_single_thread') and self._single_thread is not None 
+                          and self._single_thread.isRunning())
+        return auto_running or single_running
+
+    def _check_threads_and_close(self):
+        """Завдання 2.3: перевіряє чи завершились потоки, закриває коли готово."""
+        import time
+        elapsed = int(time.time() * 1000) - self._close_start_ms
+        
+        if not self._has_running_threads():
+            # Потоки завершились — закриваємо
+            if hasattr(self, '_close_progress') and self._close_progress is not None:
+                self._close_progress.close()
+                self._close_progress = None
+            self._do_close(None)
+            return
+        
+        if elapsed > 5000:
+            # Минуло >5с — примусово
+            self._logger.warning("Завдання 2.3: примусове закриття через 5с таймаут")
+            self._force_close()
+            return
+        
+        # Ще чекаємо
+        QTimer.singleShot(100, self._check_threads_and_close)
+
+    def _force_close(self):
+        """Примусове закриття — зупиняємо потоки та закриваємо."""
+        self._logger.info("_force_close: примусове завершення потоків")
+        if hasattr(self, '_close_progress') and self._close_progress is not None:
+            self._close_progress.close()
+            self._close_progress = None
+        
+        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
+            self._auto_thread.requestInterruption()
+            self._auto_thread.quit()
+            self._auto_thread.wait(1000)
+        if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
+            self._cleanup_single_thread()
+        
+        QApplication.quit()
+
+    def _do_close(self, event):
+        """Фактичне закриття — зберігаємо геометрію та закриваємо."""
         if self._settings.get("minimize_to_tray", False) and self._tray_icon is not None:
             self._save_window_geometry()
             self.hide()
@@ -1355,25 +1482,18 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Information,
                 2000,
             )
-            event.ignore()
+            if event is not None:
+                event.ignore()
         else:
             self._save_window_geometry()
-            event.accept()
+            if event is not None:
+                event.accept()
+            else:
+                QApplication.quit()
 
     def _wait_for_threads(self):
-        """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
-        # Чекаємо на авто-потік (пакетний режим)
-        if hasattr(self, '_auto_thread') and self._auto_thread is not None and self._auto_thread.isRunning():
-            self._logger.info("Очікування завершення AutoWorkerThread...")
-            self._auto_thread.requestInterruption()
-            self._auto_thread.quit()
-            if not self._auto_thread.wait(5000):
-                self._logger.warning("AutoWorkerThread не завершився за 5с")
-        
-        # Чекаємо на single-image потік
-        if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
-            self._logger.info("Очікування завершення SingleImageWorkerThread...")
-            self._cleanup_single_thread()
+        """Завдання 2.3: застарілий синхронний метод — тепер не використовується."""
+        pass
 
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
@@ -1475,7 +1595,8 @@ class MainWindow(QMainWindow):
         center.setSpacing(CENTER_LAYOUT_SPACING)
 
         self._preview = PreviewPanel()
-        self._preview.perspective_points_changed.connect(self._on_persp_pts)
+        self._preview.perspective_points_changed.connect(self._on_persp_pts_light)
+        self._preview.perspective_points_released.connect(self._on_persp_pts_heavy)
 
         self._progress = QProgressBar()
         self._progress.setVisible(False)
@@ -1619,19 +1740,12 @@ class MainWindow(QMainWindow):
 
         # Статусний рядок вбудований у QMainWindow
         sb = self.statusBar()
-        sb.setStyleSheet(
-            "QStatusBar {"
-            "  color: #444444; font-size: 14px;"
-            "  background: #D8DCE0;"
-            "  border-top: 2px solid #BBBBBB;"
-            "  padding: 4px 6px;"
-            "  min-height: 30px;"
-            "}"
-        )
+        if sb is not None:
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
 
-        self._status_file_label = QLabel("")
-        self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
-        sb.addPermanentWidget(self._status_file_label)
+            self._status_file_label = QLabel("")
+            self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
+            sb.addPermanentWidget(self._status_file_label)
 
     def _btn_style(self, color="#2E5FA3"):
         return (
@@ -1691,9 +1805,9 @@ class MainWindow(QMainWindow):
         app_settings.save(self._settings)
 
     def resizeEvent(self, event):
-        """Перевизначення resizeEvent для збереження розміру вікна."""
+        """Перевизначення resizeEvent — відкладене збереження через таймер (Завд. 2.2)."""
         super().resizeEvent(event)
-        self._save_window_geometry()
+        self._save_geometry_timer.start()
 
     def _on_shadow_mode_changed(self, btn_id: int):
         """Зміна режиму видалення тіней через радіокнопки."""
@@ -1707,7 +1821,7 @@ class MainWindow(QMainWindow):
     def _on_settings_saved(self, s: dict):
         self._settings = s
         self._processor = BatchProcessor(self._settings)
-        self._processor.set_files(self._queue.get_all_paths())
+        self._sync_processor_with_queue()
         self._apply_default_mode()
         self._apply_background_color()
         self._apply_preview_colors()
@@ -1722,6 +1836,10 @@ class MainWindow(QMainWindow):
     # Черга
     # ------------------------------------------------------------------
 
+    def _sync_processor_with_queue(self):
+        """Завдання 2.5: синхронізує _processor з _queue."""
+        self._processor.set_files(self._queue.get_all_paths())
+
     def _on_files_added(self, paths: list[str]):
         """Спільний обробник після додавання файлів будь-яким способом."""
         supported = file_utils.filter_supported(paths)
@@ -1729,7 +1847,7 @@ class MainWindow(QMainWindow):
             self._set_status("Жоден з файлів не підтримується")
             return
         was_empty = self._processor.total == 0
-        self._processor.add_files(supported)
+        # Завдання 2.5: не оновлюємо _processor тут, тільки чергу
         self._set_status(
             f"Додано {len(supported)} файл(ів). Всього у черзі: {self._processor.total}"
         )
@@ -1804,6 +1922,12 @@ class MainWindow(QMainWindow):
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
         try:
+            # Завдання 2.1: зупиняємо попередній фоновий потік, якщо ще виконується
+            if self._single_thread is not None and self._single_thread.isRunning():
+                self._logger.warning("_on_queue_selection: попередній потік ще виконується — очищуємо")
+                self._cleanup_single_thread()
+            # Завдання 2.2: очищуємо кеш прев'ю перед завантаженням нового файлу
+            image_utils.preview_cache_clear()
             # Скидаємо режим редагування перспективи для попереднього зображення
             self._preview.disable_perspective_edit()
             self._store_current_settings()
@@ -1854,7 +1978,12 @@ class MainWindow(QMainWindow):
 
         s = self._settings
         vals = self._controls.values()
+        if self._base is None:
+            self._set_status("Немає базового зображення для обробки")
+            return
         base_snapshot = self._base.copy()   # знімок щоб не передавати self в інший потік
+        # Завдання 2.3: зберігаємо _current_path на момент запуску
+        path_snapshot = self._current_path
 
         def _work():
             if s.get("autofix_enabled", True):
@@ -1893,6 +2022,10 @@ class MainWindow(QMainWindow):
 
         def _on_done(payload):
             result, status_msg, log_entries = payload
+            # Завдання 2.3: ігноруємо результат, якщо файл вже змінився
+            if self._current_path != path_snapshot:
+                self._logger.debug("_do_autofix_classic: файл змінився, ігноруємо застарілий результат")
+                return
             self._base = result.copy()      # <-- ФІКСУЄМО в _base
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
@@ -1916,7 +2049,12 @@ class MainWindow(QMainWindow):
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
-    def _on_controls_changed(self, vals: dict = None):
+    def _on_controls_changed(self, vals: Optional[dict] = None):
+        """Завдання 2.1: Debounce — тільки запускає таймер, не обробляє негайно.
+        При reset_all викликається безпосередньо."""
+        self._controls_timer.start()
+
+    def _on_controls_changed_debounced(self, vals: Optional[dict] = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
         if self._base is None and self._base_for_perspective is None:
             return
@@ -1935,6 +2073,9 @@ class MainWindow(QMainWindow):
                     self._perspective_cached_result = base_for_sliders
             else:
                 base_for_sliders = self._base
+
+            if base_for_sliders is None:
+                return
 
             result = pipeline.run_manual_adjustments(
                 base_for_sliders,
@@ -2031,6 +2172,7 @@ class MainWindow(QMainWindow):
         self._run_in_background(_work, _on_done)
 
     def _do_persp_auto(self):
+        # Завдання 3.5: фіксуємо розмір панелей (буде розморожено при скиданні перспективи)
         """Авто-детекція перспективи: коміт попередньої, знімок, авто, показ результатів."""
         if self._orig is None or self._base is None:
             return
@@ -2072,14 +2214,19 @@ class MainWindow(QMainWindow):
                 self._perspective_corners = None
                 self._base = result.copy()
                 self._processed = result
-                self._preview.set_before(image_utils.make_preview(self._base))
+                self._preview.set_before(image_utils.make_preview(result))
                 self._preview.set_after(image_utils.make_preview(result))
                 self._preview.disable_perspective_edit()
                 self._set_status(status)
             else:
                 # straight/corrected: показати кути, увійти в perspective-режим
                 corners = corners_before if corners_before is not None else pipeline.detect_corners(result)
-                if corners is not None:
+                if corners is not None and self._base_for_perspective is not None:
+                    # Завдання 3.3: валідація точок у межах зображення
+                    if not self._validate_corners_in_bounds(corners, self._base_for_perspective):
+                        self._logger.debug("_do_persp_auto: кути поза межами, fallback до default")
+                        corners = self._default_perspective_corners(self._base_for_perspective)
+                        status = "Документ не знайдено — встановіть точки вручну (auto-detect поза межами)"
                     self._perspective_corners = corners.copy()
                     self._show_perspective_points(corners, status)
                 else:
@@ -2087,8 +2234,11 @@ class MainWindow(QMainWindow):
                     self._preview.disable_perspective_edit()
                     self._set_status(status)
                 # Оновлюємо BEFORE з джерелом
-                prev_source = image_utils.make_preview(self._base_for_perspective)
-                self._preview.set_before(prev_source)
+                if self._base_for_perspective is not None:
+                    prev_source = image_utils.make_preview(self._base_for_perspective)
+                    # Завдання 3.5: фіксуємо розмір панелей (якщо увійшли в перспективу)
+                    self._freeze_preview_panels()
+                    self._preview.set_before(prev_source)
                 # Результат (perspective applied) — показуємо на AFTER
                 self._processed = result
                 self._preview.set_after(image_utils.make_preview(result))
@@ -2127,6 +2277,18 @@ class MainWindow(QMainWindow):
             dtype=np.float32,
         )
 
+    def _freeze_preview_panels(self) -> None:
+        """Фіксує розмір панелей прев'ю під час редагування перспективи (Завд. 3.5)."""
+        for panel in (self._preview._before, self._preview._after):
+            panel.setFixedSize(panel.size())
+
+    def _unfreeze_preview_panels(self) -> None:
+        """Відновлює автоматичний ресайз панелей прев'ю (Завд. 3.5)."""
+        for panel in (self._preview._before, self._preview._after):
+            panel.setMinimumSize(280, 280)
+            panel.setMaximumSize(16777215, 16777215)
+            panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
     def _show_perspective_points(
         self, corners: np.ndarray, status_msg: str
     ) -> None:
@@ -2140,6 +2302,14 @@ class MainWindow(QMainWindow):
         pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
         self._preview.enable_perspective_edit(pts)
         self._set_status(status_msg)
+
+    def _validate_corners_in_bounds(self, corners: np.ndarray, image: np.ndarray) -> bool:
+        """Перевіряє чи всі кути в межах [-20%, 120%] розміру зображення."""
+        h, w = image.shape[:2]
+        for c in corners:
+            if c[0] < -w * 0.2 or c[0] > w * 1.2 or c[1] < -h * 0.2 or c[1] > h * 1.2:
+                return False
+        return True
 
     def _default_perspective_corners(self, image: np.ndarray) -> np.ndarray:
         """Повертає кути 80% центру зображення (10% відступ з кожного краю)."""
@@ -2196,8 +2366,21 @@ class MainWindow(QMainWindow):
                 corners = self._default_perspective_corners(self._base_for_perspective)
                 status = "Встановіть кути вручну (документ не знайдено)"
         else:
-            status = "Тягніть кути для корекції перспективи" + \
-                " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
+            # Завдання 7.1: валідація — чи точки в межах [-20%, 120%] від розмірів зображення
+            h_img, w_img = self._base_for_perspective.shape[:2]
+            x_min, y_min = corners.min(axis=0)
+            x_max, y_max = corners.max(axis=0)
+            margin_x = int(w_img * 0.20)
+            margin_y = int(h_img * 0.20)
+            # Якщо точки виходять за межі — fallback до default
+            if (x_min < -margin_x or x_max > w_img - 1 + margin_x or
+                y_min < -margin_y or y_max > h_img - 1 + margin_y):
+                self._logger.debug("_do_persp_manual: точки за межами +-20%, fallback до default")
+                corners = self._default_perspective_corners(self._base_for_perspective)
+                status = "Документ не знайдено — встановіть точки вручну (auto-detect поза межами)"
+            else:
+                status = "Тягніть кути для корекції перспективи" + \
+                    " | Перетягуйте кольорові точки (TL=червона, TR=зелена, BR=синя, BL=жовта)"
         # Зберігаємо кути у просторі зображення
         self._perspective_corners = corners
         # Оновлюємо BEFORE: показуємо джерело (до перспективи)
@@ -2212,6 +2395,8 @@ class MainWindow(QMainWindow):
             self._preview.set_after(image_utils.make_preview(persp_result))
         except Exception:
             self._preview.set_after(prev_source)
+        # Завдання 3.5: фіксуємо розмір панелей
+        self._freeze_preview_panels()
         # Виставляємо точки на BEFORE
         pts = self._corners_to_preview_pts(corners, self._base_for_perspective)
         self._preview.enable_perspective_edit(pts)
@@ -2237,6 +2422,8 @@ class MainWindow(QMainWindow):
         self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
+        # Завдання 3.5: розморожуємо панелі
+        self._unfreeze_preview_panels()
         self._perspective_corners = None  # скидаємо збережені кути
         self._perspective_cached_result = None
         self._set_status("Перспективу скинуто")
@@ -2261,8 +2448,17 @@ class MainWindow(QMainWindow):
         # Зберігаємо скинуті налаштування для поточного файлу
         self._store_current_settings()
 
-    def _on_persp_pts(self, points: list) -> None:
-        """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
+    def _on_persp_pts_light(self, points: list) -> None:
+        """Завдання 3.1: Легкий обробник — тільки перемальовка точок на BEFORE.
+        Викликається при кожному mousemove (points_changed)."""
+        if self._base_for_perspective is None or len(points) != 4:
+            return
+        # Тільки оновлюємо відображення точок (self._before.update() вже викликано)
+        # Ніяких важких обчислень
+
+    def _on_persp_pts_heavy(self, points: list) -> None:
+        """Завдання 3.1: Важкий обробник — запускає pipeline.
+        Викликається тільки при mouseRelease (points_released)."""
         if self._base_for_perspective is None or len(points) != 4:
             return
         try:
@@ -2422,6 +2618,7 @@ class MainWindow(QMainWindow):
         self._worker.moveToThread(self._auto_thread)
         self._auto_thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_auto_progress)
+        self._worker.print_progress.connect(self._on_auto_print_progress)
         self._worker.error.connect(self._on_auto_error)
         self._worker.finished.connect(self._on_auto_done)
         self._worker.finished.connect(self._auto_thread.quit)
@@ -2429,10 +2626,14 @@ class MainWindow(QMainWindow):
         self._auto_thread.start()
 
     def _on_auto_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 1 (обробка)."""
         self._progress.setValue(cur)
-        # При паралельній обробці не знаємо точний індекс —
-        # просто оновлюємо статус без позначення конкретного рядка
-        self._set_status(f"Оброблено {cur}/{total}: {fname}")
+        self._set_status(f"Обробка {cur}/{total}: {fname}")
+
+    def _on_auto_print_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 2 (друк)."""
+        self._progress.setValue(total + cur)  # total = offset після фази 1
+        self._set_status(f"Друк {cur}/{total}: {fname}")
 
     def _on_auto_error(self, idx: int, fname: str, msg: str):
         self._queue.mark_error(idx)
@@ -2484,7 +2685,8 @@ class MainWindow(QMainWindow):
             self._processed = None
             path = self._processor.current_file()
             self._current_path = path
-            self._restore_file_settings(path)
+            if path is not None:
+                self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
             self._preview.set_after(prev)
@@ -2595,50 +2797,21 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str, timeout_ms: int = 0):
         sb = self.statusBar()
+        if sb is None:
+            return
         if text.startswith("Auto Fix:"):
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #006600; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE_SUCCESS)
         elif "Помилка" in text:
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #CC0000; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE_ERROR)
         else:
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #444444; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
         sb.showMessage(text, timeout_ms)
 
     def _reset_status_style(self):
         """Скидає стиль статус-бару до стандартного."""
         sb = self.statusBar()
-        sb.setStyleSheet(
-            "QStatusBar {"
-            "  color: #444444; font-size: 14px;"
-            "  background: #D8DCE0;"
-            "  border-top: 2px solid #BBBBBB;"
-            "  padding: 4px 6px;"
-            "  min-height: 30px;"
-            "}"
-        )
+        if sb is not None:
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
 
     def _set_file_status(self, filename: str):
         self._status_file_label.setText(filename)
@@ -2753,6 +2926,7 @@ class ImageLabel(QLabel):
     """QLabel з підтримкою drag 4 точок перспективи."""
 
     points_changed = pyqtSignal(list)   # list[QPoint] у координатах зображення
+    points_released = pyqtSignal(list)  # list[QPoint] — емітується лише в mouseReleaseEvent
 
     _COLORS = [COLOR_TL, COLOR_TR, COLOR_BR, COLOR_BL]
     _LABELS = [LABEL_TL, LABEL_TR, LABEL_BR, LABEL_BL]
@@ -2864,6 +3038,8 @@ class ImageLabel(QLabel):
 
     def mouseReleaseEvent(self, event):
         self._drag_idx = -1
+        if self._edit_mode and len(self._points) == CORNER_COUNT:
+            self.points_released.emit(list(self._points))
 
     # --- Внутрішнє ---
 
@@ -2919,6 +3095,7 @@ class ImageLabel(QLabel):
 
 class PreviewPanel(QWidget):
     perspective_points_changed = pyqtSignal(list)
+    perspective_points_released = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2939,6 +3116,7 @@ class PreviewPanel(QWidget):
         self._before = ImageLabel()
         self._before.set_placeholder()
         self._before.points_changed.connect(self.perspective_points_changed)
+        self._before.points_released.connect(self.perspective_points_released)
         left.addWidget(self._lbl_before)
         left.addWidget(self._before)
 
@@ -3613,7 +3791,16 @@ class SettingsWindow(QWidget):
         form.addRow("2-й прохід для кольорових (0=вимк, 1=повний):", self._spin_shadow_coarse_blend)
 
         self._cb_shadow_bgr_mode = QCheckBox()
-        form.addRow("BGR-алгоритм (краще для деяких документів):",
+        self._cb_shadow_bgr_mode.setToolTip(
+            "Обробляє кожен колірний канал окремо. "
+            "Краще для документів з рівномірним кольоровим фоном."
+        )
+        self._cb_shadow_bgr_mode.setToolTip(
+            "Обробляє кожен колірний канал (R, G, B) окремо.\n"
+            "Краще для документів з рівномірним кольоровим фоном\n"
+            "де стандартний режим залишає кольорові артефакти."
+        )
+        form.addRow("Канальний режим тіней (для складних випадків):",
                     self._cb_shadow_bgr_mode)
 
         # --- Ступінь однорідності фону (uniformity) ---
@@ -3665,6 +3852,32 @@ class SettingsWindow(QWidget):
             "Фото пейзажів/портретів зазвичай мають низьку uniformity."
         )
         form.addRow("Поріг для фото (видаляти >):", self._spin_uniformity_photo_high)
+
+        # --- Параметри детекції тіні на рівномірному фоні (Завдання 1.3) ---
+        unif_label = QLabel("Детекція тіні на рівномірному фоні")
+        unif_label.setStyleSheet("font-weight:bold; margin-top:8px;")
+        form.addRow(unif_label)
+
+        self._spin_uniform_std_threshold = QDoubleSpinBox()
+        self._spin_uniform_std_threshold.setRange(0.5, 20.0)
+        self._spin_uniform_std_threshold.setSingleStep(0.5)
+        self._spin_uniform_std_threshold.setDecimals(1)
+        _set_spinbox_minw(self._spin_uniform_std_threshold)
+        self._spin_uniform_std_threshold.setToolTip(
+            "Поріг стандартного відхилення для детекції тіні на рівномірному фоні.\n"
+            "Чим вище значення, тим чутливіша детекція."
+        )
+        form.addRow("Поріг std для детекції тіні на рівному фоні:", self._spin_uniform_std_threshold)
+
+        self._spin_uniform_block_size = QSpinBox()
+        self._spin_uniform_block_size.setRange(8, 64)
+        self._spin_uniform_block_size.setSingleStep(8)
+        _set_spinbox_minw(self._spin_uniform_block_size)
+        self._spin_uniform_block_size.setToolTip(
+            "Розмір блоку аналізу (px) для локального std.\n"
+            "Менший блок = детальніший аналіз, більший = швидше."
+        )
+        form.addRow("Розмір блоку аналізу (px):", self._spin_uniform_block_size)
 
         return box
 
@@ -4007,6 +4220,8 @@ class SettingsWindow(QWidget):
         self._spin_uniformity_low.setValue(s.get("shadow_uniformity_low", 0.30))
         self._spin_uniformity_high.setValue(s.get("shadow_uniformity_high", 0.55))
         self._spin_uniformity_photo_high.setValue(s.get("shadow_uniformity_photo_high", 0.65))
+        self._spin_uniform_std_threshold.setValue(s.get("shadow_uniform_std_threshold", 2.0))
+        self._spin_uniform_block_size.setValue(s.get("shadow_uniform_block_size", 32))
 
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
@@ -4097,6 +4312,8 @@ class SettingsWindow(QWidget):
             "shadow_uniformity_low":     self._spin_uniformity_low.value(),
             "shadow_uniformity_high":    self._spin_uniformity_high.value(),
             "shadow_uniformity_photo_high": self._spin_uniformity_photo_high.value(),
+            "shadow_uniform_std_threshold": self._spin_uniform_std_threshold.value(),
+            "shadow_uniform_block_size":    int(self._spin_uniform_block_size.value()),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 
@@ -4208,28 +4425,35 @@ def apply(
     return result
 
 
-def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, binary: bool = False) -> np.ndarray:
+def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, do_binary: bool = False,
+                      skip_contrast: bool = False, skip_grayscale: bool = False) -> np.ndarray:
     """
     Pipeline для чорно-білих документів.
     Без HDR (щоб не псувати чіткість тексту).
     Послідовність: CLAHE → Auto-Contrast → Sharpen → Grayscale → [бінаризація].
     Параметр binary=False за замовчуванням (grayscale зберігає напівтони, бінаризація — чистий чорно-білий).
+
+    Args:
+        skip_contrast: якщо True — пропустити auto_contrast (для сумісності з pipeline, де contrast окремий крок)
+        skip_grayscale: якщо True — пропустити to_grayscale (для сумісності з pipeline, де grayscale окремий крок)
     """
     result = _step_lab_clahe_normalize(image, aggressive=True)  # Агресивний для ч-б
-    result = bc.auto_contrast(result)
+    if not skip_contrast:
+        result = bc.auto_contrast(result)
     result = sharpen_module.apply(result, strength=sharpen_strength)
-    result = bc.to_grayscale(result)
+    if not skip_grayscale:
+        result = bc.to_grayscale(result)
 
-    if binary:
+    if do_binary:
         # Адаптивна бінаризація: збереже текст навіть при нерівному освітленні
         # adaptiveThreshold очікує grayscale (1 канал)
         gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        binary = cv2.adaptiveThreshold(gray, BINARY_MAX_VALUE,
-                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                     cv2.THRESH_BINARY,
-                                     BINARY_BLOCK_SIZE, BINARY_C)
+        bin_img = cv2.adaptiveThreshold(gray, BINARY_MAX_VALUE,
+                                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY,
+                                        BINARY_BLOCK_SIZE, BINARY_C)
         # Конвертуємо назад у BGR для сумісності з pipeline
-        result = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        result = cv2.cvtColor(bin_img, cv2.COLOR_GRAY2BGR)
     return result
 
 
@@ -4268,7 +4492,7 @@ def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool = True) -> np.
 
     if aggressive:
         # Агресивний normalize — тільки для ч-б документів
-        l_norm = cv2.normalize(l_clahe, None, 0, 255, cv2.NORM_MINMAX)
+        l_norm = cv2.normalize(l_clahe, np.empty_like(l_clahe), 0, 255, cv2.NORM_MINMAX)
     else:
         # Фото/кольорові документи: CLAHE-ефект застосовуємо тільки там,
         # де є реальна локальна деталізація. На плоских/світлих ділянках
@@ -6016,20 +6240,31 @@ def _detect_with_rotation_candidates(gray: np.ndarray) -> np.ndarray | None:
             continue
         rh, rw = rotated.shape[:2]
         score = _score_quad(corners, rotated.shape)
+        # Завдання 1.2: бонус 10% для оригінальної орієнтації
+        if angle == 0:
+            score = score * 1.10
         if score <= best_score:
             continue
         # Перераховуємо координати назад у простір оригінального gray
         if angle == 0:
             back = corners
         elif angle == 90:
-            # (x, y) у rotated → (y, w - x) у оригіналі (де w = h оригіналу)
-            back = np.array([[c[1], w - c[0]] for c in corners], dtype=np.float32)
+            # ROTATE_90_CLOCKWISE: rotated має розміри (w, h) → rh=w, rw=h
+            # Зворотня трансформація: (x, y) у rotated → (rh-1-y, x) в оригіналі
+            back = np.array([[rh - 1 - c[1], c[0]] for c in corners], dtype=np.float32)
         elif angle == 180:
-            # (x, y) у rotated → (w - x, h - y) у оригіналі (rw==w, rh==h при 180°)
-            back = np.array([[w - c[0], h - c[1]] for c in corners], dtype=np.float32)
+            # ROTATE_180: rotated має розміри (h, w) → rh=h, rw=w
+            # Зворотня трансформація: (x, y) у rotated → (rw-1-x, rh-1-y) в оригіналі
+            back = np.array([[rw - 1 - c[0], rh - 1 - c[1]] for c in corners], dtype=np.float32)
         elif angle == 270:
-            # (x, y) у rotated → (h - y, x) у оригіналі
-            back = np.array([[h - c[1], c[0]] for c in corners], dtype=np.float32)
+            # ROTATE_90_COUNTERCLOCKWISE: rotated має розміри (w, h) → rh=w, rw=h
+            # Зворотня трансформація: (x, y) у rotated → (y, rw-1-x) в оригіналі
+            back = np.array([[c[1], rw - 1 - c[0]] for c in corners], dtype=np.float32)
+        # Завдання 1.3: валідація орієнтації квадрилатераля після _order_points
+        ordered_back = _order_points(back)
+        if not _is_clockwise(ordered_back):
+            logger.debug(f"_detect_with_rotation_candidates: angle={angle} — не за годинниковою стрілкою, відхиляємо")
+            continue
         best_score = score
         best_corners = back
 
@@ -6525,6 +6760,27 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def _is_clockwise(pts: np.ndarray) -> bool:
+    """
+    Перевіряє чи впорядковані точки [TL, TR, BR, BL] за годинниковою стрілкою.
+    Використовує знак cross product суми по 4-кутнику.
+    
+    Args:
+        pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL]
+    
+    Returns:
+        True якщо точки йдуть за годинниковою стрілкою
+    """
+    # Cross product sum для 4-кутника: (x1*y2 - x2*y1) + (x2*y3 - x3*y2) + ...
+    # > 0 = clockwise, < 0 = counter-clockwise
+    total = 0.0
+    n = len(pts)
+    for i in range(n):
+        j = (i + 1) % n
+        total += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1])
+    return total > 0
+
+
 def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
     """
     Обчислює розміри вихідного зображення та dst-точки.
@@ -6682,6 +6938,7 @@ def auto_correct_iterative(
     image: np.ndarray,
     max_passes: int = ITERATIVE_MAX_PASSES,
     max_dim: int = MAX_ANALYSIS_DIM,
+    partial: bool = False,
 ) -> tuple[np.ndarray, int, float]:
     """
     Ітеративна перспективна корекція: до max_passes проходів warp.
@@ -6694,6 +6951,7 @@ def auto_correct_iterative(
         image: вхідне BGR зображення
         max_passes: максимальна кількість проходів (рекомендовано 2)
         max_dim: максимальний розмір для аналізу
+        partial: якщо True — використовує apply_partial_correction замість apply_correction
 
     Returns:
         (result, passes_done, final_skew_ratio)
@@ -6751,7 +7009,7 @@ def auto_correct_iterative(
             break
 
         prev_quality = quality
-        candidate = apply_correction(current, corners)
+        candidate = apply_partial_correction(current, corners) if partial else apply_correction(current, corners)
         current = candidate
         passes_done += 1
 
@@ -7044,6 +7302,14 @@ def run_autofix(
         else:
             logger.debug("run_autofix: кути не знайдено ДО обробки, спробуємо після")
 
+    # Завдання 4.1: color_cast ДО класифікації документа
+    # (після детекції кутів, але до класифікації)
+    _had_color_cast = False
+    result, _had_color_cast = color_cast.correct_color_cast(result)
+    if _had_color_cast:
+        log_entries.append({"step": "color_cast_pre", "applied": True,
+                            "detail": "відтінок нейтралізовано до класифікації"})
+
     # Спочатку визначаємо тип документа (до будь-якої обробки!)
     if doc_type is None:
         doc_type = doc_classifier.classify(
@@ -7061,6 +7327,13 @@ def run_autofix(
     _shadow_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
     _shadow_unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
     _shadow_unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
+
+    # Завдання 1.6: detect_face один раз на початку, щоб не викликати до 3 разів
+    from processing import diagnostics as _diag_face_once
+    _face_detected: bool | None = None
+    if doc_type != DocType.PHOTO.value:
+        # Фото перевіряється окремо всередині циклу
+        _face_detected = _diag_face_once.detect_face(result)
 
     # Проходимо циклом по фіксованому порядку кроків
     for step_key, _ in PIPELINE_STEPS_FIXED_ORDER:
@@ -7096,6 +7369,9 @@ def run_autofix(
                     # Фото документа на білому фоні (зроблене на телефон) має високу uniformity.
                     # Пейзажі, портрети — низьку uniformity, тому автоматично захищені.
                     _shadow_unif_high_photo = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
+                    # Завдання 4.2: знизити поріг для CAPTURE_PHONE
+                    if _capture_cond == CAPTURE_PHONE:
+                        _shadow_unif_high_photo = _shadow_unif_high_photo * 0.85
                     if _bg_uniformity > _shadow_unif_high_photo:
                         # Додаткова перевірка: якщо є обличчя — не видаляємо тіні
                         from processing import diagnostics as _diag_face_photo
@@ -7128,8 +7404,7 @@ def run_autofix(
                     # Однорідний фон bw_document / flat_background.
                     # Додаткова перевірка: якщо є обличчя — це документ з портретом,
                     # shadow_remove зіпсує фото особи.
-                    from processing import diagnostics as _diag_face
-                    if _diag_face.detect_face(result):
+                    if _face_detected:
                         _should_run = False
                         _reason = f"face_detected (uniformity={_bg_uniformity:.2f})"
                     else:
@@ -7143,13 +7418,17 @@ def run_autofix(
                     # Проміжний діапазон — тільки для bw_document,
                     # і тільки якщо немає обличчя
                     if doc_type == DocType.BW_DOCUMENT.value:
-                        from processing import diagnostics as _diag_face
-                        if _diag_face.detect_face(result):
-                            _should_run = False
-                            _reason = "face_detected (mid uniformity)"
-                        else:
+                        # Завдання 4.3: якщо був color cast — завжди запускаємо shadow_remove
+                        if _had_color_cast:
                             _should_run = True
-                            _reason = f"doc_type={doc_type}"
+                            _reason = f"bw_document + color_cast"
+                        else:
+                            if _face_detected:
+                                _should_run = False
+                                _reason = "face_detected (mid uniformity)"
+                            else:
+                                _should_run = True
+                                _reason = f"doc_type={doc_type}"
                 if _should_run:
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
@@ -7174,8 +7453,8 @@ def run_autofix(
                             a_bg = a_ch[bg_mask]
                             b_bg = b_ch[bg_mask]
                             # посилено з 0.3 до 0.7: відтінок телефонної камери потребує сильнішої корекції
-                            a_shift = (128.0 - float(np.median(a_bg))) * 0.7
-                            b_shift = (128.0 - float(np.median(b_bg))) * 0.7
+                            a_shift = (128.0 - float(np.median(a_bg.astype(np.float64)))) * 0.7
+                            b_shift = (128.0 - float(np.median(b_bg.astype(np.float64)))) * 0.7
                             a_ch = np.clip(a_ch.astype(np.float32) + a_shift, 0, 255).astype(np.uint8)
                             b_ch = np.clip(b_ch.astype(np.float32) + b_shift, 0, 255).astype(np.uint8)
                             merged = cv2.merge([l_ch, a_ch, b_ch])
@@ -7267,7 +7546,9 @@ def run_autofix(
         elif step_key == "sharpen":
             # Різкість застосовується згідно з типом документа
             if doc_type == DocType.BW_DOCUMENT.value:
-                result = autofix.apply_bw_document(result, sharpen_strength=sharpen_strength, binary=bw_binary)
+                # Завдання 1.5: тільки sharpen, без auto_contrast+grayscale всередині
+                # (contrast і grayscale виконуються окремими кроками пізніше)
+                result = sharpen.apply(result, strength=sharpen_strength)
                 log_entries.append({"step": "sharpen", "applied": True, "detail": f"різкість {sharpen_strength:.2f}"})
                 if bw_binary:
                     log_entries.append({"step": "binary", "applied": True, "detail": "бінаризація"})
@@ -7374,7 +7655,8 @@ def run_perspective_auto_smart(
 
         if has_skewed:
             # Ітеративна корекція (до 2 проходів)
-            result, passes, final_skew = perspective.auto_correct_iterative(image)
+            _partial_val = settings.get("partial_perspective", False) if settings else False
+            result, passes, final_skew = perspective.auto_correct_iterative(image, partial=_partial_val)
             # Deskew після останнього warp
             angle = deskew_module.measure_skew_angle(result)
             if abs(angle) >= deskew_module.DESKEW_MIN_ANGLE:
@@ -7885,6 +8167,10 @@ def _remove_shadow_bgr(
     Видаляє тіні через морфологічну обробку кожного BGR-каналу окремо.
     Алгоритм з shadow_remove_gui.py — дає кращі результати для деяких
     типів документів з рівномірним кольоровим фоном.
+
+    Після злиття каналів виконується пост-обробка (Блок 6):
+    - Детекція артефактів: пікселі де L < 30 або chroma > 25
+    - Заміна артефактних пікселів на колір фону документа
     """
     if kernel_size == 0:
         kernel_size = _auto_kernel_size(image)
@@ -7908,7 +8194,78 @@ def _remove_shadow_bgr(
 
         result_channels.append(normed)
 
-    return cv2.merge(result_channels)
+    result = cv2.merge(result_channels)
+
+    # --- Блок 6: пост-обробка артефактів ---
+    _fix_bgr_artifacts(result, image)
+
+    return result
+
+
+def _fix_bgr_artifacts(result: np.ndarray, original: np.ndarray) -> None:
+    """
+    Виправляє кольорові артефакти після BGR-обробки.
+    Модифікує result in-place.
+
+    Завдання 6.1: детектує пікселі з артефактами (L < 30 або chroma > 25).
+    Завдання 6.2: замінює їх на колір фону (медіанний колір пікселів L > 220).
+
+    Args:
+        result: BGR зображення після _remove_shadow_bgr (змінюється in-place)
+        original: оригінальне BGR зображення (до обробки)
+    """
+    h, w = result.shape[:2]
+
+    # Конвертуємо результат у LAB
+    result_lab = cv2.cvtColor(result, cv2.COLOR_BGR2LAB)
+    l_res, a_res, b_res = cv2.split(result_lab)
+
+    # Завдання 6.1: маска артефактів
+    dark_mask = l_res < 30
+    a_f = a_res.astype(np.float32)
+    b_f = b_res.astype(np.float32)
+    chroma = np.sqrt((a_f - 128.0) ** 2 + (b_f - 128.0) ** 2)
+    color_noise_mask = chroma > 25.0
+    artifact_mask = dark_mask | color_noise_mask
+
+    artifact_count = np.count_nonzero(artifact_mask)
+    if artifact_count == 0:
+        return
+    logger.debug(f"_fix_bgr_artifacts: знайдено {artifact_count} артефактних пікселів")
+
+    # Завдання 6.2: визначення кольору фону
+    orig_lab = cv2.cvtColor(original, cv2.COLOR_BGR2LAB)
+    l_orig, a_orig, b_orig = cv2.split(orig_lab)
+    bg_mask = l_orig > 220
+    bg_pixel_count = np.count_nonzero(bg_mask)
+
+    if bg_pixel_count > h * w * 0.05:
+        # Медіанний колір фону по кожному каналу BGR
+        bg_b = np.median(original[:, :, 0][bg_mask]).astype(np.uint8)
+        bg_g = np.median(original[:, :, 1][bg_mask]).astype(np.uint8)
+        bg_r = np.median(original[:, :, 2][bg_mask]).astype(np.uint8)
+        bg_color = (int(bg_b), int(bg_g), int(bg_r))
+    else:
+        bg_color = (255, 255, 255)
+
+    # Замінюємо артефактні пікселі на bg_color
+    result[artifact_mask] = bg_color
+
+    # Злегка розмиваємо межу між заміненими і нормальними пікселями
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    border_mask = cv2.dilate(artifact_mask.astype(np.uint8), kernel_dilate, iterations=1)
+    # Виключаємо оригінальні артефакти з border, щоб не розмивати їх знову
+    border_only = border_mask.astype(bool) & ~artifact_mask
+    if np.any(border_only):
+        blurred = cv2.GaussianBlur(result, (3, 3), 1.0)
+        # Змішуємо тільки border-пікселі
+        alpha = 0.5
+        result[border_only] = (
+            (result[border_only].astype(np.float32) * (1.0 - alpha) +
+             blurred[border_only].astype(np.float32) * alpha)
+        ).astype(np.uint8)
+
+    logger.debug(f"_fix_bgr_artifacts: замінено {artifact_count} пікселів кольором {bg_color}")
 
 
 def remove_shadow(
@@ -8099,8 +8456,8 @@ def _detect_shadow(
         return False
 
     # --- Шлях A: основна логіка — глобальний перцентиль ---
-    p_low = float(np.percentile(l, SHADOW_DETECT_PERCENTILE))
-    p_high = float(np.percentile(l, 100 - SHADOW_DETECT_PERCENTILE))
+    p_low = float(np.percentile(l.astype(np.float64), SHADOW_DETECT_PERCENTILE))
+    p_high = float(np.percentile(l.astype(np.float64), 100 - SHADOW_DETECT_PERCENTILE))
 
     if p_low < threshold:
         ratio_val = p_low / max(p_high, 1.0)
@@ -8132,7 +8489,7 @@ def _detect_shadow(
                         bmask = blocks_mask[bi, :, bj, :]
                         bg_pixels = block[bmask]
                         if len(bg_pixels) > 10:
-                            stds.append(float(np.std(bg_pixels)))
+                            stds.append(float(np.std(bg_pixels.astype(np.float64))))
 
                 if stds:
                     mean_std = float(np.mean(stds))
@@ -8892,11 +9249,11 @@ _PREVIEW_CACHE: "OrderedDict[int, np.ndarray]" = OrderedDict()
 
 def _preview_cache_key(image: np.ndarray, max_side: int) -> int:
     """
-    Генерує унікальний ключ для кешу на основі shape, dtype та max_side.
-    Не використовує id() безпосередньо, щоб кеш працював навіть якщо
-    той самий масив було завантажено повторно.
+    Генерує унікальний ключ для кешу на основі shape, dtype, хешу вмісту та max_side.
+    Використовує хеш перших 1024 байтів пікселів замість ctypes.data (адреса пам'яті),
+    щоб уникнути колізій коли новий масив займає ту саму адресу.
     """
-    return hash((image.shape, image.dtype, image.ctypes.data, max_side))
+    return hash((image.shape, image.dtype, hash(image.tobytes()[:1024]), max_side))
 
 
 def preview_cache_clear() -> None:
@@ -9138,165 +9495,6 @@ class DropEventFilter(QAbstractNativeEventFilter):
 ```
 
 ============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\README.md
-============================================================
-# PhotoPrint
-
-Програма для автоматичної обробки та друку фотографій та документів з пакетною обробкою.
-
-## Функціональність
-
-- **Автоматична класифікація документів:** чорно-білі, кольорові документи, фото
-- **Інтелектуальна авто-обробка:**
-  - Авто-видалення градієнтних тіней (background estimation: blur/divide)
-  - Авто-яскравість на основі гістограми (5-95% перцентилів)
-  - Авто-контраст з адаптивними порогами
-  - Авто-різкість на основі аналізу blur (Laplacian variance)
-  - Авто-детекція перспективи з fallback
-- **Ручне коригування:**
-  - Слайдери: Тіні, Яскравість, Контраст, Різкість, HDR
-  - Кнопки: Ч/Б, Авто-перспектива, Ручна перспектива
-  - Скидання: Скинути перспективу, Скинути слайдери
-- **Пакетна обробка:** Авто та ручний режими для черги файлів
-- **Drag & Drop:** Підтримка перетягування файлів та папок (Windows)
-- **Запам'ятовування налаштувань:** Ручні корекції зберігаються для кожного файлу
-- **Друк:** Відправка на принтер (priPrinter або інший)
-- **Збереження:** Опціональне збереження оброблених файлів з суфіксом `_edited`
-
-## Встановлення
-
-```bash
-pip install -r requirements.txt
-```
-
-## Запуск
-
-```bash
-python main.py
-```
-
-## Структура проєкту
-
-```
-photoprint/
-├── main.py                    # Точка входу
-├── requirements.txt
-├── status.md                  # Статус розробки та план
-├── README.md                  # Цей файл
-│
-├── config/
-│   ├── settings.ini           # Конфігураційний файл
-│   └── app_settings.py        # Читання/запис налаштувань
-│
-├── core/
-│   ├── loader.py              # Завантаження JPG/PNG/WEBP/TIFF/HEIC
-│   ├── saver.py               # Збереження JPG
-│   └── printer.py             # Відправка на принтер
-│
-├── processing/
-│   ├── autofix.py             # Pipeline для різних типів документів
-│   ├── doc_classifier.py      # Класифікація (ч-б / кольоровий / фото)
-│   ├── sharpen.py             # Різкість (Unsharp Mask) + авто-різкість
-│   ├── hdr.py                 # HDR tone mapping
-│   ├── shadow_highlight.py   # Висвітлення тіней (LAB)
-│   ├── shadow_remove.py      # Видалення градієнтних тіней (blur/divide)
-│   ├── brightness_contrast.py  # Яскравість, контраст, авто-корекція
-│   ├── perspective.py         # Авто + ручна перспективна корекція
-│   └── pipeline.py            # Єдина точка входу для GUI
-│
-├── batch/
-│   └── batch_processor.py     # Пакетна обробка (авто / ручний режим)
-│
-├── gui/
-│   ├── main_window.py         # Головне вікно
-│   ├── preview.py             # Прев'ю До/Після
-│   ├── queue_view.py          # Черга файлів з Drag & Drop
-│   ├── controls.py            # Слайдери та кнопки керування
-│   └── settings_window.py     # Вікно налаштувань
-│
-└── utils/
-    ├── file_utils.py          # Робота з файлами
-    ├── image_utils.py         # Утиліти numpy/OpenCV
-    ├── logger.py              # Логування
-    └── win_drop.py            # Windows Drag & Drop
-```
-
-## Використання
-
-### Базовий робочий процес
-
-1. **Додайте файли:** Перетягніть файли у чергу або використайте кнопки "Додати файли" / "Додати папку"
-2. **Оберіть режим:** **Авто** або **Ручний**
-3. **Авто режим:**
-   - Натисніть "Друкувати все"
-   - Програма автоматично класифікує, обробить і надрукує всі файли
-4. **Ручний режим:**
-   - Переглядайте кожне фото по черзі
-   - Використовуйте "Auto Fix" для автоматичної корекції
-   - Або налаштуйте вручну через слайдери
-   - Натисніть "Друк" або "Пропустити"
-
-### Слайдери
-
-- **Тіні (0.0-2.0):** Висвітлення темних областей
-- **Яскравість (-1.0-1.0):** Зміна загальної яскравості
-- **Контраст (-1.0-1.0):** Зміна контрасту
-- **Різкість (0.0-1.0):** Збільшення різкості
-- **HDR (0.0-1.0):** Витягування деталей з тіней та світл
-
-### Кнопки авто-корекції
-
-- **Авто яскравість:** Автоматичне вирівнювання яскравості на основі гістограми
-- **Авто контраст:** Автоматичне вирівнювання контрасту
-- **Авто різкість:** Автоматична різкість на основі аналізу blur
-
-### Перспектива
-
-- **Авто-перспектива:** Автоматичне знаходження та виправлення перспективи документа
-- **Ручна перспектива:** Ручне встановлення 4 кутів документа
-- **Скинути перспективу:** Повернення до оригінальної перспективи
-
-### Налаштування
-
-Файл `config/settings.ini` — текстовий, редагується блокнотом.
-Або через кнопку **⚙ Налаштування** у програмі.
-
-**Доступні налаштування:**
-- Пороги класифікації документів
-- Сила авто-різкості та поріг blur
-- Параметри авто-яскравості/контрасту (перцентилі)
-- Налаштування бінаризації для ч-б документів
-- Якість JPG при збереженні
-- Папка для збереження оброблених файлів
-- Назва принтера за замовчуванням
-- Вікно програми (розмір, позиція)
-
-## Стан розробки
-
-Детальний статус розробки дивіться у файлі [status.md](status.md).
-
-**Фаза 1 (завершено):**
-- ✅ Авто-обробка з класифікацією документів
-- ✅ Окремі pipeline для ч-б, кольорових документів та фото
-- ✅ Авто-видалення градієнтних тіней (blur/divide)
-- ✅ Авто-яскравість, авто-контраст, авто-різкість
-- ✅ Авто-детекція перспективи
-- ✅ Запам'ятовування ручних корекцій
-- ✅ Логування
-
-**Фаза 2 (наступний пріоритет):**
-- Адаптивний HDR для фото документів
-- Юніт-тести
-- Оптимізація пам'яті
-- Підтримка RAW-форматів
-- Трей-режим
-
-## Ліцензія
-
-Проект розробляється для особистого використання.
-
-
-============================================================
 Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
 ============================================================
 ```python
@@ -9484,13 +9682,3 @@ if __name__ == "__main__":
     main()
 
 ```
-
-============================================================
-Документація/файл: D:\Python\Print_COPY\photoprint\photoprint-main\requirements.txt
-============================================================
-opencv-python>=4.8
-numpy>=1.24
-Pillow>=10.0
-pillow-heif>=0.13
-PyQt6>=6.5
-rawpy>=0.27

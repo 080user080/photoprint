@@ -438,11 +438,14 @@ def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
         logger.debug("_try_hough_lines: недостатньо ліній")
         return None
 
+    # Приводимо до numpy array для усунення Pylance type errors
+    lines_arr = np.asarray(lines, dtype=np.int32).reshape(-1, 4)
+
     h_lines = []  # горизонтальні: (y_avg, x_start, x_end, votes)
     v_lines = []  # вертикальні:   (x_avg, y_start, y_end, votes)
 
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
+    for line in lines_arr:
+        x1, y1, x2, y2 = line
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
         length = float(np.hypot(dx, dy))
@@ -760,21 +763,31 @@ def _validate_document(approx: np.ndarray, image_shape: tuple) -> bool:
 def _order_points(pts: np.ndarray) -> np.ndarray:
     """
     Упорядковує 4 точки: [TL, TR, BR, BL].
+
+    TL = топ-ліво: мінімальна сума x+y
+    TR = топ-право: мінімальна різниця y-x (скос вправо-вгору)
+    BR = бот-право: максимальна сума x+y
+    BL = бот-ліво: максимальна різниця y-x (скос вліво-вниз)
+
+    np.diff(pts, axis=1) обчислює pts[:, 1] - pts[:, 0] = y - x.
     """
     rect = np.zeros((CORNER_COUNT, 2), dtype=np.float32)
     s = pts.sum(axis=1)
     rect[0] = pts[np.argmin(s)]   # TL — мінімальна сума x+y
     rect[2] = pts[np.argmax(s)]   # BR — максимальна сума x+y
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmax(diff)]  # TR — максимальна x - y
-    rect[3] = pts[np.argmin(diff)]  # BL — мінімальна x - y
+    diff = np.diff(pts, axis=1)   # diff = y - x
+    rect[1] = pts[np.argmin(diff)]  # TR — мінімальна y-x (малий y, великий x)
+    rect[3] = pts[np.argmax(diff)]  # BL — максимальна y-x (великий y, малий x)
     return rect
 
 
 def _is_clockwise(pts: np.ndarray) -> bool:
     """
     Перевіряє чи впорядковані точки [TL, TR, BR, BL] за годинниковою стрілкою.
-    Використовує знак cross product суми по 4-кутнику.
+    Використовує signed area (trapezoid rule).
+
+    В системі координат зображення (y вниз):
+    - [TL, TR, BR, BL] дає від'ємну signed area → за годинниковою стрілкою.
     
     Args:
         pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL]
@@ -782,14 +795,15 @@ def _is_clockwise(pts: np.ndarray) -> bool:
     Returns:
         True якщо точки йдуть за годинниковою стрілкою
     """
-    # Cross product sum для 4-кутника: (x1*y2 - x2*y1) + (x2*y3 - x3*y2) + ...
-    # > 0 = clockwise, < 0 = counter-clockwise
+    # Signed area (trapezoid rule):
+    # sum((x_{i+1} - x_i) * (y_{i+1} + y_i))
+    # < 0 = clockwise (y-down), > 0 = counter-clockwise (y-down)
     total = 0.0
     n = len(pts)
     for i in range(n):
         j = (i + 1) % n
         total += (pts[j][0] - pts[i][0]) * (pts[j][1] + pts[i][1])
-    return total > 0
+    return bool(total < 0)
 
 
 def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
@@ -873,10 +887,10 @@ def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
     thr_w = width * PARTIAL_SKEW_THRESHOLD_RATIO
     thr_h = height * PARTIAL_SKEW_THRESHOLD_RATIO
     return {
-        "top":    abs(tl[1] - tr[1]) > thr_h,
-        "bottom": abs(bl[1] - br[1]) > thr_h,
-        "left":   abs(tl[0] - bl[0]) > thr_w,
-        "right":  abs(tr[0] - br[0]) > thr_w,
+        "top":    bool(abs(tl[1] - tr[1]) > thr_h),
+        "bottom": bool(abs(bl[1] - br[1]) > thr_h),
+        "left":   bool(abs(tl[0] - bl[0]) > thr_w),
+        "right":  bool(abs(tr[0] - br[0]) > thr_w),
     }
 
 

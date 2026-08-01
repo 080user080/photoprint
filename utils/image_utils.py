@@ -19,11 +19,11 @@ _PREVIEW_CACHE: "OrderedDict[int, np.ndarray]" = OrderedDict()
 
 def _preview_cache_key(image: np.ndarray, max_side: int) -> int:
     """
-    Генерує унікальний ключ для кешу на основі shape, dtype, хешу вмісту та max_side.
-    Використовує хеш перших 1024 байтів пікселів замість ctypes.data (адреса пам'яті),
-    щоб уникнути колізій коли новий масив займає ту саму адресу.
+    Генерує унікальний ключ для кешу на основі shape, dtype, хешу ВСЬОГО вмісту та max_side.
+    Використовує image.tobytes() замість обрізаного перших 1024 байтів,
+    щоб виключити колізії кешу між різними кадрами з однаковими білими полями.
     """
-    return hash((image.shape, image.dtype, hash(image.tobytes()[:1024]), max_side))
+    return hash((image.shape, image.dtype, hash(image.tobytes()), max_side))
 
 
 def preview_cache_clear() -> None:

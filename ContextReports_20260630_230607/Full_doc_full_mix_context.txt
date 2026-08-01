@@ -80,12 +80,13 @@ class BatchProcessor:
     def _safe_worker_count(self, requested: int) -> int:
         """Зменшує кількість потоків якщо доступної RAM недостатньо.
 Якщо psutil не встановлено — повертає requested без змін."""
-    def run_auto(self, on_progress: Callable[[int, int, str], None] | None, on_error: Callable[[int, str, str], None] | None) -> int:
+    def run_auto(self, on_progress: Callable[[int, int, str], None] | None, on_error: Callable[[int, str, str], None] | None, on_print_progress: Callable[[int, int, str], None] | None) -> int:
         """Паралельна обробка файлів через ThreadPoolExecutor.
 Фаза 1: завантаження + pipeline — паралельно (N потоків).
 Фаза 2: друк — послідовно в порядку черги (щоб зберегти порядок).
 
-on_progress(current_1based, total, filename)
+on_progress(current_1based, total, filename)     — для фази 1 (обробка)
+on_print_progress(current_1based, total, filename) — для фази 2 (друк)
 on_error(index, filename, message)
 Повертає кількість успішно надрукованих."""
     def has_next(self) -> bool:
@@ -236,6 +237,7 @@ class ControlsPanel(QWidget):
   from typing import Optional, Dict, Any
   import numpy
   import cv2
+  from PyQt6.QtWidgets import QSizePolicy
   from PyQt6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QButtonGroup, QRadioButton, QFileDialog, QProgressBar, QScrollArea, QApplication, QSystemTrayIcon, QMenu, QComboBox
   from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
   from PyQt6.QtGui import QIcon
@@ -270,11 +272,19 @@ class MainWindow(QMainWindow):
     def _quit_app(self):
         """Повне завершення програми."""
     def closeEvent(self, event):
-        """Перевизначення closeEvent:
-- Якщо minimize_to_tray == True — ховаємо в трей.
-- Інакше — завершуємо програму."""
+        """Перевизначення closeEvent (Завд. 2.3):
+- Показуємо QProgressDialog асинхронно, не блокуємо GUI.
+- Якщо minimize_to_tray == True — ховаємо в трей."""
+    def _has_running_threads(self) -> bool:
+        """Перевіряє чи є активні фонові потоки."""
+    def _check_threads_and_close(self):
+        """Завдання 2.3: перевіряє чи завершились потоки, закриває коли готово."""
+    def _force_close(self):
+        """Примусове закриття — зупиняємо потоки та закриваємо."""
+    def _do_close(self, event):
+        """Фактичне закриття — зберігаємо геометрію та закриваємо."""
     def _wait_for_threads(self):
-        """Чекає завершення всіх активних фонових потоків. Викликається в closeEvent."""
+        """Завдання 2.3: застарілий синхронний метод — тепер не використовується."""
     def _on_win_drop(self, paths: list[str]):
         """Колбек від WM_DROPFILES — приймає будь-які файли та папки."""
     def _apply_background_color(self):
@@ -294,11 +304,13 @@ class MainWindow(QMainWindow):
     def _save_window_geometry(self):
         """Зберігає розмір вікна та ширину черги в налаштуваннях."""
     def resizeEvent(self, event):
-        """Перевизначення resizeEvent для збереження розміру вікна."""
+        """Перевизначення resizeEvent — відкладене збереження через таймер (Завд. 2.2)."""
     def _on_shadow_mode_changed(self, btn_id: int):
         """Зміна режиму видалення тіней через радіокнопки."""
     def _on_settings_saved(self, s: dict):
     def _open_settings(self):
+    def _sync_processor_with_queue(self):
+        """Завдання 2.5: синхронізує _processor з _queue."""
     def _on_files_added(self, paths: list[str]):
         """Спільний обробник після додавання файлів будь-яким способом."""
     def _browse_files(self):
@@ -312,7 +324,10 @@ class MainWindow(QMainWindow):
         """Клік на файл у списку — завантажуємо для перегляду."""
     def _do_autofix(self):
     def _do_autofix_classic(self):
-    def _on_controls_changed(self, vals: dict):
+    def _on_controls_changed(self, vals: Optional[dict]):
+        """Завдання 2.1: Debounce — тільки запускає таймер, не обробляє негайно.
+При reset_all викликається безпосередньо."""
+    def _on_controls_changed_debounced(self, vals: Optional[dict]):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
     def _do_auto_brightness(self):
     def _do_auto_contrast(self):
@@ -323,8 +338,14 @@ class MainWindow(QMainWindow):
         """Масштабує кути з простору source у простір make_preview(source)."""
     def _preview_pts_to_corners(self, points: list[QPoint], source: np.ndarray) -> np.ndarray:
         """Масштабує точки з простору make_preview(source) у простір source."""
+    def _freeze_preview_panels(self) -> None:
+        """Фіксує розмір панелей прев'ю під час редагування перспективи (Завд. 3.5)."""
+    def _unfreeze_preview_panels(self) -> None:
+        """Відновлює автоматичний ресайз панелей прев'ю (Завд. 3.5)."""
     def _show_perspective_points(self, corners: np.ndarray, status_msg: str) -> None:
         """corners — у просторі _base_for_perspective."""
+    def _validate_corners_in_bounds(self, corners: np.ndarray, image: np.ndarray) -> bool:
+        """Перевіряє чи всі кути в межах [-20%, 120%] розміру зображення."""
     def _default_perspective_corners(self, image: np.ndarray) -> np.ndarray:
         """Повертає кути 80% центру зображення (10% відступ з кожного краю)."""
     def _do_persp_manual_fallback(self):
@@ -335,8 +356,12 @@ class MainWindow(QMainWindow):
         """Скидає перспективу до стану до початку ручної перспективи."""
     def _do_reset_all(self):
         """Скидає всі корекції до оригінального зображення."""
-    def _on_persp_pts(self, points: list) -> None:
-        """Користувач змінив точки перспективи — застосовуємо до _base_for_perspective."""
+    def _on_persp_pts_light(self, points: list) -> None:
+        """Завдання 3.1: Легкий обробник — тільки перемальовка точок на BEFORE.
+Викликається при кожному mousemove (points_changed)."""
+    def _on_persp_pts_heavy(self, points: list) -> None:
+        """Завдання 3.1: Важкий обробник — запускає pipeline.
+Викликається тільки при mouseRelease (points_released)."""
     def _do_print_current(self):
     def _do_skip(self):
     def _do_save_image(self):
@@ -346,6 +371,9 @@ class MainWindow(QMainWindow):
         """Безпечно завершує авто-потік та звільняє ресурси."""
     def _start_auto(self):
     def _on_auto_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 1 (обробка)."""
+    def _on_auto_print_progress(self, cur: int, total: int, fname: str):
+        """Завдання 2.4: прогрес фази 2 (друк)."""
     def _on_auto_error(self, idx: int, fname: str, msg: str):
     def _on_auto_done(self, count: int):
     def _load_next_manual(self):
@@ -532,11 +560,15 @@ def apply(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_h
 adaptive_hdr: якщо True — використовує hdr.apply_adaptive з text_mask
               для зменшення ефекту HDR у текстових областях.
 Повертає оброблений uint8 BGR."""
-def apply_bw_document(image: np.ndarray, sharpen_strength: float, binary: bool) -> np.ndarray:
+def apply_bw_document(image: np.ndarray, sharpen_strength: float, do_binary: bool, skip_contrast: bool, skip_grayscale: bool) -> np.ndarray:
     """Pipeline для чорно-білих документів.
 Без HDR (щоб не псувати чіткість тексту).
 Послідовність: CLAHE → Auto-Contrast → Sharpen → Grayscale → [бінаризація].
-Параметр binary=False за замовчуванням (grayscale зберігає напівтони, бінаризація — чистий чорно-білий)."""
+Параметр binary=False за замовчуванням (grayscale зберігає напівтони, бінаризація — чистий чорно-білий).
+
+Args:
+    skip_contrast: якщо True — пропустити auto_contrast (для сумісності з pipeline, де contrast окремий крок)
+    skip_grayscale: якщо True — пропустити to_grayscale (для сумісності з pipeline, де grayscale окремий крок)"""
 def apply_color_document(image: np.ndarray, sharpen_strength: float) -> np.ndarray:
     """Pipeline для кольорових документів (грамоти, посвідчення).
 Без HDR (щоб не змінювати кольори).
@@ -985,6 +1017,15 @@ def _validate_document(approx: np.ndarray, image_shape: tuple) -> bool:
 2. Пропорції адекватні (не 1:50)"""
 def _order_points(pts: np.ndarray) -> np.ndarray:
     """Упорядковує 4 точки: [TL, TR, BR, BL]."""
+def _is_clockwise(pts: np.ndarray) -> bool:
+    """Перевіряє чи впорядковані точки [TL, TR, BR, BL] за годинниковою стрілкою.
+Використовує знак cross product суми по 4-кутнику.
+
+Args:
+    pts: float32 array shape (4,2), впорядковані [TL, TR, BR, BL]
+
+Returns:
+    True якщо точки йдуть за годинниковою стрілкою"""
 def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
     """Обчислює розміри вихідного зображення та dst-точки.
 Додає padding щоб уникнути обрізання по краях."""
@@ -1018,7 +1059,7 @@ def auto_correct_partial(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, b
 
 Returns:
     (результат, знайдено)"""
-def auto_correct_iterative(image: np.ndarray, max_passes: int, max_dim: int) -> tuple[np.ndarray, int, float]:
+def auto_correct_iterative(image: np.ndarray, max_passes: int, max_dim: int, partial: bool) -> tuple[np.ndarray, int, float]:
     """Ітеративна перспективна корекція: до max_passes проходів warp.
 
 Після кожного проходу перевіряємо залишкове викривлення.
@@ -1029,6 +1070,7 @@ Args:
     image: вхідне BGR зображення
     max_passes: максимальна кількість проходів (рекомендовано 2)
     max_dim: максимальний розмір для аналізу
+    partial: якщо True — використовує apply_partial_correction замість apply_correction
 
 Returns:
     (result, passes_done, final_skew_ratio)
@@ -1243,7 +1285,21 @@ Returns:
 def _remove_shadow_bgr(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
     """Видаляє тіні через морфологічну обробку кожного BGR-каналу окремо.
 Алгоритм з shadow_remove_gui.py — дає кращі результати для деяких
-типів документів з рівномірним кольоровим фоном."""
+типів документів з рівномірним кольоровим фоном.
+
+Після злиття каналів виконується пост-обробка (Блок 6):
+- Детекція артефактів: пікселі де L < 30 або chroma > 25
+- Заміна артефактних пікселів на колір фону документа"""
+def _fix_bgr_artifacts(result: np.ndarray, original: np.ndarray) -> None:
+    """Виправляє кольорові артефакти після BGR-обробки.
+Модифікує result in-place.
+
+Завдання 6.1: детектує пікселі з артефактами (L < 30 або chroma > 25).
+Завдання 6.2: замінює їх на колір фону (медіанний колір пікселів L > 220).
+
+Args:
+    result: BGR зображення після _remove_shadow_bgr (змінюється in-place)
+    original: оригінальне BGR зображення (до обробки)"""
 def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool, is_color_document: bool, coarse_blend: float, bgr_mode: bool) -> np.ndarray:
     """Видаляє градієнтні тіні з документа через background estimation.
 
@@ -1483,9 +1539,9 @@ def build_output_path(source_path: str, save_folder: str, suffix: str) -> str:
 
 Сутності:
 def _preview_cache_key(image: np.ndarray, max_side: int) -> int:
-    """Генерує унікальний ключ для кешу на основі shape, dtype та max_side.
-Не використовує id() безпосередньо, щоб кеш працював навіть якщо
-той самий масив було завантажено повторно."""
+    """Генерує унікальний ключ для кешу на основі shape, dtype, хешу вмісту та max_side.
+Використовує хеш перших 1024 байтів пікселів замість ctypes.data (адреса пам'яті),
+щоб уникнути колізій коли новий масив займає ту саму адресу."""
 def preview_cache_clear() -> None:
     """Очищує весь кеш прев'ю. Викликати при закритті файлу або скиданні черги."""
 def preview_cache_stats() -> dict:

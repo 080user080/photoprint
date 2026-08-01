@@ -8,6 +8,7 @@ Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено
 
 import os
 import sys
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
@@ -67,6 +68,37 @@ DROP_SETUP_DELAY_MS = 300
 # Константи для режимів
 MODE_AUTO_ID = 0
 MODE_MANUAL_ID = 1
+
+# Константа для стилю статус-бару (щоб уникнути дублювання CSS)
+_STATUS_BAR_STYLE = (
+    "QStatusBar {"
+    "  color: #444444; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
+
+_STATUS_BAR_STYLE_SUCCESS = (
+    "QStatusBar {"
+    "  color: #006600; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
+
+_STATUS_BAR_STYLE_ERROR = (
+    "QStatusBar {"
+    "  color: #CC0000; font-size: 14px;"
+    "  background: #D8DCE0;"
+    "  border-top: 2px solid #BBBBBB;"
+    "  padding: 4px 6px;"
+    "  min-height: 30px;"
+    "}"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +171,7 @@ class MainWindow(QMainWindow):
         self._single_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
         self._perspective_cached_result: Optional[np.ndarray] = None  # кеш perspective для слайдерів
+        self._pending_deskew_result: Optional[np.ndarray] = None      # deskew-результат до коміту (відкладений)
         self._drop_filter: Optional[DropEventFilter] = None
         self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
         self._per_file: Dict[str, Dict[str, Any]] = {}  # збережені налаштування слайдерів по файлу
@@ -183,23 +216,31 @@ class MainWindow(QMainWindow):
         hwnd = int(self.winId())
         register_drop_window(hwnd)
         self._drop_filter = DropEventFilter(self._on_win_drop)
-        QApplication.instance().installNativeEventFilter(self._drop_filter)
+        instance = QApplication.instance()
+        if instance is not None:
+            instance.installNativeEventFilter(self._drop_filter)
 
     def _setup_tray(self):
         """Ініціалізація QSystemTrayIcon (PRIO 9)."""
         if not QSystemTrayIcon.isSystemTrayAvailable():
             self._logger.debug("Трей недоступний на цій системі")
             return
-        icon = self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+        style = self.style()
+        if style is not None:
+            icon = style.standardIcon(style.StandardPixmap.SP_ComputerIcon)
+        else:
+            icon = QIcon()
         self._tray_icon = QSystemTrayIcon(icon, self)
         self._tray_icon.setToolTip("PhotoPrint")
 
         menu = QMenu()
         act_show = menu.addAction("Відкрити")
-        act_show.triggered.connect(self._show_from_tray)
+        if act_show is not None:
+            act_show.triggered.connect(self._show_from_tray)
         menu.addSeparator()
         act_quit = menu.addAction("Вихід")
-        act_quit.triggered.connect(self._quit_app)
+        if act_quit is not None:
+            act_quit.triggered.connect(self._quit_app)
 
         self._tray_icon.setContextMenu(menu)
         self._tray_icon.activated.connect(self._on_tray_activated)
@@ -559,6 +600,29 @@ class MainWindow(QMainWindow):
         controls_layout.addLayout(buttons_row)
         controls_layout.addWidget(self._controls)
 
+        # Кнопки "Застосувати deskew" / "Скасувати deskew" — приховані за замовчуванням
+        deskew_row = QHBoxLayout()
+        deskew_row.setSpacing(8)
+        self._btn_apply_deskew = QPushButton("✔ Застосувати deskew")
+        self._btn_apply_deskew.setObjectName("btn_apply_deskew")
+        self._btn_apply_deskew.setStyleSheet(
+            "background:#2E8B57; color:white; border:none; border-radius:4px; padding:5px 12px; font-size:13px; font-weight:bold;"
+        )
+        self._btn_apply_deskew.setVisible(False)
+        self._btn_apply_deskew.clicked.connect(self._commit_deskew)
+        self._btn_cancel_deskew = QPushButton("✖ Скасувати deskew")
+        self._btn_cancel_deskew.setObjectName("btn_cancel_deskew")
+        self._btn_cancel_deskew.setStyleSheet(
+            "background:#CD5C5C; color:white; border:none; border-radius:4px; padding:5px 12px; font-size:13px; font-weight:bold;"
+        )
+        self._btn_cancel_deskew.setVisible(False)
+        self._btn_cancel_deskew.clicked.connect(self._cancel_deskew)
+        deskew_row.addStretch()
+        deskew_row.addWidget(self._btn_apply_deskew)
+        deskew_row.addWidget(self._btn_cancel_deskew)
+        deskew_row.addStretch()
+        controls_layout.addLayout(deskew_row)
+
         controls_container = QWidget()
         controls_container.setLayout(controls_layout)
         center.addWidget(controls_container)
@@ -568,19 +632,12 @@ class MainWindow(QMainWindow):
 
         # Статусний рядок вбудований у QMainWindow
         sb = self.statusBar()
-        sb.setStyleSheet(
-            "QStatusBar {"
-            "  color: #444444; font-size: 14px;"
-            "  background: #D8DCE0;"
-            "  border-top: 2px solid #BBBBBB;"
-            "  padding: 4px 6px;"
-            "  min-height: 30px;"
-            "}"
-        )
+        if sb is not None:
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
 
-        self._status_file_label = QLabel("")
-        self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
-        sb.addPermanentWidget(self._status_file_label)
+            self._status_file_label = QLabel("")
+            self._status_file_label.setStyleSheet("color: #888888; font-size: 12px; padding-right: 8px;")
+            sb.addPermanentWidget(self._status_file_label)
 
     def _btn_style(self, color="#2E5FA3"):
         return (
@@ -720,6 +777,7 @@ class MainWindow(QMainWindow):
         self._processed = None
         self._perspective_corners = None  # скидаємо кути перспективи
         self._perspective_cached_result = None
+        self._pending_deskew_result = None
         self._preview.disable_perspective_edit()
         self._current_path = None
         self._per_file.clear()
@@ -762,6 +820,7 @@ class MainWindow(QMainWindow):
                 self._logger.warning("_on_queue_selection: попередній потік ще виконується — очищуємо")
                 self._cleanup_single_thread()
             # Завдання 2.2: очищуємо кеш прев'ю перед завантаженням нового файлу
+            self._show_deskew_buttons(False)
             image_utils.preview_cache_clear()
             # Скидаємо режим редагування перспективи для попереднього зображення
             self._preview.disable_perspective_edit()
@@ -801,6 +860,9 @@ class MainWindow(QMainWindow):
             self._logger.warning("AutoFix: попередній потік ще виконується — чекаємо завершення")
             self._cleanup_single_thread()
 
+        # Commit відкладеного deskew перед autofix
+        if self._pending_deskew_result is not None:
+            self._commit_deskew()
         # Commit перспективи перед autofix
         if self._base_for_perspective is not None and self._perspective_corners is not None:
             self._base = pipeline.run_perspective_manual(
@@ -813,6 +875,9 @@ class MainWindow(QMainWindow):
 
         s = self._settings
         vals = self._controls.values()
+        if self._base is None:
+            self._set_status("Немає базового зображення для обробки")
+            return
         base_snapshot = self._base.copy()   # знімок щоб не передавати self в інший потік
         # Завдання 2.3: зберігаємо _current_path на момент запуску
         path_snapshot = self._current_path
@@ -881,12 +946,12 @@ class MainWindow(QMainWindow):
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
-    def _on_controls_changed(self, vals: dict = None):
+    def _on_controls_changed(self, vals: Optional[dict] = None):
         """Завдання 2.1: Debounce — тільки запускає таймер, не обробляє негайно.
         При reset_all викликається безпосередньо."""
         self._controls_timer.start()
 
-    def _on_controls_changed_debounced(self, vals: dict = None):
+    def _on_controls_changed_debounced(self, vals: Optional[dict] = None):
         """Миттєво оновлює прев'ю при зміні будь-якого слайдера."""
         if self._base is None and self._base_for_perspective is None:
             return
@@ -905,6 +970,9 @@ class MainWindow(QMainWindow):
                     self._perspective_cached_result = base_for_sliders
             else:
                 base_for_sliders = self._base
+
+            if base_for_sliders is None:
+                return
 
             result = pipeline.run_manual_adjustments(
                 base_for_sliders,
@@ -1020,11 +1088,26 @@ class MainWindow(QMainWindow):
         base_snapshot = self._base.copy()
         corners_before = pipeline.detect_corners(base_snapshot)
 
+        # DEBUG: лог стану перед операцією
+        self._logger.debug(
+            "_do_persp_auto: base_snapshot shape=%s md5=%s",
+            base_snapshot.shape,
+            hashlib.md5(base_snapshot.tobytes()).hexdigest()[:16],
+        )
+
         def _work():
             return pipeline.run_perspective_auto_smart(base_snapshot, self._settings)
 
         def _on_done(payload):
             result, status = payload
+
+            # DEBUG: лог результату
+            self._logger.debug(
+                "_do_persp_auto: result shape=%s md5=%s status=%s",
+                result.shape,
+                hashlib.md5(result.tobytes()).hexdigest()[:16],
+                status,
+            )
 
             # Визначаємо режим за статусом
             if "перспектива не" in status:
@@ -1038,19 +1121,23 @@ class MainWindow(QMainWindow):
                 self._preview.disable_perspective_edit()
                 self._set_status(status)
             elif "deskew" in status and corners_before is None:
-                # deskew only: коміт у _base, без входу в perspective-режим
+                # deskew only: НЕ комітимо в _base, показуємо тільки в "ПІСЛЯ"
                 self._base_for_perspective = None
                 self._perspective_corners = None
-                self._base = result.copy()
+                # Зберігаємо результат як відкладений (користувач має підтвердити)
+                self._pending_deskew_result = result.copy()
                 self._processed = result
-                self._preview.set_before(image_utils.make_preview(self._base))
+                # BEFORE — незмінний оригінал (base_snapshot)
+                self._preview.set_before(image_utils.make_preview(base_snapshot))
+                # AFTER — deskew-результат
                 self._preview.set_after(image_utils.make_preview(result))
                 self._preview.disable_perspective_edit()
-                self._set_status(status)
+                self._set_status(status + " | Натисніть «✔ Застосувати deskew» або «✖ Скасувати»")
+                self._show_deskew_buttons(True)
             else:
                 # straight/corrected: показати кути, увійти в perspective-режим
                 corners = corners_before if corners_before is not None else pipeline.detect_corners(result)
-                if corners is not None:
+                if corners is not None and self._base_for_perspective is not None:
                     # Завдання 3.3: валідація точок у межах зображення
                     if not self._validate_corners_in_bounds(corners, self._base_for_perspective):
                         self._logger.debug("_do_persp_auto: кути поза межами, fallback до default")
@@ -1063,10 +1150,11 @@ class MainWindow(QMainWindow):
                     self._preview.disable_perspective_edit()
                     self._set_status(status)
                 # Оновлюємо BEFORE з джерелом
-                prev_source = image_utils.make_preview(self._base_for_perspective)
-                # Завдання 3.5: фіксуємо розмір панелей (якщо увійшли в перспективу)
-                self._freeze_preview_panels()
-                self._preview.set_before(prev_source)
+                if self._base_for_perspective is not None:
+                    prev_source = image_utils.make_preview(self._base_for_perspective)
+                    # Завдання 3.5: фіксуємо розмір панелей (якщо увійшли в перспективу)
+                    self._freeze_preview_panels()
+                    self._preview.set_before(prev_source)
                 # Результат (perspective applied) — показуємо на AFTER
                 self._processed = result
                 self._preview.set_after(image_utils.make_preview(result))
@@ -1075,6 +1163,40 @@ class MainWindow(QMainWindow):
             self._update_buttons()
 
         self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
+
+    def _commit_deskew(self) -> None:
+        """Застосовує відкладений deskew-результат у _base."""
+        if self._pending_deskew_result is None:
+            return
+        self._logger.debug("_commit_deskew: коміт deskew-результату в _base")
+        self._base = self._pending_deskew_result.copy()
+        self._pending_deskew_result = None
+        self._processed = self._base.copy()
+        self._preview.set_before(image_utils.make_preview(self._base))
+        self._preview.set_after(image_utils.make_preview(self._base))
+        self._show_deskew_buttons(False)
+        self._set_status("Deskew застосовано")
+        self._on_controls_changed()
+
+    def _cancel_deskew(self) -> None:
+        """Скасовує відкладений deskew-результат, повертається до base_snapshot."""
+        if self._pending_deskew_result is None:
+            return
+        self._logger.debug("_cancel_deskew: скасування deskew")
+        self._pending_deskew_result = None
+        # _processed повертаємо до _base (який не змінювався)
+        if self._base is not None:
+            self._processed = self._base.copy()
+            self._preview.set_after(image_utils.make_preview(self._base))
+        self._show_deskew_buttons(False)
+        self._set_status("Deskew скасовано")
+
+    def _show_deskew_buttons(self, visible: bool) -> None:
+        """Показує/ховає кнопки «Застосувати deskew» та «Скасувати deskew»."""
+        if hasattr(self, '_btn_apply_deskew') and self._btn_apply_deskew is not None:
+            self._btn_apply_deskew.setVisible(visible)
+        if hasattr(self, '_btn_cancel_deskew') and self._btn_cancel_deskew is not None:
+            self._btn_cancel_deskew.setVisible(visible)
 
     def _corners_to_preview_pts(
         self,
@@ -1175,6 +1297,13 @@ class MainWindow(QMainWindow):
         self._base_for_perspective = self._base.copy()
         self._preview.disable_perspective_edit()
         self._perspective_cached_result = None
+
+        # DEBUG: лог стану перед операцією
+        self._logger.debug(
+            "_do_persp_manual: base_for_perspective shape=%s md5=%s",
+            self._base_for_perspective.shape,
+            hashlib.md5(self._base_for_perspective.tobytes()).hexdigest()[:16],
+        )
         # Спробуємо детектувати кути
         corners = pipeline.detect_corners(self._base_for_perspective)
         if corners is None:
@@ -1320,6 +1449,9 @@ class MainWindow(QMainWindow):
 # ------------------------------------------------------------------
 
     def _do_print_current(self):
+        # Якщо є незафіксований deskew — фіксуємо
+        if self._pending_deskew_result is not None:
+            self._commit_deskew()
         # Якщо є незафіксована ручна перспектива — фіксуємо
         if self._base_for_perspective is not None and self._perspective_corners is not None:
             self._base = pipeline.run_perspective_manual(
@@ -1486,6 +1618,9 @@ class MainWindow(QMainWindow):
     def _load_next_manual(self):
         # Зберігаємо налаштування поточного файлу перед переходом
         self._store_current_settings()
+        # Commit deskew та перспективи перед переходом
+        if self._pending_deskew_result is not None:
+            self._commit_deskew()
         # Commit перспективи перед переходом
         if self._base_for_perspective is not None and self._perspective_corners is not None:
             self._base = pipeline.run_perspective_manual(
@@ -1513,7 +1648,8 @@ class MainWindow(QMainWindow):
             self._processed = None
             path = self._processor.current_file()
             self._current_path = path
-            self._restore_file_settings(path)
+            if path is not None:
+                self._restore_file_settings(path)
             prev = image_utils.make_preview(img)
             self._preview.set_before(prev)
             self._preview.set_after(prev)
@@ -1624,50 +1760,21 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str, timeout_ms: int = 0):
         sb = self.statusBar()
+        if sb is None:
+            return
         if text.startswith("Auto Fix:"):
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #006600; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE_SUCCESS)
         elif "Помилка" in text:
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #CC0000; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE_ERROR)
         else:
-            sb.setStyleSheet(
-                "QStatusBar {"
-                "  color: #444444; font-size: 14px;"
-                "  background: #D8DCE0;"
-                "  border-top: 2px solid #BBBBBB;"
-                "  padding: 4px 6px;"
-                "  min-height: 30px;"
-                "}"
-            )
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
         sb.showMessage(text, timeout_ms)
 
     def _reset_status_style(self):
         """Скидає стиль статус-бару до стандартного."""
         sb = self.statusBar()
-        sb.setStyleSheet(
-            "QStatusBar {"
-            "  color: #444444; font-size: 14px;"
-            "  background: #D8DCE0;"
-            "  border-top: 2px solid #BBBBBB;"
-            "  padding: 4px 6px;"
-            "  min-height: 30px;"
-            "}"
-        )
+        if sb is not None:
+            sb.setStyleSheet(_STATUS_BAR_STYLE)
 
     def _set_file_status(self, filename: str):
         self._status_file_label.setText(filename)

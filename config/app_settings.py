@@ -148,7 +148,7 @@ def save(settings: dict, path=None):
         "autofix_enabled":     str(settings.get("autofix_enabled",   True)).lower(),
         "auto_apply_autofix":  str(settings.get("auto_apply_autofix", True)).lower(),
         "hdr_in_autofix":      str(settings.get("hdr_in_autofix",    True)).lower(),
-        "auto_perspective":    str(settings.get("auto_perspective", True)).lower(),
+        "auto_perspective":    str(settings.get("auto_perspective", False)).lower(),
         "partial_perspective": str(settings.get("partial_perspective", DEFAULT_PARTIAL_PERSPECTIVE)).lower(),
         "shadow_highlight_strength": str(settings.get("shadow_highlight_strength", DEFAULT_SHADOW_HIGHLIGHT_STRENGTH)),
         "sharpen_strength":    str(settings.get("sharpen_strength", DEFAULT_SHARPEN_STRENGTH)),

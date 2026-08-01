@@ -1,0 +1,1278 @@
+СТРУКТУРА ПРОЄКТУ
+============================================================
+D:\Python\TEXT\translation\KOD_pereclad\API
+1_folder_loader.py
+6_save_response.py
+7_update_merged.py
+api_config.py
+api_gui.py
+api_pipeline.py
+api_translator.py
+
+============================================================
+ДЕТАЛІЗАЦІЯ КОДУ (рівень: high)
+============================================================
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\1_folder_loader.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+1_folder_loader.py - Вибір папки з файлами для перекладу
+"""
+
+import os
+import sys
+from pathlib import Path
+import tkinter as tk
+from tkinter import filedialog
+
+CONFIG_PATH = "config.yaml"
+
+
+def choose_folder_gui():
+    """GUI-вибір папки."""
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)  # Робимо вікно поверх інших
+        folder = filedialog.askdirectory(
+            title="Виберіть папку з файлами для перекладу"
+        )
+        root.destroy()
+        return folder
+    except Exception as e:
+        print(f"❌ Помилка при виборі папки: {e}")
+        return None
+
+
+def update_only_input_folder(new_folder: str, config_path: str = CONFIG_PATH):
+    """
+    Оновлює ТІЛЬКИ одну строку input_folder: "...".
+    Інші настройки НЕ чіпає.
+    """
+    try:
+        if not os.path.exists(config_path):
+            print("❌ config.yaml не знайдено.")
+            return False
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        new_lines = []
+        updated = False
+
+        for line in lines:
+            if line.strip().startswith("input_folder:"):
+                # Зберігаємо початкові пробіли та формат
+                prefix = line.split("input_folder:")[0]
+                new_line = f'{prefix}input_folder: "{new_folder}"\n'
+                new_lines.append(new_line)
+                updated = True
+            else:
+                new_lines.append(line)
+
+        if not updated:
+            print("⚠️ В config.yaml немає рядка 'input_folder:'. Додаю його в кінець.")
+            new_lines.append(f'input_folder: "{new_folder}"\n')
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.writelines(new_lines)
+
+        print(f"✅ input_folder оновлено на: {new_folder}")
+        return True
+    except Exception as e:
+        print(f"❌ Помилка при оновленні конфігу: {e}")
+        return False
+
+
+def get_input_folder():
+    """Якщо в конфізі порожньо або не існує — питає користувача."""
+    folder_from_cfg = ""
+
+    # Читаємо config.yaml без YAML (без зміни формату)
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip().startswith("input_folder:"):
+                        # Виділяємо значення як є
+                        part = line.split("input_folder:", 1)[1].strip()
+                        folder_from_cfg = part.strip(' "\'')
+                        break
+        except Exception as e:
+            print(f"⚠️ Помилка читання конфігу: {e}")
+
+    # Перевіряємо чи папка існує
+    if folder_from_cfg and os.path.exists(folder_from_cfg) and os.path.isdir(folder_from_cfg):
+        print(f"✔ Використовую папку з конфіга: {folder_from_cfg}")
+        return Path(folder_from_cfg)
+    elif folder_from_cfg:
+        print(f"⚠️ Папка з конфіга не існує або не є папкою: {folder_from_cfg}")
+
+    # Якщо папка пуста, не існує або не вказана → питаємо користувача
+    print("📁 Папка не вказана, не існує або не є папкою — відкриваю вибір...")
+    
+    chosen = choose_folder_gui()
+
+    if not chosen or not os.path.exists(chosen):
+        print("❌ Папку не вибрано або вона не існує")
+        return None
+
+    # Оновлюємо конфіг
+    if update_only_input_folder(chosen):
+        return Path(chosen)
+    else:
+        print("⚠️ Не вдалося оновити конфіг, але продовжуємо з вибраною папкою")
+        return Path(chosen)
+
+
+def main():
+    """Основна функція скрипта."""
+    print("🔍 Пошук папки з файлами для перекладу...")
+    
+    try:
+        folder = get_input_folder()
+        
+        if folder:
+            # Перевіряємо чи є файли в папці
+            txt_files = list(folder.glob("*.txt"))
+            if txt_files:
+                print(f"📂 Папка: {folder}")
+                print(f"📄 Знайдено {len(txt_files)} .txt файлів")
+                return folder
+            else:
+                print(f"⚠️ У папці {folder} не знайдено .txt файлів")
+                # Все одно повертаємо папку - можливо файли додадуть пізніше
+                return folder
+        else:
+            print("❌ Не вдалося отримати папку для роботи")
+            return None
+            
+    except Exception as e:
+        print(f"💥 Критична помилка: {e}")
+        return None
+
+
+if __name__ == "__main__":
+    try:
+        result = main()
+        if result:
+            print("✅ Скрипт успішно завершено")
+            sys.exit(0)  # Успішний вихід
+        else:
+            print("❌ Скрипт завершився з помилкою")
+            sys.exit(1)  # Вихід з помилкою
+    except KeyboardInterrupt:
+        print("\n⏹️ Скрипт перервано користувачем")
+        sys.exit(0)
+    except Exception as e:
+        print(f"💥 Непередбачена помилка: {e}")
+        sys.exit(1)
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\6_save_response.py
+============================================================
+```python
+import os
+import sys
+import re
+import logging
+import yaml
+from pathlib import Path
+
+# Налаштування логування
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("save_response")
+
+CONFIG_PATH = "config.yaml"
+
+def load_config():
+    """Завантажити конфігурацію"""
+    if not os.path.exists(CONFIG_PATH):
+        raise FileNotFoundError(f"Не знайдено файл {CONFIG_PATH}")
+
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    defaults = {
+        "input_folder": "input",
+        "output_folder": "output",
+        "log_formats": ["txt"],
+        "manual_tag": "_check",
+        "merged_filename": "merged_UKR.txt",
+        "numeric_prefix_regex": r"^\d+",
+    }
+
+    for k, v in defaults.items():
+        cfg.setdefault(k, v)
+
+    # Переконатися, що output_folder - це підпапка input_folder
+    input_folder = cfg["input_folder"]
+    output_folder = cfg["output_folder"]
+    if not output_folder.startswith(input_folder):
+        cfg["output_folder"] = str(Path(input_folder) / output_folder)
+    
+    return cfg
+
+def get_input_file_from_args():
+    """Отримати вхідний файл з аргументів командного рядка"""
+    if len(sys.argv) >= 2:
+        input_file_path = Path(sys.argv[1])
+        logger.info(f"Отримано файл з аргументів: {input_file_path}")
+        return input_file_path
+    else:
+        logger.error("❌ Не вказано файл для збереження в аргументах")
+        return None
+
+def save_output(text, out_folder: Path, filename):
+    """Зберегти результат у файл"""
+    out_folder.mkdir(parents=True, exist_ok=True)
+    out_file = out_folder / filename
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write(text)
+    
+    # Більше не викликаємо update_merged_file тут - буде викликатися окремо після обробки всіх файлів
+    return out_file
+
+def read_clipboard():
+    """Спроба прочитати текст з буфера обміну"""
+    try:
+        import pyperclip
+        data = pyperclip.paste()
+        if isinstance(data, str) and data:
+            return data
+    except Exception:
+        pass
+
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+        data = root.clipboard_get()
+        root.destroy()
+        if isinstance(data, str) and data:
+            return data
+    except Exception:
+        pass
+
+    return None
+
+def get_response_text_from_clipboard():
+    """Отримати текст відповіді ТІЛЬКИ з буфера обміну"""
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        clip = read_clipboard()
+        if clip and clip.strip():
+            logger.info(f"✅ Текст успішно отримано з буфера обміну (спроба {attempt + 1})")
+            return clip.strip()
+        
+        logger.warning(f"⚠️ Буфер обміну порожній (спроба {attempt + 1}/{max_attempts})")
+        if attempt < max_attempts - 1:
+            import time
+            time.sleep(0.5)
+    
+    return None
+
+def update_merged_file(output_folder_path):
+    """Повністю перезаписує злитий файл з усіма перекладеними текстами"""
+    try:
+        cfg = load_config()
+        merged_filename = cfg.get("merged_filename", "merged_UKR.txt")
+        merged_file_path = Path(output_folder_path) / merged_filename
+        numeric_rx = re.compile(cfg.get("numeric_prefix_regex", r"^\d+"))
+        
+        # Знаходимо всі перекладені файли у вихідній папці
+        ukr_files = list(Path(output_folder_path).glob("*_UKR.txt"))
+        
+        if not ukr_files:
+            logger.warning("Не знайдено перекладених файлів для об'єднання")
+            return
+        
+        # Сортуємо файли за числовим префіксом
+        ordered_files = []
+        for file_path in ukr_files:
+            # Отримуємо оригінальну основу імені файлу (без _UKR)
+            stem = file_path.stem
+            if stem.endswith('_UKR'):
+                original_stem = stem[:-4]
+            else:
+                original_stem = stem
+                
+            match = numeric_rx.match(original_stem)
+            num = int(match.group()) if match else 999999
+            ordered_files.append((num, file_path))
+        
+        ordered_files.sort(key=lambda x: x[0])
+        
+        # Повністю перезаписуємо злитий файл
+        with open(merged_file_path, "w", encoding="utf-8") as merged_file:
+            for i, (num, file_path) in enumerate(ordered_files):
+                # Читаємо вміст файлу та видаляємо зайві переноси на початку та вкінці
+                content = file_path.read_text(encoding="utf-8").strip()
+                
+                # Записуємо вміст без зайвих переносів
+                if content:
+                    merged_file.write(content)
+                    # Додаємо один перенос між файлами (не після останнього)
+                    if i < len(ordered_files) - 1:
+                        merged_file.write("\n")
+        
+        logger.info(f"Перезаписано злитий файл: {merged_file_path}")
+        logger.info(f"Об'єднано {len(ordered_files)} файлів")
+        
+    except Exception as e:
+        logger.error(f"Помилка при оновленні злитого файлу: {e}")
+
+def main():
+    """Головна логіка: зберегти відповідь з буфера обміну для поточного файлу"""
+    try:
+        cfg = load_config()
+    except Exception as e:
+        logger.error("Не вдалося завантажити конфіг: %s", e)
+        sys.exit(1)
+
+    # Отримуємо вхідний файл з аргументів
+    input_file = get_input_file_from_args()
+    if not input_file:
+        logger.error("❌ Не вказано файл для збереження")
+        sys.exit(2)
+
+    # Отримуємо текст ВИКЛЮЧНО з буфера обміну
+    response_text = get_response_text_from_clipboard()
+    if not response_text:
+        logger.error("❌ Не вдалося отримати текст з буфера обміну. Переконайтеся, що відповідь скопійована.")
+        sys.exit(3)
+
+    try:
+        # Створюємо ім'я вихідного файлу
+        stem = input_file.stem
+        suffix = input_file.suffix
+        out_name = f"{stem}_UKR{suffix}"
+        
+        # Зберігаємо у вихідній папці
+        output_folder = Path(cfg["output_folder"])
+        saved_path = save_output(response_text, output_folder, out_name)
+        logger.info("✅ Результат збережено: %s", saved_path)
+        
+        # Оновлюємо злитий файл тільки якщо це останній файл (перевіряємо за наявністю спеціального маркера)
+        # Або взагалі не оновлюємо тут - буде викликатися окремо
+        sys.exit(0)
+        
+    except Exception as e:
+        logger.error("❌ Помилка при збереженні результату: %s", e)
+        sys.exit(4)
+
+if __name__ == "__main__":
+    main()
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\7_update_merged.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+7_update_merged.py
+Додає вміст нового файлу до злитого файлу при кожному виклику
+З видаленням зайвих переносів рядків
+"""
+
+import os
+import sys
+import re
+import logging
+import yaml
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("update_merged")
+
+CONFIG_PATH = "config.yaml"
+
+def load_config():
+    """Завантажити конфігурацію"""
+    if not os.path.exists(CONFIG_PATH):
+        raise FileNotFoundError(f"Не знайдено файл {CONFIG_PATH}")
+
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    defaults = {
+        "input_folder": "input",
+        "output_folder": "output",
+        "merged_filename": "merged_UKR.txt",
+        "numeric_prefix_regex": r"^\d+",
+    }
+
+    for k, v in defaults.items():
+        cfg.setdefault(k, v)
+    
+    return cfg
+
+def get_output_folder():
+    """Отримати правильний шлях до папки output з конфігурації"""
+    cfg = load_config()
+    input_folder = Path(cfg["input_folder"])
+    output_folder = cfg["output_folder"]
+    
+    # Якщо output_folder не є абсолютним шляхом, робимо його відносно input_folder
+    if not Path(output_folder).is_absolute():
+        output_folder = input_folder / output_folder
+    
+    # Створюємо папку, якщо вона не існує
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"📁 Папка output: {output_folder}")
+    return Path(output_folder)
+
+def get_latest_ukr_file(output_folder):
+    """Знайти найновіший файл _UKR.txt у папці output"""
+    try:
+        ukr_files = list(output_folder.glob("*_UKR.txt"))
+        if not ukr_files:
+            logger.warning(f"Не знайдено UKR файлів у папці: {output_folder}")
+            return None
+        
+        # Сортуємо за часом модифікації (найновіший перший)
+        ukr_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        logger.info(f"Знайдено {len(ukr_files)} UKR файлів, найновіший: {ukr_files[0].name}")
+        return ukr_files[0]
+    except Exception as e:
+        logger.error(f"Помилка пошуку UKR файлів: {e}")
+        return None
+
+def normalize_line_breaks(text):
+    """Нормалізувати переноси рядків: замінити послідовності з 2+ переносів на один перенос"""
+    # Замінюємо будь-яку послідовність з 2+ переносів на один перенос
+    normalized = re.sub(r'\n{3,}', '\n\n', text)
+    # Видаляємо переноси на початку та в кінці тексту
+    return normalized.strip()
+
+def append_to_merged_file(output_folder_path, new_file_path):
+    """Додати вміст нового файлу до злитого файлу з нормалізацією переносів"""
+    try:
+        cfg = load_config()
+        merged_filename = cfg.get("merged_filename", "merged_UKR.txt")
+        merged_file_path = output_folder_path / merged_filename
+        
+        # Читаємо вміст нового файлу
+        new_content = new_file_path.read_text(encoding="utf-8").strip()
+        if not new_content:
+            logger.warning(f"Файл {new_file_path.name} порожній, нічого не додано")
+            return
+        
+        # Нормалізуємо переноси в новому вмісті
+        new_content_normalized = normalize_line_breaks(new_content)
+        
+        # Перевіряємо, чи вже існує злитий файл
+        if merged_file_path.exists():
+            # Читаємо існуючий вміст
+            existing_content = merged_file_path.read_text(encoding="utf-8")
+            
+            # Нормалізуємо переноси в існуючому вмісті
+            existing_content_normalized = normalize_line_breaks(existing_content)
+            
+            # Перевіряємо, чи новий вміст вже є в злитому файлі
+            if new_content_normalized in existing_content_normalized:
+                logger.info(f"Вміст файлу {new_file_path.name} вже є у злитому файлі, пропускаємо")
+                return
+            
+            # Об'єднуємо вміст
+            combined_content = existing_content_normalized + "\n" + new_content_normalized
+            
+            # Нормалізуємо переноси в об'єднаному вмісті
+            final_content = normalize_line_breaks(combined_content)
+            
+            # Записуємо оновлений вміст
+            merged_file_path.write_text(final_content, encoding="utf-8")
+        else:
+            # Створюємо новий злитий файл з нормалізованими переносами
+            merged_file_path.write_text(new_content_normalized, encoding="utf-8")
+        
+        logger.info(f"✅ Вміст файлу {new_file_path.name} додано до злитого файлу (переноси нормалізовано)")
+        
+    except Exception as e:
+        logger.error(f"❌ Помилка при додаванні до злитого файлу: {e}")
+
+def main():
+    try:
+        # Отримуємо правильну папку output з конфігурації
+        output_folder = get_output_folder()
+        
+        # Знаходимо найновіший UKR файл
+        latest_file = get_latest_ukr_file(output_folder)
+        if not latest_file:
+            logger.warning("Не знайдено жодного UKR файлу для додавання")
+            return 0
+        
+        # Додаємо його вміст до злитого файлу
+        append_to_merged_file(output_folder, latest_file)
+        return 0
+        
+    except Exception as e:
+        logger.error(f"❌ Помилка при оновленні злитого файлу: {e}")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\api_config.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api_config.py
+Завантаження/збереження налаштувань та конфігурації
+"""
+
+import os
+import sys
+import json
+import logging
+from pathlib import Path
+
+# Шлях до config.yaml (у корені проекту, не в API/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_PATH = PROJECT_ROOT / "config.yaml"
+# Файл для збереження налаштувань GUI (ключ, модель, папка)
+GUI_CONFIG_PATH = Path(__file__).resolve().parent / "gui_settings.json"
+
+logger = logging.getLogger("api_config")
+
+
+def load_config() -> dict:
+    """Завантажити config.yaml з кореня проекту"""
+    import yaml
+
+    if not CONFIG_PATH.exists():
+        print(f"❌ Не знайдено файл {CONFIG_PATH}")
+        print("   Спочатку запустіть 0_create_default_config.py")
+        sys.exit(1)
+
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    # Дефолтні значення
+    defaults = {
+        "input_folder": "",
+        "output_folder": "output",
+        "merged_filename": "merged_UKR.txt",
+        "numeric_prefix_regex": r"^\d+",
+        "max_retries": 2,
+        "template_message": "",
+        "log_formats": ["txt"],
+        "manual_tag": "_check",
+    }
+    for k, v in defaults.items():
+        cfg.setdefault(k, v)
+
+    return cfg
+
+
+def load_gui_settings() -> dict:
+    """Завантажити збережені налаштування GUI"""
+    defaults = {
+        "api_key": "",
+        "model": "gemini-3.1-flash-lite-preview",
+        "input_folder": "",
+    }
+    if GUI_CONFIG_PATH.exists():
+        try:
+            with open(GUI_CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for k in defaults:
+                if k in data and data[k]:
+                    defaults[k] = data[k]
+        except Exception as e:
+            logger.warning(f"Не вдалося прочитати gui_settings.json: {e}")
+    return defaults
+
+
+def save_gui_settings(api_key: str, model: str, input_folder: str):
+    """Зберегти налаштування GUI"""
+    data = {
+        "api_key": api_key,
+        "model": model,
+        "input_folder": input_folder,
+    }
+    try:
+        with open(GUI_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        logger.info("✅ Налаштування збережено")
+    except Exception as e:
+        logger.warning(f"Не вдалося зберегти налаштування: {e}")
+
+
+def get_input_folder(cfg: dict) -> str:
+    """Отримати папку введення з конфігу або через GUI"""
+    input_folder = cfg.get("input_folder", "")
+
+    if input_folder and os.path.exists(input_folder) and os.path.isdir(input_folder):
+        return input_folder
+
+    # Якщо папка не вказана або не існує — використовуємо 1_folder_loader.py
+    print("📁 Папка не вказана або не існує — відкриваю вибір...")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "folder_loader",
+        Path(__file__).resolve().parent / "1_folder_loader.py"
+    )
+    if spec is None or spec.loader is None:
+        print("❌ Не вдалося завантажити 1_folder_loader.py")
+        sys.exit(1)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    folder = mod.get_input_folder()
+    if folder:
+        return str(folder)
+
+    print("❌ Папку не вибрано")
+    sys.exit(1)
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\api_gui.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api_gui.py
+Графічний інтерфейс для API-пайплайну перекладу через Gemini API.
+Використовує OpenAI-сумісний endpoint.
+"""
+
+import sys
+import os
+import time
+import threading
+import queue
+import logging
+from pathlib import Path
+from tkinter import ttk, filedialog, messagebox
+import tkinter as tk
+
+# Додаємо поточну папку в sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from api_config import load_config, load_gui_settings, save_gui_settings
+from api_translator import GeminiTranslator
+from api_pipeline import run_pipeline
+
+# Налаштування логування у GUI
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("api_gui")
+
+
+class LogHandler(logging.Handler):
+    """Перенаправляє логи у текстове поле GUI"""
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+        self.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%H:%M:%S"
+        ))
+
+    def emit(self, record):
+        msg = self.format(record)
+        self.text_widget.after(0, self._append, msg)
+
+    def _append(self, msg):
+        self.text_widget.configure(state="normal")
+        self.text_widget.insert("end", msg + "\n")
+        self.text_widget.see("end")
+        self.text_widget.configure(state="disabled")
+
+
+class ApiGui:
+    """Головне вікно GUI"""
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("API Перекладач Gemini")
+        self.root.geometry("700x600")
+        self.root.minsize(600, 500)
+
+        # Завантажуємо збережені налаштування
+        self.settings = load_gui_settings()
+
+        self._build_ui()
+        self._setup_logging()
+
+        # Обробка закриття вікна
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _build_ui(self):
+        """Побудувати інтерфейс"""
+        # --- Рамка налаштувань ---
+        frame = ttk.LabelFrame(self.root, text="Налаштування", padding=10)
+        frame.pack(fill="x", padx=10, pady=(10, 5))
+
+        # API Key
+        ttk.Label(frame, text="API Key:").grid(row=0, column=0, sticky="w", pady=2)
+        self.api_key_var = tk.StringVar(value=self.settings.get("api_key", ""))
+        self.api_key_entry = ttk.Entry(frame, textvariable=self.api_key_var, width=60, show="*")
+        self.api_key_entry.grid(row=0, column=1, padx=(5, 5), pady=2, sticky="ew")
+        # Кнопка показати/сховати ключ
+        self.show_key_btn = ttk.Button(frame, text="👁", width=3, command=self._toggle_key_visibility)
+        self.show_key_btn.grid(row=0, column=2, pady=2)
+
+        # Модель
+        ttk.Label(frame, text="Модель:").grid(row=1, column=0, sticky="w", pady=2)
+        self.model_var = tk.StringVar(value=self.settings.get("model", "gemini-3.1-flash-lite-preview"))
+        model_combo = ttk.Combobox(frame, textvariable=self.model_var, width=57)
+        model_combo["values"] = (
+            "gemini-3.1-flash-lite-preview",
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        )
+        model_combo.grid(row=1, column=1, padx=(5, 5), pady=2, sticky="ew")
+
+        # Папка введення
+        ttk.Label(frame, text="Папка з файлами:").grid(row=2, column=0, sticky="w", pady=2)
+        self.folder_var = tk.StringVar(value=self.settings.get("input_folder", ""))
+        self.folder_entry = ttk.Entry(frame, textvariable=self.folder_var, width=60)
+        self.folder_entry.grid(row=2, column=1, padx=(5, 5), pady=2, sticky="ew")
+        ttk.Button(frame, text="Огляд...", command=self._browse_folder).grid(row=2, column=2, pady=2)
+
+        # Розтягування колонки
+        frame.columnconfigure(1, weight=1)
+
+        # --- Кнопка Старт ---
+        btn_frame = ttk.Frame(self.root)
+        btn_frame.pack(fill="x", padx=10, pady=5)
+
+        self.start_btn = ttk.Button(btn_frame, text="▶ Старт", command=self._start_pipeline)
+        self.start_btn.pack(side="left", padx=(0, 5))
+
+        self.save_btn = ttk.Button(btn_frame, text="💾 Зберегти налаштування", command=self._save_settings)
+        self.save_btn.pack(side="left")
+
+        self.status_var = tk.StringVar(value="Готовий до роботи")
+        status_label = ttk.Label(btn_frame, textvariable=self.status_var, foreground="gray")
+        status_label.pack(side="right", padx=(10, 0))
+
+        # --- Лог-вікно ---
+        log_frame = ttk.LabelFrame(self.root, text="Лог", padding=5)
+        log_frame.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+
+        self.log_text = tk.Text(log_frame, wrap="word", state="disabled", height=15)
+        log_scroll = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+
+        self.log_text.pack(side="left", fill="both", expand=True)
+        log_scroll.pack(side="right", fill="y")
+
+    def _setup_logging(self):
+        """Налаштувати перенаправлення логів у текстове поле"""
+        handler = LogHandler(self.log_text)
+        # Додаємо до кореневого логера, щоб перехоплювати всі логи
+        root_logger = logging.getLogger()
+        root_logger.addHandler(handler)
+        # Також додаємо до конкретних логерів
+        for name in ["api_gui", "api_pipeline", "api_translator", "api_config"]:
+            logging.getLogger(name).addHandler(handler)
+
+    def _toggle_key_visibility(self):
+        """Показати/сховати API ключ"""
+        if self.api_key_entry.cget("show") == "*":
+            self.api_key_entry.configure(show="")
+            self.show_key_btn.configure(text="🙈")
+        else:
+            self.api_key_entry.configure(show="*")
+            self.show_key_btn.configure(text="👁")
+
+    def _browse_folder(self):
+        """Відкрити діалог вибору папки"""
+        folder = filedialog.askdirectory(title="Виберіть папку з файлами для перекладу")
+        if folder:
+            self.folder_var.set(folder)
+
+    def _save_settings(self):
+        """Зберегти поточні налаштування"""
+        save_gui_settings(
+            api_key=self.api_key_var.get(),
+            model=self.model_var.get(),
+            input_folder=self.folder_var.get(),
+        )
+        self.status_var.set("✅ Налаштування збережено")
+
+    def _on_close(self):
+        """Зберегти налаштування при закритті"""
+        self._save_settings()
+        self.root.destroy()
+
+    def _start_pipeline(self):
+        """Запустити пайплайн у окремому потоці"""
+        api_key = self.api_key_var.get().strip()
+        model = self.model_var.get().strip()
+        input_folder = self.folder_var.get().strip()
+
+        # Валідація
+        if not api_key:
+            messagebox.showerror("Помилка", "Введіть API ключ")
+            return
+
+        if not input_folder:
+            messagebox.showerror("Помилка", "Виберіть папку з файлами")
+            return
+
+        if not Path(input_folder).exists():
+            messagebox.showerror("Помилка", f"Папка не існує:\n{input_folder}")
+            return
+
+        # Блокуємо кнопку
+        self.start_btn.configure(state="disabled", text="⏳ Обробка...")
+        self.status_var.set("⏳ Обробка файлів...")
+
+        # Запускаємо в потоці
+        thread = threading.Thread(
+            target=self._run_pipeline_thread,
+            args=(api_key, model, input_folder),
+            daemon=True
+        )
+        thread.start()
+
+    def _make_error_callback(self):
+        """
+        Створити callback для обробки помилок у пайплайні.
+        Використовує queue.Queue для комунікації між потоками.
+        """
+        q = queue.Queue()
+
+        def _show_dialog(file_name: str, error_msg: str) -> bool:
+            """Показати діалог у головному потоці та дочекатися відповіді"""
+            def _ask():
+                result = messagebox.askyesno(
+                    "Помилка",
+                    f"Файл: {file_name}\n\n{error_msg}\n\nПродовжити обробку?",
+                    icon="warning"
+                )
+                q.put(result)
+
+            self.root.after(0, _ask)
+            return q.get()
+
+        return _show_dialog
+
+    def _run_pipeline_thread(self, api_key: str, model: str, input_folder: str):
+        """Виконати пайплайн у потоці"""
+        try:
+            # Завантажуємо конфіг
+            cfg = load_config()
+            cfg["input_folder"] = input_folder
+
+            # Створюємо перекладача
+            translator = GeminiTranslator(api_key=api_key, model=model)
+
+            logger.info(f"🚀 Запуск обробки папки: {input_folder}")
+            logger.info(f"🤖 Модель: {model}")
+
+            # Створюємо callback для помилок
+            error_callback = self._make_error_callback()
+
+            # Запускаємо пайплайн
+            successful = run_pipeline(input_folder, cfg, translator, on_error_callback=error_callback)
+
+            # Результат
+            self.root.after(0, self._pipeline_finished, successful)
+
+        except Exception as e:
+            logger.error(f"💥 Критична помилка: {e}")
+            self.root.after(0, self._pipeline_finished, 0)
+
+    def _pipeline_finished(self, successful: int):
+        """Обробити завершення пайплайну"""
+        self.start_btn.configure(state="normal", text="▶ Старт")
+
+        if successful > 0:
+            self.status_var.set(f"✅ Оброблено {successful} файлів")
+            logger.info(f"🎉 Успішно оброблено {successful} файлів")
+        else:
+            self.status_var.set("❌ Жоден файл не оброблено")
+            logger.warning("⚠️ Жоден файл не оброблено")
+
+    def run(self):
+        """Запустити GUI"""
+        self.root.mainloop()
+
+
+def main():
+    """Точка входу"""
+    gui = ApiGui()
+    gui.run()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\api_pipeline.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api_pipeline.py
+Основний пайплайн: читання файлів → API → збереження → merged
+"""
+
+import os
+import sys
+import time
+import re
+import logging
+from pathlib import Path
+from typing import Optional
+
+from api_config import load_config, get_input_folder
+from api_translator import GeminiTranslator
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("api_pipeline")
+
+
+def get_output_folder(cfg: dict) -> Path:
+    """Отримати правильний шлях до папки output з конфігурації"""
+    input_folder = Path(cfg["input_folder"])
+    output_folder = cfg.get("output_folder", "output")
+
+    # Якщо output_folder не є абсолютним шляхом, робимо його відносно input_folder
+    if not Path(output_folder).is_absolute():
+        output_folder = str(input_folder / output_folder)
+
+    Path(output_folder).mkdir(parents=True, exist_ok=True)
+    logger.info(f"📁 Папка output: {output_folder}")
+    return Path(output_folder)
+
+
+def save_response(response_text: str, input_file: Path, output_folder: Path) -> Optional[Path]:
+    """
+    Зберегти відповідь у файл _UKR.txt.
+    Логіка така ж, як у 6_save_response.py
+    """
+    stem = input_file.stem
+    suffix = input_file.suffix
+    out_name = f"{stem}_UKR{suffix}"
+    out_path = output_folder / out_name
+
+    out_path.write_text(response_text, encoding="utf-8")
+    logger.info(f"✅ Результат збережено: {out_path}")
+    return out_path
+
+
+def update_merged_file(output_folder: Path, cfg: dict):
+    """
+    Оновити злитий файл з усіх _UKR.txt файлів.
+    Логіка така ж, як у 7_update_merged.py
+    """
+    merged_filename = cfg.get("merged_filename", "merged_UKR.txt")
+    merged_file_path = output_folder / merged_filename
+    numeric_rx = re.compile(cfg.get("numeric_prefix_regex", r"^\d+"))
+
+    # Знаходимо всі перекладені файли
+    ukr_files = list(output_folder.glob("*_UKR.txt"))
+    if not ukr_files:
+        logger.warning("⚠️ Не знайдено перекладених файлів для об'єднання")
+        return
+
+    # Сортуємо за числовим префіксом
+    ordered_files = []
+    for file_path in ukr_files:
+        stem = file_path.stem
+        if stem.endswith('_UKR'):
+            original_stem = stem[:-4]
+        else:
+            original_stem = stem
+
+        match = numeric_rx.match(original_stem)
+        num = int(match.group()) if match else 999999
+        ordered_files.append((num, file_path))
+
+    ordered_files.sort(key=lambda x: x[0])
+
+    # Перезаписуємо злитий файл
+    with open(merged_file_path, "w", encoding="utf-8") as merged_file:
+        for i, (num, file_path) in enumerate(ordered_files):
+            content = file_path.read_text(encoding="utf-8").strip()
+            if content:
+                merged_file.write(content)
+                if i < len(ordered_files) - 1:
+                    merged_file.write("\n")
+
+    logger.info(f"📄 Перезаписано злитий файл: {merged_file_path} ({len(ordered_files)} файлів)")
+
+
+def run_pipeline(input_folder: str, cfg: dict, translator: GeminiTranslator,
+                 on_error_callback=None) -> int:
+    """
+    Запустити пайплайн обробки всіх файлів у папці.
+
+    :param input_folder: Шлях до папки з .txt файлами
+    :param cfg: Конфігурація
+    :param translator: Екземпляр GeminiTranslator
+    :param on_error_callback: Функція (file_name: str, error_msg: str) -> bool
+                              True = продовжити, False = зупинити пайплайн
+    :return: Кількість успішно оброблених файлів
+    """
+    output_folder = get_output_folder(cfg)
+
+    # Отримуємо список файлів
+    files_to_process = list(Path(input_folder).glob("*.txt"))
+    files_to_process.sort()
+
+    if not files_to_process:
+        logger.error(f"❌ Не знайдено .txt файлів у папці: {input_folder}")
+        return 0
+
+    logger.info(f"📁 Знайдено {len(files_to_process)} файлів для обробки")
+
+    successful = 0
+    total_start = time.time()
+
+    for file_path in files_to_process:
+        file_start = time.time()
+        logger.info(f"📄 Обробка файлу: {file_path.name}")
+
+        error_msg = None
+
+        try:
+            # Читаємо файл
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            if not text.strip():
+                logger.warning(f"⚠️ Файл {file_path.name} порожній, пропускаю")
+                continue
+
+            # Відправляємо в API
+            response = translator.translate(text, cfg)
+
+            if not response:
+                error_msg = f"❌ Не вдалося отримати відповідь для {file_path.name}"
+                logger.error(error_msg)
+                if on_error_callback and not on_error_callback(file_path.name, error_msg):
+                    break
+                continue
+
+            # Зберігаємо результат
+            saved = save_response(response, file_path, output_folder)
+            if not saved:
+                error_msg = f"❌ Не вдалося зберегти відповідь для {file_path.name}"
+                logger.error(error_msg)
+                if on_error_callback and not on_error_callback(file_path.name, error_msg):
+                    break
+                continue
+
+            successful += 1
+            file_time = time.time() - file_start
+            logger.info(f"✅ Файл {file_path.name} оброблено за {file_time:.2f} сек")
+
+        except Exception as e:
+            error_msg = f"❌ Помилка обробки {file_path.name}: {e}"
+            logger.error(error_msg)
+            if on_error_callback and not on_error_callback(file_path.name, str(e)):
+                break
+            continue
+
+    # Оновлюємо злитий файл
+    if successful > 0:
+        update_merged_file(output_folder, cfg)
+
+    total_time = time.time() - total_start
+    minutes = int(total_time // 60)
+    seconds = int(total_time % 60)
+
+    logger.info(f"📊 Обробка завершена: {successful}/{len(files_to_process)} файлів успішно")
+    if minutes > 0:
+        logger.info(f"⏱ Загальний час: {minutes} хв {seconds} сек")
+    else:
+        logger.info(f"⏱ Загальний час: {seconds} сек")
+
+    return successful
+```
+
+============================================================
+Файл: D:\Python\TEXT\translation\KOD_pereclad\API\api_translator.py
+============================================================
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+api_translator.py
+Клас для роботи з OpenAI-сумісним API Google Gemini.
+Endpoint: https://generativelanguage.googleapis.com/v1beta/openai
+"""
+
+import time
+import logging
+from pathlib import Path
+from typing import Optional
+
+from openai import OpenAI
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("api_translator")
+
+
+# Фрази-маркери відмови AI (регістронезалежні)
+AI_REFUSAL_MARKERS = [
+    "я штучний інтелект",
+    "я є штучним інтелектом",
+    "як штучний інтелект",
+    "я мовна модель",
+    "я великий мовний",
+    "я не можу виконати",
+    "я не здатний",
+    "не маю потрібних функцій",
+    "не маю можливості",
+    "i'm an ai",
+    "i am an ai",
+    "as an ai",
+    "i'm a language model",
+    "i cannot perform",
+    "я не в змозі",
+    "ця задача виходить за межі",
+    "це виходить за рамки моїх",
+]
+
+
+def is_ai_refusal(text: str) -> bool:
+    """Перевіряє чи є відповідь відмовою AI"""
+    if not text:
+        return False
+    lower = text.lower()
+    for marker in AI_REFUSAL_MARKERS:
+        if marker in lower:
+            logger.warning(f"🚫 Виявлено відмову AI: знайдено маркер → «{marker}»")
+            return True
+    return False
+
+
+def build_prompt(cfg: dict, file_text: str) -> str:
+    """
+    Зібрати промт з template_message (файли або текст) + текст файлу.
+    Логіка така ж, як у 4_send.py
+    """
+    raw = cfg.get("template_message", "")
+    if not raw:
+        return file_text
+
+    parts = [raw] if isinstance(raw, str) else raw
+    result = []
+    for part in parts:
+        part = str(part).strip()
+        if not part:
+            continue
+        path = Path(part)
+        if path.exists():
+            result.append(path.read_text(encoding="utf-8").strip())
+            logger.info(f"📄 Промт завантажено з файлу: {part}")
+        else:
+            result.append(part)
+            logger.debug(f"Промт як текст (не файл): {part[:60]}...")
+
+    template = "\n\n".join(result)
+    return f"{template}\n\n{file_text}" if template else file_text
+
+
+class GeminiTranslator:
+    """
+    Клас для відправки тексту в Gemini API через OpenAI-сумісний endpoint.
+    """
+
+    BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+    def __init__(self, api_key: str, model: str = "gemini-3.1-flash-lite-preview"):
+        """
+        :param api_key: API ключ Gemini
+        :param model: Назва моделі
+        """
+        self.api_key = api_key
+        self.model = model
+        self.client = OpenAI(
+            base_url=self.BASE_URL,
+            api_key=api_key
+        )
+        self.last_response_time: Optional[float] = None
+
+    def translate(self, text: str, cfg: dict) -> Optional[str]:
+        """
+        Відправити текст в Gemini API та отримати відповідь.
+        Тільки 1 спроба — при помилці повертає None.
+
+        :param text: Текст файлу для перекладу
+        :param cfg: Конфігурація (template_message)
+        :return: Текст відповіді або None
+        """
+        prompt = build_prompt(cfg, text)
+
+        logger.info(f"📤 Відправка запиту в Gemini API ({len(prompt)} символів)")
+
+        try:
+            start_time = time.time()
+
+            # Вимикаємо фільтри безпеки для роботи з контентом 18+
+            # (Gemini через OpenAI endpoint НЕ підтримує safetySettings — видалено)
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+
+            self.last_response_time = time.time() - start_time
+            logger.info(f"⏱ Відповідь отримано за {self.last_response_time:.2f} сек")
+
+            if not response or not response.choices:
+                logger.warning("⚠️ Порожня відповідь від API")
+                return None
+
+            # Діагностика: виводимо finish_reason
+            choice = response.choices[0]
+            if choice.finish_reason:
+                logger.info(f"📋 finish_reason: {choice.finish_reason}")
+
+            message = choice.message
+            if message is None or not message.content:
+                logger.warning(f"⚠️ Порожній вміст відповіді (finish_reason: {choice.finish_reason})")
+                return None
+
+            result = message.content.strip()
+
+            # Перевірка на AI refusal
+            if is_ai_refusal(result):
+                logger.warning("🚫 AI відмовився виконувати запит")
+                return None
+
+            logger.info(f"✅ Відповідь отримано ({len(result)} символів)")
+            return result
+
+        except Exception as e:
+            logger.error(f"❌ Помилка API: {e}")
+            return None
+
+```
