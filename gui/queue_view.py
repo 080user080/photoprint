@@ -48,7 +48,9 @@ class QueueView(QListWidget):
 
         # --- Критично для Windows ---
         self.setAcceptDrops(True)
-        self.viewport().setAcceptDrops(True)
+        viewport = self.viewport()
+        if viewport is not None:
+            viewport.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
         self.setDropIndicatorShown(True)
         # ----------------------------
@@ -109,6 +111,14 @@ class QueueView(QListWidget):
         item = self.item(idx)
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
+    def get_status(self, idx: int) -> str:
+        """Повертає статус елемента за індексом (fallback 'pending')."""
+        item = self.item(idx)
+        if item is None:
+            return "pending"
+        data = item.data(Qt.ItemDataRole.UserRole + 1)
+        return data if data else "pending"
+
     def clear_queue(self) -> None:
         self.clear()
 
@@ -117,24 +127,27 @@ class QueueView(QListWidget):
     # ------------------------------------------------------------------
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if event.mimeData().hasUrls():
+        mime = event.mimeData()
+        if mime is not None and mime.hasUrls():
             event.setDropAction(Qt.DropAction.CopyAction)
             event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        if not event.mimeData().hasUrls():
+        mime = event.mimeData()
+        if mime is None or not mime.hasUrls():
             event.ignore()
             return
-        paths = self._urls_to_paths(event.mimeData().urls())
+        paths = self._urls_to_paths(mime.urls())
         if paths:
             self.add_files(paths)
             self.files_dropped.emit(paths)
@@ -160,6 +173,7 @@ class QueueView(QListWidget):
         name = os.path.basename(path)
         item = QListWidgetItem(name)
         item.setData(Qt.ItemDataRole.UserRole, path)
+        item.setData(Qt.ItemDataRole.UserRole + 1, status)
         item.setBackground(self._bg_color)
         item.setForeground(self._text_color)
         item.setToolTip(path)
@@ -169,6 +183,7 @@ class QueueView(QListWidget):
         item = self.item(idx)
         if not item:
             return
+        item.setData(Qt.ItemDataRole.UserRole + 1, status)
         path = item.data(Qt.ItemDataRole.UserRole)
         name = os.path.basename(path) if path else ""
         prefix = self._PREFIX.get(status, "")

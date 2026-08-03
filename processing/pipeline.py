@@ -660,3 +660,110 @@ def run_manual_adjustments(
     if sharpen_strength > EPSILON:
         result = sharpen.apply(result, strength=sharpen_strength)
     return result
+
+def _compute_adaptive_params(diag) -> dict:
+    """
+    Obchyslyuye adaptyvni parametry obrobky na osnovi diagnostyky zobrazhennya.
+
+    Povernaye dict z klyuchamy:
+    - hdr_strength: syla HDR (0.2..0.8), zalezhyt vid detail_density
+    - noise_floor: bazove 1.5, vyshche dlya shumnyh zobrazhen
+    - contrast_strength: 0 pry dynamic_range > 180, inakshe proporcyno
+    - shadow_remove: True yakshcho gradient + uniformity > 0.4 + document
+    - brightness_needed: True yakshcho middle L < 80
+    - brightness_correction: znachennya z diagnostyky yakshcho needed
+    - sharpen_strength: z diagnostyky (blur_sharpen_strength)
+    """
+    hdr_strength = min(0.8, max(0.2, diag.detail_density * 0.8))
+
+    noise_floor = max(1.5, diag.noise_level)
+
+    if diag.dynamic_range > 180:
+        contrast_strength = 0.0
+    else:
+        contrast_strength = (180.0 - diag.dynamic_range) / 180.0
+    contrast_strength = max(0.0, min(1.0, contrast_strength))
+
+    shadow_remove = (
+        diag.gradient_has
+        and diag.background_uniformity > 0.4
+        and diag.doc_type in ("bw_document", "color_document")
+    )
+
+    brightness_needed = diag.brightness_mean_l < 80
+    brightness_correction = diag.brightness_correction if brightness_needed else 0.0
+
+    sharpen_strength = diag.blur_sharpen_strength
+
+    return {
+        "hdr_strength": hdr_strength,
+        "noise_floor": noise_floor,
+        "contrast_strength": contrast_strength,
+        "shadow_remove": shadow_remove,
+        "brightness_needed": brightness_needed,
+        "brightness_correction": brightness_correction,
+        "sharpen_strength": sharpen_strength,
+    }
+
+
+
+def run_full_auto(
+    image: np.ndarray,
+    settings: dict,
+    dry_run: bool = False,
+) -> tuple[np.ndarray, str, dict]:
+    """
+    Full Auto pipeline z adaptyvnymy parametramy.
+
+    1. Diagnostyka zobrazhennya
+    2. Obchyslennya adaptyvnyh parametriv
+    3. Vyklyk run_autofix z tsymy parametramy
+    4. Spetsialna obrobka flat_background
+
+    Povernaye (result, status_msg, steps_dict).
+    """
+    if dry_run:
+        return image.copy(), "Full Auto: dry run (bez obrobky)", {}
+
+    from processing.diagnostics import diagnose
+    diag = diagnose(image, settings)
+    params = _compute_adaptive_params(diag)
+
+    use_persp = settings.get("full_auto_perspective", False)
+    hdr_strength = settings.get("hdr_strength", 0.5)
+    sharpen_strength = settings.get("sharpen_strength", 0.4)
+
+    # Build modified settings to exclude perspective when full_auto_perspective=False
+    mod_settings = dict(settings) if settings else {}
+    all_steps = "shadow_remove,color_cast,brightness,contrast,hdr,sharpen,grayscale,white_background"
+    if use_persp:
+        all_steps = "perspective," + all_steps
+    mod_settings["pipeline_preset"] = "custom"
+    mod_settings["pipeline_steps_enabled"] = all_steps
+
+    result, autofix_status, log_entries = run_autofix(
+        image,
+        doc_type=diag.doc_type,
+        use_perspective=use_persp,
+        hdr_strength=hdr_strength,
+        sharpen_strength=sharpen_strength,
+        use_hdr=settings.get("hdr_in_autofix", True),
+        bw_binary=settings.get("bw_binary", False),
+        classify_bw_std_thresh=settings.get("bw_std_thresh", 20.0),
+        classify_edge_ratio_min=settings.get("edge_ratio_min", 0.03),
+        classify_line_count_min=settings.get("line_count_min", 3),
+        shadow_highlight_strength=settings.get("shadow_highlight_strength", 0.0),
+        output_color_mode=settings.get("output_color_mode", "auto"),
+        autofix_contrast=settings.get("autofix_contrast", 0.15),
+        contrast_mode=settings.get("contrast_mode", "linear"),
+        settings=mod_settings,
+    )
+
+    if diag.doc_type == "flat_background":
+        status = f"Full Auto: rivnyi fon, {autofix_status}"
+    else:
+        status = f"Full Auto: {autofix_status}"
+
+    steps_dict = {"doc_type": diag.doc_type, "adaptive_params": params}
+
+    return result, status, steps_dict

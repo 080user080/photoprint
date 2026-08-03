@@ -21,7 +21,7 @@ class TestAutofixWhiteBackground:
         img = np.full((200, 200, 3), 255, dtype=np.uint8)
         for i in range(50, 150, 10):
             img[i:i + 2, 50:150, :] = 70  # "текст"
-        result, status, _ = run_autofix(img, doc_type="bw_document", use_perspective=False)
+        result, status, _ = run_autofix(img, doc_type="bw_document")
         assert result.shape == img.shape
         assert result.dtype == np.uint8
         # Кути мають бути світлими (вихід grayscale = однакові канали)

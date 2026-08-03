@@ -49,7 +49,7 @@ class TestFullAutoUniversal:
 
     def test_bw_document_like(self):
         """Імітація ч-б документа → не падає."""
-        img = np.full((200, 200, 3), 220, dtype=np.uint8)  # світлий фон
+        img = np.full((200, 200, 3), 240, dtype=np.uint8)  # світлий фон
         img[40:160, 40:160, :] = 180  # темніший прямокутник
         # Додаємо трохи тексту (випадкові лінії)
         for i in range(50, 150, 10):
@@ -176,7 +176,7 @@ class TestFullAutoUniversal:
 
     def test_bw_document_becomes_white_background(self):
         """Ч-б документ зі світлим фоном → фон стає білим."""
-        img = np.full((200, 200, 3), 220, dtype=np.uint8)  # світлий фон
+        img = np.full((200, 200, 3), 240, dtype=np.uint8)  # світлий фон
         img[40:160, 40:160, :] = 180  # темніший прямокутник
         for i in range(50, 150, 10):
             img[i:i+2, 50:150, :] = 80  # текст

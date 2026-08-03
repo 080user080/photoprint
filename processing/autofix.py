@@ -47,7 +47,7 @@ def apply(
     return result
 
 
-def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, do_binary: bool = False,
+def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, binary: bool = False,
                       skip_contrast: bool = False, skip_grayscale: bool = False) -> np.ndarray:
     """
     Pipeline для чорно-білих документів.
@@ -66,7 +66,7 @@ def apply_bw_document(image: np.ndarray, sharpen_strength: float = 0.3, do_binar
     if not skip_grayscale:
         result = bc.to_grayscale(result)
 
-    if do_binary:
+    if binary:
         # Адаптивна бінаризація: збереже текст навіть при нерівному освітленні
         # adaptiveThreshold очікує grayscale (1 канал)
         gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)

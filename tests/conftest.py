@@ -14,7 +14,7 @@ if _project_root not in sys.path:
 @pytest.fixture
 def test_image_path() -> str:
     """Повертає шлях до тестового JPG-зображення."""
-    return os.path.join(_project_root, "tests", "test_images", "0 (1).jpg")
+    return os.path.join(_project_root, "tests", "test_images", "001.jpg")
 
 
 # Маркер для GUI-тестів, що потребують реальний desktop

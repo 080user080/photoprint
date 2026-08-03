@@ -127,13 +127,13 @@
 **Файл:** `gui/queue_view.py`, `gui/main_window.py`
 
 **Кроки:**
-- [ ] У `QueueView._set_status` додатково зберігати статус:
+- [x] У `QueueView._set_status` додатково зберігати статус:
       `item.setData(Qt.ItemDataRole.UserRole + 1, status)`.
-- [ ] Додати публічний метод `QueueView.get_status(idx) -> str`,
+- [x] Додати публічний метод `QueueView.get_status(idx) -> str`,
       що читає це поле (fallback `"pending"`, якщо не встановлено).
-- [ ] У `MainWindow._on_auto_done` замінити перевірку тексту на
+- [x] У `MainWindow._on_auto_done` замінити перевірку тексту на
       `if self._queue.get_status(i) not in ("done", "error", "skipped"): self._queue.mark_done(i)`.
-- [ ] Відмітити виконання.
+- [x] Відмітити виконання.
 
 ### 4.7 — Ненадійний друк через `mspaint /pt` (core/printer.py)
 **Проблема (підтверджено):** досі єдиний шлях — `mspaint /pt` або

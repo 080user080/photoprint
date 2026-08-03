@@ -1602,10 +1602,10 @@ class MainWindow(QMainWindow):
         self._radio_auto.setEnabled(True)
         self._radio_manual.setEnabled(True)
         self._set_status(f"Готово. Надруковано {count} з {self._processor.total}")
-        # Позначаємо всі що не мають статусу
+        # Позначаємо всі що не мають статусу (перевірка через get_status,
+        # а не через текст — TODO 4.5)
         for i in range(self._queue.count()):
-            item = self._queue.item(i)
-            if item and not any(item.text().startswith(p) for p in ("✓", "✗")):
+            if self._queue.get_status(i) not in ("done", "error", "skipped"):
                 self._queue.mark_done(i)
 
     # ------------------------------------------------------------------

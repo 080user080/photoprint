@@ -24,10 +24,6 @@ def _make_gradient(h: int, w: int, base: int = 240, drop: int = 80) -> np.ndarra
     for i in range(h):
         shade = int(drop * (1 - i / h))
         img[i, :, :] = np.clip(img[i, :, :].astype(int) - shade, 0, 255).astype(np.uint8)
-    # Add slight noise to increase laplacian variance above blur threshold
-    np.random.seed(42)
-    noise = np.random.randint(0, 6, img.shape, dtype=np.uint8)
-    img = cv2.add(img, noise)
     return img
 
 
@@ -105,9 +101,6 @@ class TestPathAFallback:
         img = np.full((256, 256, 3), 30, dtype=np.uint8)
         for i in range(256):
             img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
-        np.random.seed(42)
-        noise = np.random.randint(0, 6, img.shape, dtype=np.uint8)
-        img = cv2.add(img, noise)
         result = _detect_shadow(img, threshold=80, ratio=0.3)
         assert result is True
 
@@ -116,9 +109,6 @@ class TestPathAFallback:
         img = np.full((256, 256, 3), 30, dtype=np.uint8)
         for i in range(256):
             img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
-        np.random.seed(42)
-        noise = np.random.randint(0, 6, img.shape, dtype=np.uint8)
-        img = cv2.add(img, noise)
         result = _detect_shadow(img, threshold=80, ratio=0.3)
         assert result is True
 
@@ -130,8 +120,5 @@ class TestPathAFallback:
         img = np.full((256, 256, 3), 30, dtype=np.uint8)
         for i in range(256):
             img[i, :, :] = np.clip(img[i, :, :].astype(int) + int(190 * i / 256), 0, 255).astype(np.uint8)
-        np.random.seed(42)
-        noise = np.random.randint(0, 6, img.shape, dtype=np.uint8)
-        img = cv2.add(img, noise)
         result = _detect_shadow(img, threshold=80, ratio=0.3, background_uniformity=0.8)
         assert result is True, "Path A should detect dark shadow regardless of uniformity param"
