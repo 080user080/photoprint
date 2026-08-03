@@ -59,6 +59,19 @@ class BatchProcessor:
                 self._files.append(p)
                 existing.add(p)
 
+    def sync_new_files(self, paths: list[str]) -> None:
+        """
+        Синхронізує чергу процесора з новими файлами GUI-черги (TODO 2.5-b).
+
+        Відмінність від set_files: НЕ скидає _index, а лише додає нові шляхи.
+        Використовується, коли процесор уже має частково пройдену чергу,
+        а користувач додав нові файли в GUI-чергу — щоб не "губити" позицію
+        друку і не друкувати вже оброблені файли повторно.
+
+        Якщо процесор порожній — еквівалентний set_files (додає всі шляхи).
+        """
+        self.add_files(paths)
+
     def add_folder(self, folder: str) -> None:
         self.add_files(file_utils.collect_images_from_folder(folder))
 

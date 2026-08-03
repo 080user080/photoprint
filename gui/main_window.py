@@ -1323,15 +1323,10 @@ class MainWindow(QMainWindow):
                 corners = self._default_perspective_corners(self._base_for_perspective)
                 status = "Встановіть кути вручну (документ не знайдено)"
         else:
-            # Завдання 7.1: валідація — чи точки в межах [-20%, 120%] від розмірів зображення
-            h_img, w_img = self._base_for_perspective.shape[:2]
-            x_min, y_min = corners.min(axis=0)
-            x_max, y_max = corners.max(axis=0)
-            margin_x = int(w_img * 0.20)
-            margin_y = int(h_img * 0.20)
-            # Якщо точки виходять за межі — fallback до default
-            if (x_min < -margin_x or x_max > w_img - 1 + margin_x or
-                y_min < -margin_y or y_max > h_img - 1 + margin_y):
+            # Завдання 7.1: валідація — чи точки в межах [-20%, 120%] від розмірів зображення.
+            # Використовуємо спільний метод _validate_corners_in_bounds (TODO 3.3-b),
+            # щоб уникнути дублювання логіки з _do_persp_auto.
+            if not self._validate_corners_in_bounds(corners, self._base_for_perspective):
                 self._logger.debug("_do_persp_manual: точки за межами +-20%, fallback до default")
                 corners = self._default_perspective_corners(self._base_for_perspective)
                 status = "Документ не знайдено — встановіть точки вручну (auto-detect поза межами)"
@@ -1469,9 +1464,11 @@ class MainWindow(QMainWindow):
         try:
             # Зберігаємо налаштування перед друком
             self._store_current_settings()
-            # Синхронізуємо черги якщо ще не зроблено
-            if self._processor.total == 0:
-                self._processor.set_files(self._queue.get_all_paths())
+            # TODO 2.5-b: синхронізуємо нові файли з GUI-черги без скидання
+            # позиції друку (_index). Безумовно, щоб файли, додані після
+            # часткового проходу черги, потрапили в _processor і не були
+            # "загублені" при подальшій навігації через _load_next_manual.
+            self._processor.sync_new_files(self._queue.get_all_paths())
             # Якщо файл відкритий вручну, використовуємо _current_path
             if self._current_path and self._current_path in self._queue.get_all_paths():
                 # Знаходимо індекс файлу в черзі
