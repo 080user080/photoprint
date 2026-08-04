@@ -72,38 +72,108 @@ def print_image(image: np.ndarray, printer_name: str = "", jpg_quality: int = DE
                 pass
 
 
+def _print_windows_win32(path: str, printer_name: str) -> None:
+    """
+    Друк через win32print/win32ui (надійний, без mspaint).
+    Використовує pywin32 для прямого друку зображення на принтер.
+
+    Кидає ImportError якщо pywin32 не встановлено.
+    Кидає RuntimeError якщо друк не вдався.
+    """
+    import win32print
+    import win32ui
+    from typing import Any
+    from PIL import Image, ImageWin
+
+    # Якщо printer_name не задано — використовуємо принтер за замовчуванням
+    if not printer_name:
+        printer_name = win32print.GetDefaultPrinter()
+
+    hprinter = win32print.OpenPrinter(printer_name)
+    try:
+        # win32ui.CreateDC() не має типових стабів у Pylance (повертає None),
+        # тому анотуємо як Any, щоб уникнути хибних reportAttributeAccessIssue.
+        hdc: Any = win32ui.CreateDC()
+        hdc.CreatePrinterDC(printer_name)
+        hdc.StartDoc(path)
+        hdc.StartPage()
+
+        img = Image.open(path)
+        dib = ImageWin.Dib(img)
+
+        # Отримуємо розміри друкованої області (HORZRES=110, VERTRES=111)
+        printable_w = hdc.GetDeviceCaps(110)
+        printable_h = hdc.GetDeviceCaps(111)
+
+        # Масштабуємо зображення до розміру друкованої області
+        scale = min(printable_w / img.width, printable_h / img.height)
+        draw_w = int(img.width * scale)
+        draw_h = int(img.height * scale)
+
+        # Малюємо зображення в пам'яті
+        mem_dc: Any = hdc.CreateCompatibleDC()
+        bmp: Any = win32ui.CreateBitmap()
+        bmp.CreateCompatibleBitmap(hdc, img.width, img.height)
+        mem_dc.SelectObject(bmp)
+        dib.draw(mem_dc.GetHandleOutput(), (0, 0, img.width, img.height))
+
+        # Копіюємо на принтер з масштабуванням (SRCCOPY = 0x00CC0020)
+        hdc.StretchBlt((0, 0, draw_w, draw_h), mem_dc, (0, 0, img.width, img.height), 0x00CC0020)
+
+        hdc.EndPage()
+        hdc.EndDoc()
+        hdc.DeleteDC()
+    finally:
+        win32print.ClosePrinter(hprinter)
+
+
 def _print_windows(path: str, printer_name: str) -> None:
     """
     Друк на Windows.
-    Якщо printer_name задано — використовує mspaint /pt (тихий друк на конкретний принтер).
-    Інакше — ShellExecute 'print' (відкриває діалог з принтером за замовчуванням).
+    Ланцюжок fallback:
+      1. win32print (якщо pywin32 доступний) — надійний друк
+      2. mspaint /pt (якщо printer_name задано)
+      3. ShellExecute 'print' (якщо printer_name не задано)
     """
     logger = get_logger(__name__)
     import ctypes
 
+    # 1. Спробувати win32print (якщо pywin32 доступний)
+    try:
+        _print_windows_win32(path, printer_name)
+        logger.info("Друк через win32print успішний")
+        return
+    except ImportError:
+        logger.info("pywin32 не встановлено, використовуємо fallback")
+    except Exception as e:
+        logger.warning(f"win32print не вдалося: {e}, використовуємо fallback")
+
+    # 2. mspaint /pt (якщо printer_name задано)
     if printer_name:
-        # mspaint /pt <file> <printer> — тихий друк без діалогу
         result = subprocess.run(
             ["mspaint", "/pt", path, printer_name],
             capture_output=True, text=True
         )
-        if result.returncode != 0:
-            stderr = result.stderr.strip() if result.stderr else ""
-            logger.error(f"mspaint /pt повернув код {result.returncode}, принтер: {printer_name}")
-            msg = (
-                f"Помилка друку: принтер '{printer_name}' недоступний або не знайдений.\n"
-                f"Перевірте назву принтера в Налаштуваннях.\n"
-                f"Технічна інформація: mspaint /pt повернув код {result.returncode}."
-            )
-            if stderr:
-                msg += f"\n{stderr}"
-            raise RuntimeError(msg)
-    else:
-        # ShellExecute 'print' — Windows сам обирає програму
-        ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
-        if ret <= SHELLEXECUTE_SUCCESS_MIN:
-            logger.error(f"ShellExecute 'print' повернув код {ret}")
-            raise RuntimeError(f"ShellExecute 'print' повернув код {ret}")
+        if result.returncode == 0:
+            logger.info("Друк через mspaint /pt успішний")
+            return
+        stderr = result.stderr.strip() if result.stderr else ""
+        logger.error(f"mspaint /pt повернув код {result.returncode}, принтер: {printer_name}")
+        msg = (
+            f"Помилка друку: принтер '{printer_name}' недоступний або не знайдений.\n"
+            f"Перевірте назву принтера в Налаштуваннях.\n"
+            f"Технічна інформація: mspaint /pt повернув код {result.returncode}."
+        )
+        if stderr:
+            msg += f"\n{stderr}"
+        raise RuntimeError(msg)
+
+    # 3. ShellExecute 'print' — Windows сам обирає програму
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "print", path, None, None, 1)
+    if ret <= SHELLEXECUTE_SUCCESS_MIN:
+        logger.error(f"ShellExecute 'print' повернув код {ret}")
+        raise RuntimeError(f"ShellExecute 'print' повернув код {ret}")
+    logger.info("Друк через ShellExecute успішний")
 
 
 def _print_unix(path: str, printer_name: str) -> None:

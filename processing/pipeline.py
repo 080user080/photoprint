@@ -171,6 +171,13 @@ def run_autofix(
             line_count_min=classify_line_count_min,
         )
 
+    # Спеціальна обробка для flat_background: мінімальний набір кроків
+    # (перспектива + білий фон), без shadow_remove, contrast, sharpen тощо.
+    # Рівний фон без документа не потребує повної обробки — це запобігає
+    # псуванню сканів, які помилково класифіковані як flat_background.
+    if doc_type == DocType.FLAT_BACKGROUND.value:
+        _steps_enabled = ["perspective", "white_background"]
+
     # Параметри shadow_remove
     _shadow_coarse_blend = settings.get("shadow_coarse_blend_color", 0.0) if settings else 0.0
     _shadow_detect_threshold = settings.get("shadow_detect_threshold", 80.0) if settings else 80.0

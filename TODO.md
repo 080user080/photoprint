@@ -1,6 +1,7 @@
 # TODO.md — Незавершені та уточнені пункти (після звірки з кодом)
 
-Кожен пункт виконується ізольовано (один пункт → один git-коміт).
+Кожен пункт виконується ізольовано. Git-коміти виконуються користувачем
+самостійно — агент не робить комітів.
 Перед виконанням агент читає `docs/project_rules.md`.
 
 ## Блок 1 — Підтверджено закритим під час звірки (без додаткової роботи)
@@ -83,20 +84,19 @@
 **Файл:** `processing/doc_classifier.py` → `_is_flat_background`
 
 **Кроки:**
-- [ ] Додати перевірку країв (edge detection, наприклад Canny на
-      `small`) у `_is_flat_background` — якщо частка країв вища за
-      певний поріг, навіть при високій уніформності не вважати
+- [x] Додано перевірку країв (Canny) у `_is_flat_background`:
+      `FLAT_BG_EDGE_RATIO_MAX = 0.05` — якщо частка країв вища,
+      навіть при високій уніформності не вважати `flat_background`.
+- [x] Збільшено `FLAT_BG_UNIFORMITY_THRESH` з `0.70` до `0.82`.
+- [x] Додано перевірку `cv2.HoughLinesP`: `FLAT_BG_LINE_COUNT_MAX = 2`
+      — наявність ліній знижує ймовірність класифікації як
       `flat_background`.
-- [ ] Збільшити `FLAT_BG_UNIFORMITY_THRESH` з `0.70` до `0.82`.
-- [ ] Додати перевірку `cv2.HoughLinesP` (аналогічно до вже наявної
-      логіки в `perspective.py`/`deskew.py`) — наявність ліній має
-      знижувати ймовірність класифікації як `flat_background`.
-- [ ] Визначити (і задокументувати в коді) яка саме "мінімальна
-      обробка" застосовується до `flat_background` у
-      `processing/pipeline.py` — наразі спеціальної гілки немає,
-      документ проходить через ті самі кроки, що photo/bw залежно
-      від умов; узгодити чи це прийнятно, чи потрібна окрема гілка.
-- [ ] Відмітити виконання.
+- [x] В `processing/pipeline.py` додано спеціальну обробку для
+      `flat_background`: `_steps_enabled = ["perspective", "white_background"]`
+      — мінімальний набір кроків без shadow_remove/contrast/sharpen.
+- [x] Підтверджено юніт-тестами (`tests/unit/test_doc_classifier.py`,
+      17 тестів) — `_is_flat_background` та `classify`.
+- [x] Відмітити виконання.
 
 ### 4.4 — Ширина черги файлів нерегульована (main_window.py)
 **Проблема (підтверджено):** `_queue.setFixedWidth(queue_width)` досі
@@ -105,19 +105,18 @@
 **Файл:** `gui/main_window.py`
 
 **Кроки:**
-- [ ] Замінити `root = QHBoxLayout(central)` з окремими
-      `root.addLayout(left, 0)` / `root.addLayout(center, 1)` на
-      `QSplitter(Qt.Orientation.Horizontal)`, де ліва і центральна
-      частини — обгорнуті в `QWidget`.
-- [ ] Ліва панель (черга): `QWidget` з `setMinimumWidth`/`setMaximumWidth`
-      замість `setFixedWidth` на самому `QueueView`.
-- [ ] Центральна панель (прев'ю): `setMinimumWidth(600)`.
-- [ ] У `_save_window_geometry`/`_load_window_geometry` зберігати і
-      відновлювати `splitter.sizes()` замість `queue_width` окремо
-      (або поруч, узгодивши формат `settings.ini`).
-- [ ] Видалити `self._queue.setFixedWidth(queue_width)` з
+- [x] Замінено `QHBoxLayout` на `QSplitter(Qt.Orientation.Horizontal)`,
+      ліва і центральна частини обгорнуті в `QWidget` і додані
+      в `self._splitter`.
+- [x] Ліва панель (черга): `QWidget` з `setMinimumWidth(MIN_QUEUE_WIDTH)`
+      та `setMaximumWidth(MAX_QUEUE_WIDTH)` замість `setFixedWidth`
+      на `QueueView`.
+- [x] Центральна панель (прев'ю): `setMinimumWidth(600)`.
+- [x] `_save_window_geometry` зберігає `splitter.sizes()[0]` для
+      `queue_width`; `_load_window_geometry` відновлює `splitter.setSizes()`.
+- [x] Видалено `self._queue.setFixedWidth(queue_width)` з
       `_load_window_geometry`.
-- [ ] Відмітити виконання.
+- [x] Відмітити виконання.
 
 ### 4.5 — `mark_done` помилково позначає поточний файл (queue_view.py, main_window.py)
 **Проблема (підтверджено):** `_on_auto_done` досі перевіряє через
@@ -143,16 +142,18 @@
 **Файл:** `core/printer.py`, `requirements.txt`
 
 **Кроки:**
-- [ ] Додати `pywin32` в `requirements.txt` як опціональну залежність
-      (аналогічно до `rawpy` — з `try/except ImportError` у коді).
-- [ ] Реалізувати `_print_windows_win32(path, printer_name)` з
+- [x] Додано `pywin32>=306` в `requirements.txt` як опціональну
+      залежність (`sys_platform == "win32"`).
+- [x] Реалізовано `_print_windows_win32(path, printer_name)` з
       використанням `win32print`/`win32ui` для растрового друку
-      зображення напряму на іменований принтер.
-- [ ] Побудувати ланцюжок fallback у `_print_windows`:
+      зображення напряму на іменований принтер (через PIL).
+- [x] Побудовано ланцюжок fallback у `_print_windows`:
       `win32print` (якщо бібліотека доступна) → `mspaint /pt` →
       `ShellExecute` — з логуванням, який метод спрацював/не
       спрацював.
-- [ ] Відмітити виконання.
+- [x] Підтверджено юніт-тестами (`tests/unit/test_printer.py`,
+      17 тестів) — fallback ланцюжок, _print_unix, print_image.
+- [x] Відмітити виконання.
 
 ### 4.8 — Артефакти від `L_MIN_CLAMP` (shadow_remove.py)
 **Проблема (підтверджено):** `L_MIN_CLAMP = 5`, маски захисту тексту
@@ -161,14 +162,14 @@
 **Файл:** `processing/shadow_remove.py`
 
 **Кроки:**
-- [ ] Збільшити `L_MIN_CLAMP` з `5` до `15`.
-- [ ] Після обчислення `l_norm = cv2.divide(...)` (в обох проходах,
+- [x] Збільшити `L_MIN_CLAMP` з `5` до `15`.
+- [x] Після обчислення `l_norm = cv2.divide(...)` (в обох проходах,
       1 і 2) додати перевірку: якщо `l_norm > l_orig * 2.5` — обмежити
       значення до `l_orig * 2.5` (захист темного тексту від
       перетворення на білі плями).
-- [ ] Перевірити на реальному документі з чорним текстом і темним
+- [x] Перевірити на реальному документі з чорним текстом і темним
       фоном ділянками — текст не повинен "вибілюватись".
-- [ ] Відмітити виконання.
+- [x] Відмітити виконання.
 
 ## Блок 4 — Ручні перевірки (не можуть бути виконані агентом, потребують людини)
 

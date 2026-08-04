@@ -119,7 +119,9 @@ COARSE_BLUR_SIGMA = 2.0        # sigma додаткового згладжува
 COARSE_DIVIDE_EPSILON = 1.0    # мінус до background щоб уникнути ділення на 0
 
 # Константи для захисту від артефактів чорних точок
-L_MIN_CLAMP = 5                # мінімальне значення L перед діленням щоб уникнути артефактів
+L_MIN_CLAMP = 15               # мінімальне значення L перед діленням щоб уникнути артефактів
+L_OVERBRIGHT_RATIO = 2.5       # макс. відношення normed/orig: захист темного тексту
+                               # від перетворення на білі плями після cv2.divide
 
 # Константи для диференційованої обробки чб vs кольорових документів
 COARSE_BLEND_COLOR = 0.0       # сила другого проходу для кольорових (0 = вимкнено)
@@ -268,13 +270,20 @@ def _remove_shadow_bgr(
         ch = np.maximum(ch, L_MIN_CLAMP)
         bg = _create_background_model(ch, kernel_size)
         bg_f = bg.astype(np.float32) + DIVIDE_EPSILON
-        normed = cv2.divide(ch.astype(np.float32), bg_f, scale=DIVIDE_SCALE)
+        ch_f = ch.astype(np.float32)
+        normed = cv2.divide(ch_f, bg_f, scale=DIVIDE_SCALE)
+        # Захист темного тексту (прохід 1): обмеження normed <= ch * 2.5
+        # запобігає перетворенню чорного тексту на білі плями після ділення
+        normed = np.minimum(normed, ch_f * L_OVERBRIGHT_RATIO)
         normed = np.clip(normed, 0.0, 255.0).astype(np.uint8)
 
         if coarse_pass and COARSE_PASS_ENABLED:
             coarse_bg = _create_coarse_background(normed)
             coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
-            normed2 = cv2.divide(normed.astype(np.float32), coarse_bg_f, scale=DIVIDE_SCALE)
+            normed_f = normed.astype(np.float32)
+            normed2 = cv2.divide(normed_f, coarse_bg_f, scale=DIVIDE_SCALE)
+            # Захист темного тексту (прохід 2): обмеження normed2 <= normed * 2.5
+            normed2 = np.minimum(normed2, normed_f * L_OVERBRIGHT_RATIO)
             normed = np.clip(normed2, 0.0, 255.0).astype(np.uint8)
 
         result_channels.append(normed)
@@ -426,6 +435,10 @@ def remove_shadow(
     l_f = l_ch.astype(np.float32)
     bg_f = background.astype(np.float32) + DIVIDE_EPSILON
     l_norm = cv2.divide(l_f, bg_f, scale=DIVIDE_SCALE)
+    # Захист темного тексту (прохід 1): обмеження l_norm <= l_orig * 2.5
+    # запобігає перетворенню чорного тексту на білі плями після ділення на
+    # світлий фон (наприклад L=10 не може стати > 25, а не 200+)
+    l_norm = np.minimum(l_norm, l_f * L_OVERBRIGHT_RATIO)
     # Критично: clamp до [0, 255] перед конвертацією, інакше float32 > 255
     # при astype(np.uint8) дають wrapping (mod 256) -> чорна інверсія
     l_norm = np.clip(l_norm, 0.0, 255.0).astype(np.uint8)
@@ -440,6 +453,8 @@ def remove_shadow(
             l_f2 = l_norm.astype(np.float32)
             coarse_bg_f = coarse_bg.astype(np.float32) + COARSE_DIVIDE_EPSILON
             l_norm2 = cv2.divide(l_f2, coarse_bg_f, scale=DIVIDE_SCALE)
+            # Захист темного тексту (прохід 2): обмеження l_norm2 <= l_norm * 2.5
+            l_norm2 = np.minimum(l_norm2, l_f2 * L_OVERBRIGHT_RATIO)
             l_norm_coarse = np.clip(l_norm2, 0.0, 255.0).astype(np.uint8)
             if is_color_document and coarse_blend > 0.0:
                 # Блендинг для кольорових: змішуємо результат першого і другого проходу

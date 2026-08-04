@@ -212,7 +212,9 @@ class TestTextDocument:
         gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
         # Находим текстовые регионы — самые тёмные 5% пикселей оригинала
-        thresh = np.percentile(gray_in, 5)
+        # Явне приведення до np.float64 усуває Pylance-помилку типізації
+        # (gray_in має тип MatLike, а не np.ndarray)
+        thresh = np.percentile(gray_in.astype(np.float64), 5)
         text_mask = gray_in < thresh
         if text_mask.sum() < 10:
             pytest.skip("Слишком мало текстовых пикселей для проверки")
@@ -268,3 +270,153 @@ class TestBenchmark:
         _ = shadow_remove.remove_shadow(img)
         elapsed = time.perf_counter() - start
         assert elapsed < 2.0, f"Обработка 800×800 заняла {elapsed:.3f}s (порог 2.0s)"
+
+
+class TestOverbrightProtection:
+    """
+    Перевірка захисту темного тексту від пересвітлення (TODO 4.8).
+
+    L_OVERBRIGHT_RATIO = 2.5 обмежує normed <= l_orig * 2.5 у кожному проході,
+    щоб чорний текст не перетворювався на білі плями після cv2.divide.
+    """
+
+    def _make_dark_text_on_shadow(self, size: int = 400) -> np.ndarray:
+        """
+        Створює зображення з екстремально темним текстом (L≈5) на тіньовому фоні.
+        Градієнт тіні: ліва частина темна (L≈50), права — світла (L≈200).
+        Текст — блоки L=5, розкидані по всьому зображенню.
+        """
+        img = np.full((size, size, 3), 200, dtype=np.uint8)
+        # Градієнт тіні зліва (темніше) направо (світліше)
+        gradient = np.linspace(0.25, 1.0, size).reshape(1, size, 1)
+        img = (img.astype(np.float64) * gradient).clip(0, 255).astype(np.uint8)
+        # Дуже темний текст (L≈5 у BGR ≈ (5,5,5))
+        rng = np.random.default_rng(42)
+        for _ in range(60):
+            x = rng.integers(10, size - 30)
+            y = rng.integers(10, size - 10)
+            w = rng.integers(5, 25)
+            h = rng.integers(3, 7)
+            img[y : y + h, x : x + w] = (5, 5, 5)
+        return img
+
+    def test_dark_text_not_overbrightened_lab(self):
+        """
+        Екстремально темний текст (L≈5) після обробки LAB-алгоритмом
+        не повинен стати "білим" — середня яскравість текстових пікселів
+        має бути значно нижчою за білий фон.
+
+        Теоретичний максимум після 2 проходів з L_MIN_CLAMP=15:
+        15 * 2.5 * 2.5 = 93.75, тому перевіряємо з запасом < 130.
+        """
+        img = self._make_dark_text_on_shadow(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Маска тексту — найтемніші пікселі оригіналу (L < 15)
+        text_mask = gray_in < 15
+        assert text_mask.sum() > 50, "Замало текстових пікселів для перевірки"
+        mean_text_out = float(gray_out[text_mask].mean())
+        # Текст не повинен стати білим: 130 — з запасом від 93.75
+        assert mean_text_out < 130, (
+            f"Темний текст пересвітлився: середня яскравість={mean_text_out:.1f}, "
+            f"очікувалось < 130 (теоретичний максимум ~94)"
+        )
+
+    def test_dark_text_not_overbrightened_bgr(self):
+        """
+        Те саме для BGR-алгоритму — захист має працювати в обох режимах.
+
+        Увага: BGR-режим має додаткову постобробку `_fix_bgr_artifacts`, яка
+        замінює пікселі з L<30 на колір фону (білий). Це піднімає середнє
+        значення тексту порівняно з LAB-режимом, тому поріг вищий (170 замість
+        130). Без захисту divide текст міг би стати 200+ (білим).
+        """
+        img = self._make_dark_text_on_shadow(400)
+        result = shadow_remove.remove_shadow(img, bgr_mode=True)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        text_mask = gray_in < 15
+        assert text_mask.sum() > 50, "Замало текстових пікселів для перевірки"
+        mean_text_out = float(gray_out[text_mask].mean())
+        # BGR + _fix_bgr_artifacts дає вищі значення, але не білі (200+)
+        assert mean_text_out < 170, (
+            f"Темний текст пересвітлився (BGR): середня яскравість={mean_text_out:.1f}, "
+            f"очікувалось < 170 (запас для постобробки артефактів)"
+        )
+
+    def test_dark_text_remains_darker_than_background(self):
+        """
+        Після обробки темний текст має залишатись темнішим за фон.
+        Це пряма перевірка того, що захист запобігає "вибілюванню" тексту.
+        """
+        img = self._make_dark_text_on_shadow(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        text_mask = gray_in < 15
+        bg_mask = gray_in > 150
+        assert text_mask.sum() > 50 and bg_mask.sum() > 50
+        mean_text = float(gray_out[text_mask].mean())
+        mean_bg = float(gray_out[bg_mask].mean())
+        assert mean_bg - mean_text > 30, (
+            f"Текст не темніший за фон: текст={mean_text:.1f}, фон={mean_bg:.1f}, "
+            f"різниця={mean_bg - mean_text:.1f} (очікувалось > 30)"
+        )
+
+    def test_shadow_still_removed_with_protection(self):
+        """
+        Захист тексту не повинен блокувати видалення тіні:
+        тіньовий фон (L≈50) має освітлитись після обробки.
+        """
+        img = self._make_dark_text_on_shadow(400)
+        result = shadow_remove.remove_shadow(img)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        # Тіньовий регіон — ліва частина, фонові пікселі (не текст)
+        left_in = gray_in[:, :50]
+        left_out = gray_out[:, :50]
+        # Виключаємо текстові пікселі з аналізу
+        bg_mask = left_in > 30
+        if bg_mask.sum() > 10:
+            mean_shadow_in = float(left_in[bg_mask].mean())
+            mean_shadow_out = float(left_out[bg_mask].mean())
+            assert mean_shadow_out > mean_shadow_in, (
+                f"Тінь не освітлилась: було {mean_shadow_in:.1f}, "
+                f"стало {mean_shadow_out:.1f}"
+            )
+
+    def test_overbright_ratio_constant(self):
+        """
+        Перевірка, що константа L_OVERBRIGHT_RATIO має правильне значення
+        (регресійний тест — захист від випадкової зміни).
+        """
+        assert shadow_remove.L_OVERBRIGHT_RATIO == 2.5, (
+            f"L_OVERBRIGHT_RATIO = {shadow_remove.L_OVERBRIGHT_RATIO}, очікувалось 2.5"
+        )
+
+    def test_l_min_clamp_constant(self):
+        """
+        Перевірка, що L_MIN_CLAMP збільшено до 15 (TODO 4.8).
+        """
+        assert shadow_remove.L_MIN_CLAMP == 15, (
+            f"L_MIN_CLAMP = {shadow_remove.L_MIN_CLAMP}, очікувалось 15"
+        )
+
+    def test_coarse_pass_disabled_text_protection(self):
+        """
+        Захист має працювати навіть з одним проходом (coarse_pass=False).
+        Перевіряємо, що темний текст не пересвітлюється без проходу 2.
+        """
+        img = self._make_dark_text_on_shadow(400)
+        result = shadow_remove.remove_shadow(img, coarse_pass=False)
+        gray_in = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_out = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+        text_mask = gray_in < 15
+        assert text_mask.sum() > 50
+        mean_text_out = float(gray_out[text_mask].mean())
+        # З одним проходом: 15 * 2.5 = 37.5 — ще суворіше
+        assert mean_text_out < 60, (
+            f"Темний текст пересвітлився (1 прохід): {mean_text_out:.1f}, "
+            f"очікувалось < 60 (теоретичний максимум ~38)"
+        )

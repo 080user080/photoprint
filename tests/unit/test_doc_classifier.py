@@ -5,7 +5,12 @@ Unit-тести для doc_classifier.py: classify() та _has_color_content().
 import numpy as np
 import cv2
 import pytest
-from processing.doc_classifier import classify, _has_color_content, _has_histogram_color_content, CHROMA_PIXEL_THRESHOLD, COLOR_PIXEL_RATIO_MIN
+from processing.doc_classifier import (
+    classify, _has_color_content, _has_histogram_color_content,
+    _is_flat_background, CHROMA_PIXEL_THRESHOLD, COLOR_PIXEL_RATIO_MIN,
+    FLAT_BG_UNIFORMITY_THRESH, FLAT_BG_DETAIL_DENSITY_THRESH,
+    FLAT_BG_EDGE_RATIO_MAX, FLAT_BG_LINE_COUNT_MAX,
+)
 
 
 # ============================================================
@@ -174,3 +179,105 @@ class TestLowSaturationPhoto:
         # має запобігти bw_document через has_color_content або has_histogram_color
         assert result != "bw_document", \
             f"Фото з низькою насиченістю класифіковано як {result}"
+
+
+# ============================================================
+# Тест 5: _is_flat_background — перевірка рівного фону (TODO 4.3)
+# ============================================================
+
+class TestIsFlatBackground:
+    """Unit-тести для _is_flat_background з новими перевірками (Canny, HoughLinesP)."""
+
+    def test_uniform_gray_is_flat(self):
+        """Однотонне сіре зображення — flat_background=True."""
+        h, w = 200, 200
+        img = np.full((h, w, 3), 200, dtype=np.uint8)
+        assert _is_flat_background(img) is True
+
+    def test_uniform_white_is_flat(self):
+        """Однотонне біле зображення — flat_background=True."""
+        h, w = 200, 200
+        img = np.full((h, w, 3), 255, dtype=np.uint8)
+        assert _is_flat_background(img) is True
+
+    def test_uniform_black_is_flat(self):
+        """Однотонне чорне зображення — flat_background=True."""
+        h, w = 200, 200
+        img = np.full((h, w, 3), 0, dtype=np.uint8)
+        assert _is_flat_background(img) is True
+
+    def test_scan_with_lines_not_flat(self):
+        """
+        Скан з текстом/лініями на рівному фоні — flat_background=False.
+        Навіть при високій uniformity, наявність ліній (HoughLinesP)
+        має запобігти класифікації як flat_background.
+        """
+        h, w = 300, 300
+        img = np.full((h, w, 3), 240, dtype=np.uint8)
+
+        # Товсті лінії (текст/рамка) — детектуються HoughLinesP
+        cv2.line(img, (20, 50), (280, 50), (0, 0, 0), 3)
+        cv2.line(img, (20, 150), (280, 150), (0, 0, 0), 3)
+        cv2.line(img, (20, 250), (280, 250), (0, 0, 0), 3)
+
+        assert _is_flat_background(img) is False, \
+            "Скан з лініями не має бути flat_background"
+
+    def test_scan_with_edges_not_flat(self):
+        """
+        Зображення з краями (Canny) — flat_background=False.
+        Навіть при високій uniformity, наявність країв має запобігти
+        класифікації як flat_background.
+        """
+        h, w = 300, 300
+        img = np.full((h, w, 3), 240, dtype=np.uint8)
+
+        # Прямокутник (рамка документа) — створює краї
+        cv2.rectangle(img, (30, 30), (w - 30, h - 30), (0, 0, 0), 2)
+
+        assert _is_flat_background(img) is False, \
+            "Зображення з рамкою не має бути flat_background"
+
+    def test_scan_with_text_not_flat(self):
+        """
+        Скан з текстом (багато дрібних деталей) — flat_background=False.
+        Текст створює краї та лінії, які мають запобігти flat_background.
+        """
+        h, w = 300, 300
+        img = np.full((h, w, 3), 240, dtype=np.uint8)
+
+        # Імітуємо текст: багато прямокутників/ліній достатнього розміру,
+        # щоб їх виявив Canny/HoughLinesP після ресайзу до 0.3
+        rng = np.random.default_rng(7)
+        for _ in range(50):
+            x = int(rng.integers(10, w - 60))
+            y = int(rng.integers(10, h - 40))
+            cv2.rectangle(img, (x, y), (x + 40, y + 20), (0, 0, 0), 2)
+
+        assert _is_flat_background(img) is False, \
+            "Скан з текстом не має бути flat_background"
+
+    def test_classify_scan_not_flat_background(self):
+        """
+        Regression: скан з текстом/лініями не має класифікуватись як
+        flat_background (TODO 4.3 — flat_background поглинає скани).
+        """
+        h, w = 300, 300
+        img = np.full((h, w, 3), 240, dtype=np.uint8)
+
+        # Товсті лінії (текст/рамка)
+        cv2.line(img, (20, 50), (280, 50), (0, 0, 0), 3)
+        cv2.line(img, (20, 150), (280, 150), (0, 0, 0), 3)
+        cv2.line(img, (20, 250), (280, 250), (0, 0, 0), 3)
+
+        result = classify(img)
+        assert result != "flat_background", \
+            f"Скан з лініями класифіковано як {result} (очікувалось не flat_background)"
+
+    def test_classify_uniform_gray_is_flat_background(self):
+        """Однотонне сіре зображення — classify() повертає flat_background."""
+        h, w = 200, 200
+        img = np.full((h, w, 3), 200, dtype=np.uint8)
+        result = classify(img)
+        assert result == "flat_background", \
+            f"Однотонне сіре зображення класифіковано як {result} (очікувалось flat_background)"

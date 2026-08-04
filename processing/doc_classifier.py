@@ -90,12 +90,18 @@ def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
     ratio_b = out_of_range_b / total_pixels
     
     # Якщо хоча б 0.1% пікселів виходять за межі нейтрального діапазону — є колір
-    return ratio_a > 0.001 or ratio_b > 0.001
+    return bool(ratio_a > 0.001 or ratio_b > 0.001)
 
 
 # Константи для виявлення flat_background (рівний фон)
-FLAT_BG_UNIFORMITY_THRESH = 0.70    # >70% площі — рівний фон
+# Збільшено з 0.70 до 0.82: скани з текстом/лініями мають uniformity
+# в діапазоні 0.70-0.82 через дрібні деталі, але не є "рівним фоном".
+FLAT_BG_UNIFORMITY_THRESH = 0.82    # >82% площі — рівний фон
 FLAT_BG_DETAIL_DENSITY_THRESH = 0.15  # <15% деталей
+# Поріг edge_ratio: якщо частка країв вища — це документ/фото, не flat_background
+FLAT_BG_EDGE_RATIO_MAX = 0.05        # <5% країв
+# Поріг кількості ліній: наявність ліній (HoughLinesP) — це документ
+FLAT_BG_LINE_COUNT_MAX = 2              # <3 ліній
 
 
 def _local_std_map(gray: np.ndarray, kernel: int = 7) -> np.ndarray:
@@ -110,8 +116,15 @@ def _local_std_map(gray: np.ndarray, kernel: int = 7) -> np.ndarray:
 def _is_flat_background(small: np.ndarray) -> bool:
     """
     Перевіряє, чи є зображення рівним фоном (flat_background):
-    - background_uniformity > 0.7 (більшість площі — рівна)
+    - background_uniformity > 0.82 (більшість площі — рівна)
     - detail_density < 0.15 (мало деталей)
+    - edge_ratio < 0.05 (мало країв — Canny)
+    - line_count < 3 (мало ліній — HoughLinesP)
+
+    Додаткові перевірки (edge_ratio, line_count) запобігають помилковій
+    класифікації сканів з текстом/лініями як flat_background: навіть при
+    високій уніформності фону наявність країв або ліній означає, що
+    зображення містить документ, а не є "рівним фоном".
     """
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     std_map = _local_std_map(gray)
@@ -124,7 +137,23 @@ def _is_flat_background(small: np.ndarray) -> bool:
     detail_mask = np.clip(std_map / ref_std, 0.0, 1.0)
     detail_density = float(np.mean(detail_mask))
 
-    return uniformity > FLAT_BG_UNIFORMITY_THRESH and detail_density < FLAT_BG_DETAIL_DENSITY_THRESH
+    # Перевірка країв (Canny): якщо частка країв вища за поріг —
+    # це документ/фото, не flat_background
+    edges = cv2.Canny(gray, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
+    edge_ratio = float(np.count_nonzero(edges) / edges.size)
+
+    # Перевірка ліній (HoughLinesP): наявність ліній — це документ
+    min_line_length = min(small.shape[:2]) // HOUGH_MIN_LINE_LENGTH_RATIO
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=HOUGH_THRESHOLD,
+                            minLineLength=min_line_length, maxLineGap=HOUGH_MAX_LINE_GAP)
+    line_count = len(lines) if lines is not None else 0
+
+    return (
+        uniformity > FLAT_BG_UNIFORMITY_THRESH
+        and detail_density < FLAT_BG_DETAIL_DENSITY_THRESH
+        and edge_ratio < FLAT_BG_EDGE_RATIO_MAX
+        and line_count < FLAT_BG_LINE_COUNT_MAX
+    )
 
 
 def classify(
@@ -145,14 +174,19 @@ def classify(
     small = cv2.resize(image, (0, 0), fx=ANALYSIS_SCALE, fy=ANALYSIS_SCALE, interpolation=cv2.INTER_AREA)
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+    l_ch = np.asarray(l_ch)
+    a_ch = np.asarray(a_ch)
+    b_ch = np.asarray(b_ch)
 
     # Перевірка на flat_background — виконується першою, найшвидша
     if _is_flat_background(small):
         _logger.debug("-> flat_background")
         return "flat_background"
 
-    std_a = float(np.std(a_ch))
-    std_b = float(np.std(b_ch))
+    a_f = a_ch.astype(np.float64)
+    b_f = b_ch.astype(np.float64)
+    std_a = float(np.std(a_f))
+    std_b = float(np.std(b_f))
 
     # Локальна перевірка наявності кольору (стійка до великого нейтрального фону)
     color_pixel_ratio, has_color_content = _has_color_content(a_ch, b_ch)
@@ -251,6 +285,9 @@ def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
 
     lab = cv2.cvtColor(small, cv2.COLOR_BGR2LAB)
     l_ch, a_ch, b_ch = cv2.split(lab)
+    l_ch = np.asarray(l_ch)
+    a_ch = np.asarray(a_ch)
+    b_ch = np.asarray(b_ch)
 
     # Пікселі світлого фону (L > 180)
     bg_mask = l_ch > 180
@@ -258,7 +295,7 @@ def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
     if bg_pixel_count < 0.05 * small.shape[0] * small.shape[1]:
         return False
 
-    b_bg = b_ch[bg_mask]
+    b_bg = b_ch[bg_mask].astype(np.float64)
     b_median = float(np.median(b_bg))
 
     return b_median > PHONE_WARM_B_THRESHOLD or b_median < PHONE_COOL_B_THRESHOLD

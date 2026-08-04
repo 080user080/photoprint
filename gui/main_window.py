@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QButtonGroup, QRadioButton,
     QFileDialog, QProgressBar, QScrollArea, QApplication,
-    QSystemTrayIcon, QMenu, QComboBox,
+    QSystemTrayIcon, QMenu, QComboBox, QSplitter,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QPoint
 from PyQt6.QtGui import QIcon
@@ -423,12 +423,24 @@ class MainWindow(QMainWindow):
         bg_color = self._settings.get("background_color", "#E8E8E8")
         central.setStyleSheet(f"background-color: {bg_color};")
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        root = QVBoxLayout(central)
         root.setContentsMargins(LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN, LAYOUT_MARGIN)
         root.setSpacing(LAYOUT_SPACING)
 
-        # Ліва панель: черга
-        left = QVBoxLayout()
+        # QSplitter: ліва панель (черга) + центральна (прев'ю)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setObjectName("main_splitter")
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(6)
+        root.addWidget(self._splitter)
+
+        # Ліва панель: черга (обгорнута в QWidget для QSplitter)
+        left_widget = QWidget()
+        left_widget.setObjectName("left_panel")
+        left_widget.setMinimumWidth(MIN_QUEUE_WIDTH)
+        left_widget.setMaximumWidth(MAX_QUEUE_WIDTH)
+        left = QVBoxLayout(left_widget)
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(LEFT_LAYOUT_SPACING)
 
         lbl_q = QLabel("Черга файлів")
@@ -458,9 +470,14 @@ class MainWindow(QMainWindow):
         left.addWidget(btn_add)
         left.addWidget(btn_folder)
         left.addWidget(btn_clear)
+        self._left_widget = left_widget
 
-        # === Центр: прев'ю + керування внизу ===
-        center = QVBoxLayout()
+        # === Центр: прев'ю + керування внизу (обгорнуто в QWidget для QSplitter) ===
+        center_widget = QWidget()
+        center_widget.setObjectName("center_panel")
+        center_widget.setMinimumWidth(600)
+        center = QVBoxLayout(center_widget)
+        center.setContentsMargins(0, 0, 0, 0)
         center.setSpacing(CENTER_LAYOUT_SPACING)
 
         self._preview = PreviewPanel()
@@ -472,6 +489,7 @@ class MainWindow(QMainWindow):
 
         center.addWidget(self._preview, 1)
         center.addWidget(self._progress)
+        self._center_widget = center_widget
 
         # === Внизу під прев'ю: керування ===
         # Панель керування (controls + кнопки)
@@ -627,8 +645,13 @@ class MainWindow(QMainWindow):
         controls_container.setLayout(controls_layout)
         center.addWidget(controls_container)
 
-        root.addLayout(left,   0)
-        root.addLayout(center, 1)
+        # Додаємо обидві панелі в QSplitter
+        self._splitter.addWidget(self._left_widget)
+        self._splitter.addWidget(self._center_widget)
+        # Встановлюємо початкові пропорції: 200px черга, решта — прев'ю
+        self._splitter.setSizes([DEFAULT_QUEUE_WIDTH, max(DEFAULT_WINDOW_WIDTH - DEFAULT_QUEUE_WIDTH - LAYOUT_MARGIN * 2 - LAYOUT_SPACING, 600)])
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
 
         # Статусний рядок вбудований у QMainWindow
         sb = self.statusBar()
@@ -687,13 +710,21 @@ class MainWindow(QMainWindow):
         height = self._settings.get("window_height", 680)
         queue_width = self._settings.get("queue_width", 200)
         self.resize(width, height)
-        self._queue.setFixedWidth(queue_width)
+        # Відновлюємо розмір панелей QSplitter (замість setFixedWidth)
+        if hasattr(self, '_splitter'):
+            center_width = max(width - queue_width - LAYOUT_MARGIN * 2 - LAYOUT_SPACING, 600)
+            self._splitter.setSizes([queue_width, center_width])
 
     def _save_window_geometry(self):
         """Зберігає розмір вікна та ширину черги в налаштуваннях."""
         self._settings["window_width"] = self.width()
         self._settings["window_height"] = self.height()
-        self._settings["queue_width"] = self._queue.width()
+        if hasattr(self, '_splitter'):
+            sizes = self._splitter.sizes()
+            if len(sizes) >= 2:
+                self._settings["queue_width"] = sizes[0]
+        else:
+            self._settings["queue_width"] = self._queue.width()
         app_settings.save(self._settings)
 
     def resizeEvent(self, event):
