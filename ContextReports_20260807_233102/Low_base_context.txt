@@ -1,0 +1,656 @@
+СТРУКТУРА ПРОЄКТУ
+============================================================
+D:\Python\Print_COPY\photoprint\photoprint-main
+batch\__init__.py
+batch\batch_processor.py
+config\__init__.py
+config\app_settings.py
+core\__init__.py
+core\loader.py
+core\printer.py
+core\saver.py
+gui\__init__.py
+gui\controls.py
+gui\main_window.py
+gui\preview.py
+gui\queue_view.py
+gui\settings_window.py
+logs
+processing\__init__.py
+processing\autofix.py
+processing\brightness_contrast.py
+processing\color_cast.py
+processing\deskew.py
+processing\detail_map.py
+processing\diagnostics.py
+processing\doc_classifier.py
+processing\hdr.py
+processing\perspective.py
+processing\pipeline.py
+processing\shadow_highlight.py
+processing\shadow_remove.py
+processing\sharpen.py
+processing\text_mask.py
+processing\white_background.py
+tools\__init__.py
+tools\profile_memory.py
+utils\__init__.py
+utils\file_utils.py
+utils\image_utils.py
+utils\logger.py
+utils\win_drop.py
+main.py
+shadow_remove_gui.py
+
+============================================================
+ДЕТАЛІЗАЦІЯ КОДУ (рівень: low)
+============================================================
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\batch\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\batch\batch_processor.py
+============================================================
+Сутності:
+class BatchProcessor:
+    def __init__(self, settings: dict):
+    def set_files(self, paths: list[str]) -> None:
+    def add_files(self, paths: list[str]) -> None:
+    def sync_new_files(self, paths: list[str]) -> None:
+    def add_folder(self, folder: str) -> None:
+    def clear(self) -> None:
+    def files(self) -> list[str]:
+    def total(self) -> int:
+    def current_index(self) -> int:
+    def _safe_worker_count(self, requested: int) -> int:
+    def run_auto(self, on_progress: Callable[[int, int, str], None] | None, on_error: Callable[[int, str, str], None] | None, on_print_progress: Callable[[int, int, str], None] | None) -> int:
+    def has_next(self) -> bool:
+    def current_file(self) -> str | None:
+    def load_current(self) -> np.ndarray:
+    def print_current(self, processed_image: np.ndarray) -> str:
+    def skip_current(self) -> str | None:
+    def _maybe_save(self, image: np.ndarray, source_path: str) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\config\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\config\app_settings.py
+============================================================
+Сутності:
+def _get_path(path):
+def load(path) -> dict:
+def save(settings: dict, path):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\loader.py
+============================================================
+Сутності:
+def _load_heic(path: str) -> np.ndarray:
+def _load_raw(path: str) -> np.ndarray:
+def load(path: str) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\printer.py
+============================================================
+Сутності:
+def _save_temp_jpg(image: np.ndarray, quality: int) -> str:
+def _delayed_remove(path: str, delay: float) -> None:
+def print_image(image: np.ndarray, printer_name: str, jpg_quality: int) -> None:
+def _print_windows_win32(path: str, printer_name: str) -> None:
+def _print_windows(path: str, printer_name: str) -> None:
+def _print_unix(path: str, printer_name: str) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\core\saver.py
+============================================================
+Сутності:
+def save(image: np.ndarray, path: str, quality: int) -> str:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\controls.py
+============================================================
+Сутності:
+class _SliderRow(QWidget):
+    def __init__(self, label: str, min_val: float, max_val: float, default: float, show_auto: bool, parent: Optional[QWidget]):
+    def _on_change(self, raw: int) -> None:
+    def value(self) -> float:
+    def set_value(self, v: float, silent: bool) -> None:
+    def reset(self) -> None:
+class ControlsPanel(QWidget):
+    def __init__(self, parent: Optional[QWidget]):
+    def _group_style(self) -> str:
+    def _build_ui(self) -> None:
+    def _emit(self) -> None:
+    def values(self) -> Dict[str, Any]:
+    def reset_all(self) -> None:
+    def set_sharpen(self, v: float, silent: bool) -> None:
+    def set_hdr(self, v: float, silent: bool) -> None:
+    def set_brightness(self, v: float, silent: bool) -> None:
+    def set_contrast(self, v: float, silent: bool) -> None:
+    def set_grayscale(self, v: bool, silent: bool) -> None:
+    def set_shadow_highlight(self, v: float, silent: bool) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\main_window.py
+============================================================
+Сутності:
+class AutoWorker(QObject):
+    def __init__(self, processor: BatchProcessor):
+    def run(self):
+class SingleImageWorker(QObject):
+    def __init__(self, func):
+    def run(self):
+class CropDetectWorker(QObject):
+    def __init__(self, func):
+    def run(self):
+class MainWindow(QMainWindow):
+    def __init__(self):
+    def _setup_win_drop(self):
+    def _setup_tray(self):
+    def _show_from_tray(self):
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason):
+    def _quit_app(self):
+    def closeEvent(self, event):
+    def _has_running_threads(self) -> bool:
+    def _check_threads_and_close(self):
+    def _force_close(self):
+    def _do_close(self, event):
+    def _wait_for_threads(self):
+    def _on_win_drop(self, paths: list[str]):
+    def _apply_background_color(self):
+    def _apply_preview_colors(self):
+    def _apply_queue_colors(self):
+    def _auto_contrast_color(bg_hex: str) -> str:
+    def _build_ui(self):
+    def _btn_style(self, color):
+    def _on_mode_changed(self, btn_id: int):
+    def _apply_default_mode(self):
+    def _load_window_geometry(self):
+    def _save_window_geometry(self):
+    def resizeEvent(self, event):
+    def keyPressEvent(self, event):
+    def _on_shadow_mode_changed(self, btn_id: int):
+    def _on_settings_saved(self, s: dict):
+    def _open_settings(self):
+    def _sync_processor_with_queue(self):
+    def _on_files_added(self, paths: list[str]):
+    def _browse_files(self):
+    def _browse_folder(self):
+    def _clear_queue(self):
+    def _store_current_settings(self):
+    def _restore_file_settings(self, path: str):
+    def _push_undo_snapshot(self) -> None:
+    def _apply_history_state(self, state: dict) -> None:
+    def _do_undo(self) -> None:
+    def _do_redo(self) -> None:
+    def _finish_perspective_session(self, commit: bool) -> None:
+    def _commit_pending_perspective(self, commit: bool) -> None:
+    def _on_queue_selection(self, path: str):
+    def _do_autofix(self):
+    def _do_autofix_classic(self):
+    def _on_controls_changed(self, vals: Optional[dict]):
+    def _on_controls_changed_debounced(self, vals: Optional[dict]):
+    def _do_auto_brightness(self):
+    def _do_auto_contrast(self):
+    def _do_auto_sharpen(self):
+    def _do_persp_auto(self):
+    def _commit_deskew(self) -> None:
+    def _cancel_deskew(self) -> None:
+    def _show_deskew_buttons(self, visible: bool) -> None:
+    def _corners_to_preview_pts(self, corners: np.ndarray, source: np.ndarray) -> list[QPoint]:
+    def _preview_pts_to_corners(self, points: list[QPoint], source: np.ndarray) -> np.ndarray:
+    def _freeze_preview_panels(self) -> None:
+    def _unfreeze_preview_panels(self) -> None:
+    def _show_perspective_points(self, corners: np.ndarray, status_msg: str) -> None:
+    def _validate_corners_in_bounds(self, corners: np.ndarray, image: np.ndarray) -> bool:
+    def _default_perspective_corners(self, image: np.ndarray) -> np.ndarray:
+    def _do_persp_manual_fallback(self):
+    def _do_persp_manual(self) -> None:
+    def _do_persp_reset(self):
+    def _do_reset_all(self):
+    def _on_persp_pts_light(self, points: list) -> None:
+    def _on_persp_pts_heavy(self, points: list) -> None:
+    def _invalidate_crop_default_cache(self) -> None:
+    def _full_frame_crop_corners(self, image: np.ndarray) -> np.ndarray:
+    def _cleanup_crop_detect_thread(self) -> None:
+    def _on_crop_session_requested(self) -> None:
+    def _do_print_current(self):
+    def _do_skip(self):
+    def _do_save_image(self):
+    def _do_print_all(self):
+    def _cleanup_auto_thread(self):
+    def _start_auto(self):
+    def _on_auto_progress(self, cur: int, total: int, fname: str):
+    def _on_auto_print_progress(self, cur: int, total: int, fname: str):
+    def _on_auto_error(self, idx: int, fname: str, msg: str):
+    def _on_auto_done(self, count: int):
+    def _load_next_manual(self):
+    def _cleanup_single_thread(self):
+    def _reset_progress_ui(self, button_to_lock):
+    def _run_in_background(self, func, on_finished, button_to_lock):
+    def _update_buttons(self):
+    def _set_buttons_enabled(self, enabled: bool):
+    def _set_status(self, text: str, timeout_ms: int):
+    def _reset_status_style(self):
+    def _set_file_status(self, filename: str):
+    def _dump_widget_geometries(self) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\preview.py
+============================================================
+Сутності:
+def _np_to_pixmap(image: np.ndarray) -> QPixmap:
+class ImageLabel(QLabel):
+    def __init__(self, parent):
+    def set_hover_enabled(self, enabled: bool) -> None:
+    def set_image(self, image: np.ndarray):
+    def set_placeholder(self, text):
+    def set_edit_mode(self, enabled: bool, corners: list[QPoint] | None):
+    def get_points(self) -> list[QPoint]:
+    def set_crop_rect(self, corners: list[QPoint]) -> None:
+    def resizeEvent(self, event):
+    def paintEvent(self, event):
+    def enterEvent(self, event):
+    def leaveEvent(self, event):
+    def mouseMoveEvent(self, event):
+    def mousePressEvent(self, event):
+    def mouseReleaseEvent(self, event):
+    def _maybe_schedule_hover(self):
+    def _show_hover_overlay(self):
+    def _hide_hover_overlay(self):
+    def _disable_hover(self):
+    def _get_crop_cursor(cls) -> QCursor:
+    def _draw_hover_overlay(self, painter: QPainter) -> None:
+    def _fit(self):
+    def _img_rect(self) -> QRect | None:
+    def _img_to_widget(self, img_pt: QPoint) -> QPoint:
+    def _widget_to_img(self, pos: QPoint) -> QPoint | None:
+    def _clamp_to_image(self, pt: QPoint) -> QPoint:
+class PreviewPanel(QWidget):
+    def __init__(self, parent):
+    def _build_ui(self):
+    def set_before(self, image: np.ndarray):
+    def set_after(self, image: np.ndarray):
+    def set_colors(self, bg_color: str, text_color: str):
+    def set_autofix_applied(self, mode: str | None):
+    def clear(self):
+    def get_autofix_applied(self) -> str | None:
+    def enable_perspective_edit(self, corners: list[QPoint] | None):
+    def disable_perspective_edit(self):
+    def set_hover_enabled(self, enabled: bool) -> None:
+    def get_perspective_points(self) -> list[QPoint]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\queue_view.py
+============================================================
+Сутності:
+class QueueView(QListWidget):
+    def __init__(self, parent: Optional[QWidget]):
+    def set_files(self, paths: List[str]) -> None:
+    def add_files(self, paths: List[str]) -> None:
+    def mark_current(self, idx: int) -> None:
+    def mark_done(self, idx: int) -> None:
+    def mark_error(self, idx: int) -> None:
+    def mark_skipped(self, idx: int) -> None:
+    def set_colors(self, bg_color: str, text_color: str):
+    def _apply_colors(self):
+    def get_all_paths(self) -> List[str]:
+    def get_path(self, idx: int) -> Optional[str]:
+    def get_status(self, idx: int) -> str:
+    def clear_queue(self) -> None:
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+    def dropEvent(self, event: QDropEvent) -> None:
+    def _urls_to_paths(self, urls: List[QUrl]) -> List[str]:
+    def _add_item(self, path: str, status: str) -> None:
+    def _set_status(self, idx: int, status: str) -> None:
+    def _all_paths(self) -> List[str]:
+    def _on_clicked(self, item: QListWidgetItem) -> None:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\gui\settings_window.py
+============================================================
+Сутності:
+class StrategyPresetWidget(QWidget):
+    def __init__(self, parent):
+    def _on_preset_changed(self, index):
+    def get_preset(self) -> str:
+    def get_enabled_steps(self) -> list[str]:
+    def set_state(self, preset: str, enabled: list[str] | None):
+def _make_scroll_page(widget: QWidget) -> QWidget:
+def _set_spinbox_minw(spin):
+class SettingsWindow(QWidget):
+    def __init__(self, parent):
+    def _qt_tool_flag():
+    def _build_ui(self):
+    def _page_autofix(self) -> QWidget:
+    def _page_shadow_remove(self) -> QWidget:
+    def _page_classify(self) -> QWidget:
+    def _page_autosharp(self) -> QWidget:
+    def _page_brightness_contrast(self) -> QWidget:
+    def _page_strategy(self) -> QWidget:
+    def _page_format_save(self) -> QWidget:
+    def _page_printer_mode(self) -> QWidget:
+    def _page_appearance(self) -> QWidget:
+    def _on_auto_contrast_toggled(self, checked: bool):
+    def _choose_background_color(self):
+    def _choose_color(self, hex_edit: QLineEdit, preview_label: QLabel):
+    def load_from_file(self):
+    def _apply_settings(self, s: dict):
+    def _collect_settings(self) -> dict:
+    def _save(self):
+    def _browse_folder(self):
+# Невідомий тип: D:\Python\Print_COPY\photoprint\photoprint-main\logs
+
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\autofix.py
+============================================================
+Сутності:
+def apply(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, adaptive_hdr: bool) -> np.ndarray:
+def apply_bw_document(image: np.ndarray, sharpen_strength: float, binary: bool, skip_contrast: bool, skip_grayscale: bool) -> np.ndarray:
+def apply_color_document(image: np.ndarray, sharpen_strength: float) -> np.ndarray:
+def _step_lab_clahe_normalize(image: np.ndarray, aggressive: bool) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\brightness_contrast.py
+============================================================
+Сутності:
+def apply_brightness(image: np.ndarray, value: float) -> np.ndarray:
+def auto_brightness(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def _lab_l_channel(image: np.ndarray) -> tuple:
+def _assemble_lab(l: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+def smart_contrast_percentile(image: np.ndarray, strength: float, low_perc: float, high_perc: float) -> np.ndarray:
+def contrast_s_curve(image: np.ndarray, strength: float) -> np.ndarray:
+def local_contrast_adaptive(image: np.ndarray, strength: float) -> np.ndarray:
+def apply_contrast(image: np.ndarray, value: float) -> np.ndarray:
+def auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def to_grayscale(image: np.ndarray) -> np.ndarray:
+def _make_brightness_lut(shift: float) -> np.ndarray:
+def _make_contrast_lut(alpha: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\color_cast.py
+============================================================
+Сутності:
+def detect_color_cast(image: np.ndarray) -> tuple[float, float]:
+def correct_color_cast(image: np.ndarray) -> tuple[np.ndarray, bool]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\deskew.py
+============================================================
+Сутності:
+def measure_skew_angle(image: np.ndarray) -> float:
+def apply_deskew(image: np.ndarray, angle: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\detail_map.py
+============================================================
+Сутності:
+def local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def detail_mask(gray: np.ndarray, noise_floor: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\diagnostics.py
+============================================================
+Сутності:
+class DiagnosticResult:
+def _resize_for_analysis(image: np.ndarray, max_dim: int) -> np.ndarray:
+def _measure_gradient(image: np.ndarray) -> tuple[bool, float, str]:
+def _measure_contrast(image: np.ndarray) -> tuple[float, float, float, float]:
+def _measure_brightness(image: np.ndarray) -> tuple[float, float]:
+def _measure_blur(image: np.ndarray, settings: dict) -> tuple[float, float, float]:
+def _measure_perspective(image: np.ndarray) -> tuple[bool, np.ndarray | None, float]:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def _measure_background_uniformity(gray: np.ndarray) -> float:
+def _measure_noise_level(gray: np.ndarray) -> float:
+def _measure_color_saturation(lab: np.ndarray) -> float:
+def _measure_dynamic_range(gray: np.ndarray) -> float:
+def _measure_detail_density(gray: np.ndarray) -> float:
+def _measure_doc_type(image: np.ndarray, settings: dict) -> str:
+def measure_background_metrics(image: np.ndarray) -> tuple[float, float]:
+def detect_face(image: np.ndarray) -> bool:
+def diagnose(image: np.ndarray, settings: dict) -> DiagnosticResult:
+def partial_rediagnose(image: np.ndarray, settings: dict, fields: list[str]) -> dict:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\doc_classifier.py
+============================================================
+Сутності:
+def _has_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> tuple[float, bool]:
+def _has_histogram_color_content(a_ch: np.ndarray, b_ch: np.ndarray) -> bool:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def _is_flat_background(small: np.ndarray) -> bool:
+def classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> DocType:
+def _detect_screen_capture(small: np.ndarray) -> bool:
+def _detect_phone_camera(small: np.ndarray, bg_uniformity: float) -> bool:
+def classify_capture_conditions(image: np.ndarray, background_uniformity: float) -> str:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\hdr.py
+============================================================
+Сутності:
+def adaptive_tile_grid(h: int, w: int, target_px: int) -> tuple[int, int]:
+def _apply_coring(diff: np.ndarray, noise_floor: float | None) -> np.ndarray:
+def _auto_strength_factor(l_ch: np.ndarray) -> float:
+def _compute_hdr_lab(l_ch: np.ndarray, strength: float) -> np.ndarray:
+def apply(image: np.ndarray, strength: float, manual_mode: bool) -> np.ndarray:
+def apply_adaptive(image: np.ndarray, strength: float, text_mask: np.ndarray | None, auto_detail: bool, noise_floor: float | None, manual_mode: bool) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\perspective.py
+============================================================
+Сутності:
+def auto_detect_corners(image: np.ndarray, max_dim: int, filename: str | None) -> np.ndarray | None:
+def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def auto_correct(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, bool]:
+def _detect_corners_impl(gray: np.ndarray, filename: str | None) -> np.ndarray | None:
+def _detect_with_rotation_candidates(gray: np.ndarray, filename: str | None) -> np.ndarray | None:
+def _try_adaptive_threshold(gray: np.ndarray) -> np.ndarray | None:
+def _try_canny(gray: np.ndarray) -> np.ndarray | None:
+def _try_largest_contour(gray: np.ndarray) -> np.ndarray | None:
+def _try_hough_lines(gray: np.ndarray) -> np.ndarray | None:
+def _try_external_contour(gray: np.ndarray) -> np.ndarray | None:
+def _cluster_parallel_lines(lines: list, axis: str, image_size: tuple, cluster_ratio: float) -> list:
+def _validate_quad_quality(pts: np.ndarray, image_shape: tuple) -> tuple[bool, float]:
+def _find_quad_contour(binary: np.ndarray, gray_shape: tuple) -> np.ndarray | None:
+def _validate_document(approx: np.ndarray, image_shape: tuple) -> bool:
+def _order_points(pts: np.ndarray) -> np.ndarray:
+def _is_clockwise(pts: np.ndarray) -> bool:
+def _compute_destination(pts: np.ndarray) -> tuple[np.ndarray, int, int]:
+def detect_skewed_sides(pts: np.ndarray) -> dict[str, bool]:
+def apply_partial_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def auto_correct_partial(image: np.ndarray, max_dim: int) -> tuple[np.ndarray, bool]:
+def auto_correct_iterative(image: np.ndarray, max_passes: int, max_dim: int, partial: bool) -> tuple[np.ndarray, int, float]:
+def _score_quad(pts: np.ndarray, image_shape: tuple) -> float:
+def _touches_image_border(cnt: np.ndarray, shape: tuple, margin: int) -> bool:
+def _solidity(cnt: np.ndarray) -> float:
+def _refine_corners_subpix(gray: np.ndarray, corners: np.ndarray) -> np.ndarray:
+def _apply_clahe(gray: np.ndarray) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\pipeline.py
+============================================================
+Сутності:
+class DocType(str, Enum):
+def run_contrast_advanced(image: np.ndarray, value: float, mode: str) -> np.ndarray:
+def run_autofix(image: np.ndarray, sharpen_strength: float, hdr_strength: float, use_hdr: bool, use_perspective: bool, partial_perspective: bool, doc_type: Optional[str], bw_binary: bool, classify_bw_std_thresh: float, classify_edge_ratio_min: float, classify_line_count_min: int, shadow_highlight_strength: float, output_color_mode: str, adaptive_hdr: bool, autofix_contrast: float, contrast_mode: str, settings: Optional[dict]) -> tuple[np.ndarray, str, list[dict]]:
+def run_sharpen(image: np.ndarray, strength: float) -> np.ndarray:
+def run_auto_sharpen(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
+def run_classify(image: np.ndarray, bw_std_thresh: float, edge_ratio_min: float, line_count_min: int) -> str:
+def run_hdr(image: np.ndarray, strength: float, adaptive: bool) -> np.ndarray:
+def run_perspective_auto_smart(image: np.ndarray, settings: dict | None, filename: str | None) -> tuple[np.ndarray, str]:
+def run_perspective_auto(image: np.ndarray, partial: bool) -> tuple[np.ndarray, bool]:
+def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool) -> np.ndarray:
+def detect_corners(image: np.ndarray, filename: str | None) -> np.ndarray | None:
+def run_brightness(image: np.ndarray, value: float) -> np.ndarray:
+def run_auto_brightness(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def run_contrast(image: np.ndarray, value: float) -> np.ndarray:
+def run_auto_contrast(image: np.ndarray, percentile_low: float, percentile_high: float) -> np.ndarray:
+def run_grayscale(image: np.ndarray) -> np.ndarray:
+def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def _apply_auto_white_background(image: np.ndarray, doc_type: str) -> tuple[np.ndarray, bool]:
+def run_manual_adjustments(image: np.ndarray, brightness: float, contrast: float, sharpen_strength: float, hdr_strength: float, grayscale: bool, shadow_highlight_strength: float, adaptive_hdr: bool, contrast_mode: str) -> np.ndarray:
+def _compute_adaptive_params(diag) -> dict:
+def run_full_auto(image: np.ndarray, settings: dict, dry_run: bool) -> tuple[np.ndarray, str, dict]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_highlight.py
+============================================================
+Сутності:
+def apply_shadow_highlight(image: np.ndarray, strength: float) -> np.ndarray:
+def auto_shadow_highlight(image: np.ndarray, percentile_low: float, max_strength: float) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\shadow_remove.py
+============================================================
+Сутності:
+def _create_background_model(l_channel: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_coarse_background(l_channel: np.ndarray) -> np.ndarray:
+def _remove_shadow_bgr(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
+def _fix_bgr_artifacts(result: np.ndarray, original: np.ndarray) -> None:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool, is_color_document: bool, coarse_blend: float, bgr_mode: bool) -> np.ndarray:
+def auto_remove_shadow(image: np.ndarray, is_color_document: bool, coarse_blend: float, detect_threshold: float, detect_ratio: float, bgr_mode: bool, background_uniformity: float) -> tuple[np.ndarray, bool]:
+def _auto_kernel_size(image: np.ndarray) -> int:
+def _detect_shadow(image: np.ndarray, threshold: float, ratio: float, background_uniformity: float) -> bool:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\sharpen.py
+============================================================
+Сутності:
+def apply(image: np.ndarray, strength: float) -> np.ndarray:
+def measure_sharpness(image: np.ndarray) -> float:
+def auto_apply(image: np.ndarray, threshold: float, max_strength: float) -> tuple[np.ndarray, float]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\text_mask.py
+============================================================
+Сутності:
+def _binarize_text(gray: np.ndarray) -> np.ndarray:
+def _filter_small_components(binary: np.ndarray) -> np.ndarray:
+def _dilate_mask(mask: np.ndarray) -> np.ndarray:
+def text_region_mask(gray: np.ndarray) -> np.ndarray:
+def uniform_area_mask(gray: np.ndarray) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\processing\white_background.py
+============================================================
+Сутності:
+def _local_std_map(gray: np.ndarray, kernel: int) -> np.ndarray:
+def make_background_white(image: np.ndarray, background_uniformity: float, detail_density: float) -> tuple[np.ndarray, bool]:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\tools\profile_memory.py
+============================================================
+Сутності:
+def _generate_test_images(count: int, target_dir: str) -> list[str]:
+def _collect_real_test_images() -> list[str]:
+def _format_mib(bytes_val: int) -> str:
+def profile_batch(count: int, use_real_images: bool, verbose: bool, profile_dir: Optional[str]) -> dict:
+def _make_progress_cb(verbose: bool):
+def _make_error_cb(verbose: bool):
+def main():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\__init__.py
+============================================================
+(немає класів чи функцій верхнього рівня)
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\file_utils.py
+============================================================
+Сутності:
+def is_supported_image(path: str) -> bool:
+def collect_images_from_folder(folder: str) -> list[str]:
+def filter_supported(paths: list[str]) -> list[str]:
+def build_output_path(source_path: str, save_folder: str, suffix: str) -> str:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\image_utils.py
+============================================================
+Сутності:
+def _preview_cache_key(image: np.ndarray, max_side: int) -> int:
+def preview_cache_clear() -> None:
+def preview_cache_stats() -> dict:
+def make_preview(image: np.ndarray, max_side: int) -> np.ndarray:
+def bgr_to_rgb(image: np.ndarray) -> np.ndarray:
+def rgb_to_bgr(image: np.ndarray) -> np.ndarray:
+def ensure_bgr(image: np.ndarray) -> np.ndarray:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\logger.py
+============================================================
+Сутності:
+def setup_logger(name: str, log_file: str | None, level: int) -> logging.Logger:
+def get_logger(name: str) -> logging.Logger:
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\utils\win_drop.py
+============================================================
+Сутності:
+def register_drop_window(hwnd: int):
+def _read_drop_files(hdrop_int: int) -> list[str]:
+class DropEventFilter(QAbstractNativeEventFilter):
+    def __init__(self, callback):
+    def nativeEventFilter(self, event_type, message):
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\main.py
+============================================================
+Сутності:
+def main():
+
+============================================================
+Файл: D:\Python\Print_COPY\photoprint\photoprint-main\shadow_remove_gui.py
+============================================================
+Сутності:
+def _auto_kernel_size(image: np.ndarray) -> int:
+def _create_background_model(gray: np.ndarray, kernel_size: int) -> np.ndarray:
+def _create_coarse_background(gray: np.ndarray) -> np.ndarray:
+def _local_std_map(gray: np.ndarray, ksize: int) -> np.ndarray:
+def _detect_shadow(image: np.ndarray) -> bool:
+def remove_shadow(image: np.ndarray, kernel_size: int, coarse_pass: bool) -> np.ndarray:
+def auto_remove_shadow(image: np.ndarray, force: bool) -> tuple[np.ndarray, bool]:
+def _fit_image_for_preview(img_bgr: np.ndarray) -> ImageTk.PhotoImage:
+class ShadowRemoverApp(tk.Tk):
+    def __init__(self):
+    def _build_ui(self):
+    def _on_kernel_change(self, _):
+    def _on_options_change(self):
+    def _pick_input(self):
+    def _pick_output(self):
+    def _show_preview_before(self, img: np.ndarray):
+    def _show_preview_after(self, img: np.ndarray):
+    def _clear_after_canvas(self):
+    def _place_image(self, canvas: tk.Canvas, photo: ImageTk.PhotoImage):
+    def _run_threaded(self):
+    def _process(self):
+    def _finish(self, status: str):
+    def _error(self, msg: str):
+    def _save_result(self):

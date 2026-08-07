@@ -69,6 +69,9 @@ DROP_SETUP_DELAY_MS = 300
 MODE_AUTO_ID = 0
 MODE_MANUAL_ID = 1
 
+# Константи для Undo/Redo (TODO1.1)
+UNDO_MAX_STEPS = 2
+
 # Константа для стилю статус-бару (щоб уникнути дублювання CSS)
 _STATUS_BAR_STYLE = (
     "QStatusBar {"
@@ -148,6 +151,27 @@ class SingleImageWorker(QObject):
             self.error.emit(str(e))
 
 
+class CropDetectWorker(QObject):
+    """
+    TODO2 крок 3.2: легка фонова детекція кутів кадрування.
+    На відміну від SingleImageWorker — НЕ блокує кнопки і НЕ показує прогрес-бар.
+    func: callable() -> np.ndarray | None
+    """
+    finished = pyqtSignal(object)   # результат (np.ndarray | None)
+    error    = pyqtSignal(str)
+
+    def __init__(self, func):
+        super().__init__()
+        self._func = func
+
+    def run(self):
+        try:
+            result = self._func()
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 # ---------------------------------------------------------------------------
 # MainWindow
 # ---------------------------------------------------------------------------
@@ -171,10 +195,20 @@ class MainWindow(QMainWindow):
         self._single_thread: Optional[QThread] = None
         self._perspective_corners: Optional[np.ndarray] = None  # збережені кути перспективи
         self._perspective_cached_result: Optional[np.ndarray] = None  # кеш perspective для слайдерів
+        self._persp_drag_applied: bool = False  # TODO1.5: чи був реальний drag точки (інакше режим скасовуємо без зміни _base)
         self._pending_deskew_result: Optional[np.ndarray] = None      # deskew-результат до коміту (відкладений)
         self._drop_filter: Optional[DropEventFilter] = None
         self._current_path: Optional[str] = None  # поточний файл у ручному/перегляді
         self._per_file: Dict[str, Dict[str, Any]] = {}  # збережені налаштування слайдерів по файлу
+        # TODO2 крок 3: кеш дефолтної рамки кадрування (прив'язаний до id(self._base))
+        self._crop_default_corners_full: Optional[np.ndarray] = None
+        self._crop_default_corners_base_id: Optional[int] = None
+        self._crop_detection_in_progress: bool = False
+        self._crop_detect_thread: Optional[QThread] = None
+        self._crop_detect_worker: Optional[CropDetectWorker] = None
+        # Undo/Redo історія (TODO1.1) — per-file, прив'язана до шляху
+        self._undo_history: Dict[str, list] = {}  # path -> list[dict] (знімки _base + _per_file)
+        self._redo_history: Dict[str, list] = {}  # path -> list[dict]
 
         self._settings_win = SettingsWindow()
         self._settings_win.settings_saved.connect(self._on_settings_saved)
@@ -483,6 +517,10 @@ class MainWindow(QMainWindow):
         self._preview = PreviewPanel()
         self._preview.perspective_points_changed.connect(self._on_persp_pts_light)
         self._preview.perspective_points_released.connect(self._on_persp_pts_heavy)
+        self._preview.crop_session_requested.connect(self._on_crop_session_requested)
+        self._preview.crop_session_committed.connect(self._on_crop_session_committed)
+        self._preview.crop_rect_released.connect(self._on_crop_preview_changed)
+        self._preview.persp_points_changed_hover.connect(self._on_crop_preview_changed)
 
         self._progress = QProgressBar()
         self._progress.setVisible(False)
@@ -536,14 +574,19 @@ class MainWindow(QMainWindow):
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
         self._btn_save_img  = QPushButton("💾  Зберегти")
+        self._btn_undo      = QPushButton("◀ Назад")
+        self._btn_redo      = QPushButton("Вперед ▶")
         self._btn_autofix.setObjectName("btn_autofix")
         self._btn_print.setObjectName("btn_print")
         self._btn_skip.setObjectName("btn_skip")
         self._btn_print_all.setObjectName("btn_print_all")
         self._btn_save_img.setObjectName("btn_save_image")
+        self._btn_undo.setObjectName("btn_undo")
+        self._btn_redo.setObjectName("btn_redo")
 
         for b in (self._btn_autofix, self._btn_print,
-                   self._btn_skip, self._btn_print_all, self._btn_save_img):
+                   self._btn_skip, self._btn_print_all, self._btn_save_img,
+                   self._btn_undo, self._btn_redo):
             b.setFixedHeight(BUTTON_HEIGHT)
             b.setStyleSheet(self._btn_style())
 
@@ -587,6 +630,8 @@ class MainWindow(QMainWindow):
         self._btn_skip.clicked.connect(self._do_skip)
         self._btn_print_all.clicked.connect(self._do_print_all)
         self._btn_save_img.clicked.connect(self._do_save_image)
+        self._btn_undo.clicked.connect(self._do_undo)
+        self._btn_redo.clicked.connect(self._do_redo)
 
         buttons_row.addWidget(self._btn_autofix)
         buttons_row.addWidget(shadow_group_widget)
@@ -594,6 +639,8 @@ class MainWindow(QMainWindow):
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
         buttons_row.addWidget(self._btn_save_img)
+        buttons_row.addWidget(self._btn_undo)
+        buttons_row.addWidget(self._btn_redo)
         buttons_row.addStretch()
 
         # Налаштування
@@ -732,6 +779,19 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._save_geometry_timer.start()
 
+    def keyPressEvent(self, event):
+        """Гарячі клавіші Undo/Redo (TODO1.1): Ctrl+Z / Ctrl+Y."""
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_Z:
+                self._do_undo()
+                event.accept()
+                return
+            if event.key() == Qt.Key.Key_Y:
+                self._do_redo()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
     def _on_shadow_mode_changed(self, btn_id: int):
         """Зміна режиму видалення тіней через радіокнопки."""
         mode_map = {0: "auto", 1: "always", 2: "never"}
@@ -804,6 +864,7 @@ class MainWindow(QMainWindow):
         self._preview.clear()
         self._orig = None
         self._base = None
+        self._invalidate_crop_default_cache()  # TODO2 крок 3.3
         self._base_for_perspective = None
         self._processed = None
         self._perspective_corners = None  # скидаємо кути перспективи
@@ -812,6 +873,9 @@ class MainWindow(QMainWindow):
         self._preview.disable_perspective_edit()
         self._current_path = None
         self._per_file.clear()
+        # TODO1.1: очищуємо undo/redo історію при очищенні черги
+        self._undo_history.clear()
+        self._redo_history.clear()
         image_utils.preview_cache_clear()
         self._update_buttons()
         self._set_status("Черга очищена")
@@ -843,6 +907,135 @@ class MainWindow(QMainWindow):
         self._controls.set_grayscale(vals.get("grayscale", False), silent=True)
         # Не викликаємо _on_controls_changed тут - дозволяємо слайдерам працювати самостійно
 
+    # ------------------------------------------------------------------
+    # Undo/Redo історія (TODO1.1)
+    # ------------------------------------------------------------------
+
+    def _push_undo_snapshot(self) -> None:
+        """Зберігає поточний стан (_base + _per_file) в undo-стек для _current_path.
+        Очищує redo-стек (будь-яка нова дія користувача скидає redo)."""
+        path = self._current_path
+        if path is None or self._base is None:
+            return
+        snapshot = {
+            "base": self._base.copy(),
+            "per_file": dict(self._per_file.get(path, {})),
+            "autofix_applied": self._preview.get_autofix_applied(),
+        }
+        undo = self._undo_history.setdefault(path, [])
+        undo.append(snapshot)
+        # Обмежуємо розмір undo-стеку
+        if len(undo) > UNDO_MAX_STEPS:
+            del undo[0]
+        # Нова дія очищує redo-стек
+        self._redo_history.pop(path, None)
+
+    def _apply_history_state(self, state: dict) -> None:
+        """Застосовує збережений стан до _base та _per_file."""
+        if state is None:
+            return
+        base_img: Optional[np.ndarray] = state.get("base")
+        if base_img is None:
+            return
+        new_base = base_img.copy()
+        self._base = new_base
+        self._invalidate_crop_default_cache()  # TODO2 крок 3.3
+        path = self._current_path
+        if path is not None:
+            self._per_file[path] = dict(state.get("per_file", {}))
+            self._restore_file_settings(path)
+        self._processed = new_base.copy()
+        self._base_for_perspective = None
+        self._perspective_corners = None
+        self._perspective_cached_result = None
+        self._pending_deskew_result = None
+        self._preview.disable_perspective_edit()
+        self._unfreeze_preview_panels()
+        self._preview.set_before(image_utils.make_preview(new_base))
+        self._preview.set_after(image_utils.make_preview(new_base))
+        # TODO1.1: відновлюємо індикатор Auto Fix із знімку (якщо збережено)
+        self._preview.set_autofix_applied(state.get("autofix_applied"))
+        self._update_buttons()
+
+    def _do_undo(self) -> None:
+        """Скасовує останню дію (Ctrl+Z / кнопка «◀ Назад»)."""
+        if self._has_running_threads():
+            return
+        path = self._current_path
+        if path is None:
+            return
+        undo = self._undo_history.get(path, [])
+        if not undo:
+            self._set_status("Немає дій для скасування")
+            return
+        # Поточний стан зберігаємо в redo-стек
+        current = {
+            "base": self._base.copy() if self._base is not None else None,
+            "per_file": dict(self._per_file.get(path, {})),
+        }
+        redo = self._redo_history.setdefault(path, [])
+        redo.append(current)
+        if len(redo) > UNDO_MAX_STEPS:
+            del redo[0]
+        # Відновлюємо попередній стан
+        state = undo.pop()
+        self._apply_history_state(state)
+        self._set_status("Скасовано (Undo)")
+
+    def _do_redo(self) -> None:
+        """Повторює скасовану дію (Ctrl+Y / кнопка «Вперед ▶»)."""
+        if self._has_running_threads():
+            return
+        path = self._current_path
+        if path is None:
+            return
+        redo = self._redo_history.get(path, [])
+        if not redo:
+            self._set_status("Немає дій для повторення")
+            return
+        # Поточний стан зберігаємо в undo-стек
+        current = {
+            "base": self._base.copy() if self._base is not None else None,
+            "per_file": dict(self._per_file.get(path, {})),
+        }
+        undo = self._undo_history.setdefault(path, [])
+        undo.append(current)
+        if len(undo) > UNDO_MAX_STEPS:
+            del undo[0]
+        # Відновлюємо наступний стан
+        state = redo.pop()
+        self._apply_history_state(state)
+        self._set_status("Повторено (Redo)")
+
+    def _finish_perspective_session(self, commit: bool) -> None:
+        """TODO1.5: завершує сесію ручної перспективи.
+        Якщо commit=True — комітить поточні _perspective_corners у _base.
+        У будь-якому разі виходить із режиму (скидає _base_for_perspective/
+        _perspective_corners/кеш/драг-флаг і розморожує панелі)."""
+        if self._base_for_perspective is None or self._perspective_corners is None:
+            return
+        if commit:
+            self._base = pipeline.run_perspective_manual(
+                self._base_for_perspective, self._perspective_corners
+            )
+        self._base_for_perspective = None
+        self._perspective_corners = None
+        self._perspective_cached_result = None
+        self._persp_drag_applied = False
+        self._preview.disable_perspective_edit()
+        self._unfreeze_preview_panels()
+
+    def _commit_pending_perspective(self, commit: bool = True) -> None:
+        """TODO1.5: комітить незавершену ручну перспективу в _base ТІЛЬКИ якщо
+        був реальний drag точки. Інакше (простий вхід у режим без перетягування)
+        просто виходить з режиму, не змінюючи _base/orig."""
+        if self._base_for_perspective is None or self._perspective_corners is None:
+            return
+        really_commit = commit and self._persp_drag_applied
+        if really_commit:
+            self._push_undo_snapshot()
+        self._finish_perspective_session(commit=really_commit)
+
     def _on_queue_selection(self, path: str):
         """Клік на файл у списку — завантажуємо для перегляду."""
         try:
@@ -860,6 +1053,7 @@ class MainWindow(QMainWindow):
             img = loader.load(path)
             self._orig = img
             self._base = img.copy()  # початково base = orig
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._base_for_perspective = None
             self._processed = None
             self._perspective_corners = None  # скидаємо кути перспективи для нового файлу
@@ -932,6 +1126,27 @@ class MainWindow(QMainWindow):
                     contrast_mode=s.get("contrast_mode", "linear"),
                     settings=s,
                 )
+                # TODO1.6: авто-яскравість — окремий крок ПІСЛЯ всього run_autofix.
+                # Підпорядковується глобальному пресету: якщо крок "brightness"
+                # вимкнено в pipeline_steps_enabled — авто-яскравість не застосовується.
+                _brightness_step_enabled = True
+                _preset = s.get("pipeline_preset", "doc_bw")
+                if _preset == "custom":
+                    _enabled_str = s.get("pipeline_steps_enabled", "")
+                    _enabled_list = [k.strip() for k in _enabled_str.split(",") if k.strip()]
+                    _brightness_step_enabled = "brightness" in _enabled_list
+                elif _preset in ("doc_bw", "doc_color"):
+                    _brightness_step_enabled = True
+                else:
+                    _brightness_step_enabled = False
+                if s.get("auto_brightness_enabled", False) and _brightness_step_enabled:
+                    result = pipeline.run_auto_brightness(
+                        result,
+                        percentile_low=s.get("auto_percentile_low", 5.0),
+                        percentile_high=s.get("auto_percentile_high", 95.0),
+                    )
+                    log_entries.append({"step": "auto_brightness", "applied": True,
+                                        "detail": "авто-яскравість"})
                 if s.get("autofix_enabled", True) and vals["grayscale"]:
                     result = pipeline.run_grayscale(result)
                 return result, status_msg, log_entries
@@ -954,7 +1169,10 @@ class MainWindow(QMainWindow):
             if self._current_path != path_snapshot:
                 self._logger.debug("_do_autofix_classic: файл змінився, ігноруємо застарілий результат")
                 return
+            # TODO1.1: зберігаємо попередній стан в undo-стек перед комітом
+            self._push_undo_snapshot()
             self._base = result.copy()      # <-- ФІКСУЄМО в _base
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._processed = result
             self._preview.set_after(image_utils.make_preview(result))
             self._preview.set_autofix_applied("auto_fix")
@@ -1040,7 +1258,9 @@ class MainWindow(QMainWindow):
             )
 
         def _on_done(result):
+            self._push_undo_snapshot()
             self._base = result.copy()
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._processed = result
             self._perspective_corners = None
             self._preview.set_after(image_utils.make_preview(result))
@@ -1063,7 +1283,9 @@ class MainWindow(QMainWindow):
             )
 
         def _on_done(result):
+            self._push_undo_snapshot()
             self._base = result.copy()
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._processed = result
             self._perspective_corners = None
             self._preview.set_after(image_utils.make_preview(result))
@@ -1087,7 +1309,9 @@ class MainWindow(QMainWindow):
 
         def _on_done(result):
             result, strength = result
+            self._push_undo_snapshot()
             self._base = result.copy()
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._processed = result
             self._controls.set_sharpen(strength)
             self._preview.set_after(image_utils.make_preview(result))
@@ -1117,7 +1341,7 @@ class MainWindow(QMainWindow):
         # Зберігаємо знімок _base ДО будь-яких змін
         self._base_for_perspective = self._base.copy()
         base_snapshot = self._base.copy()
-        corners_before = pipeline.detect_corners(base_snapshot)
+        corners_before = pipeline.detect_corners(base_snapshot, filename=self._current_path)
 
         # DEBUG: лог стану перед операцією
         self._logger.debug(
@@ -1127,7 +1351,9 @@ class MainWindow(QMainWindow):
         )
 
         def _work():
-            return pipeline.run_perspective_auto_smart(base_snapshot, self._settings)
+            return pipeline.run_perspective_auto_smart(
+                base_snapshot, self._settings, filename=self._current_path
+            )
 
         def _on_done(payload):
             result, status = payload
@@ -1200,7 +1426,9 @@ class MainWindow(QMainWindow):
         if self._pending_deskew_result is None:
             return
         self._logger.debug("_commit_deskew: коміт deskew-результату в _base")
+        self._push_undo_snapshot()
         self._base = self._pending_deskew_result.copy()
+        self._invalidate_crop_default_cache()  # TODO2 крок 3.3
         self._pending_deskew_result = None
         self._processed = self._base.copy()
         self._preview.set_before(image_utils.make_preview(self._base))
@@ -1316,18 +1544,21 @@ class MainWindow(QMainWindow):
         self._set_status("Документ не знайдено — встановіть точки вручну")
 
     def _do_persp_manual(self) -> None:
-        """Ручна корекція: коміт попередньої, знімок, детекція, показ точок."""
+        """Ручна корекція: знімок, детекція, показ точок.
+        TODO1.5: коміт відбувається по mouseRelease, не при повторному натисканні кнопки."""
         if self._base is None:
             return
-        # Commit попередньої перспективи якщо була
+        # Якщо вже в режимі ручної перспективи — просто перезапускаємо без коміту
         if self._base_for_perspective is not None and self._perspective_corners is not None:
-            self._base = pipeline.run_perspective_manual(
-                self._base_for_perspective, self._perspective_corners
-            )
-        # Зберігаємо знімок джерела
-        self._base_for_perspective = self._base.copy()
-        self._preview.disable_perspective_edit()
-        self._perspective_cached_result = None
+            self._preview.disable_perspective_edit()
+            self._perspective_cached_result = None
+        else:
+            # Зберігаємо знімок джерела
+            self._base_for_perspective = self._base.copy()
+            self._preview.disable_perspective_edit()
+            self._perspective_cached_result = None
+        # TODO1.5: скидаємо флаг реального перетягування при вході в режим
+        self._persp_drag_applied = False
 
         # DEBUG: лог стану перед операцією
         self._logger.debug(
@@ -1336,7 +1567,7 @@ class MainWindow(QMainWindow):
             hashlib.md5(self._base_for_perspective.tobytes()).hexdigest()[:16],
         )
         # Спробуємо детектувати кути
-        corners = pipeline.detect_corners(self._base_for_perspective)
+        corners = pipeline.detect_corners(self._base_for_perspective, filename=self._current_path)
         if corners is None:
             # Спроба 2: з пониженим порогом площі через _try_external_contour
             from processing.perspective import _try_external_contour, _refine_corners_subpix, _order_points
@@ -1392,6 +1623,7 @@ class MainWindow(QMainWindow):
         """Скидає перспективу до стану до початку ручної перспективи."""
         if self._orig is None:
             return
+        self._push_undo_snapshot()
         if self._base_for_perspective is not None:
             # Повертаємось до знімка, зробленого перед ручною перспективою
             # Це зберігає Auto Fix та інші корекції
@@ -1402,6 +1634,7 @@ class MainWindow(QMainWindow):
             # Якщо ручна перспектива не починалась — скидаємо до оригіналу
             self._base = self._orig.copy()
             self._processed = self._orig.copy()
+        self._invalidate_crop_default_cache()  # TODO2 крок 3.3
         self._preview.set_before(image_utils.make_preview(self._base))
         self._preview.set_after(image_utils.make_preview(self._base))
         self._preview.disable_perspective_edit()
@@ -1418,7 +1651,9 @@ class MainWindow(QMainWindow):
         """Скидає всі корекції до оригінального зображення."""
         if self._orig is None:
             return
+        self._push_undo_snapshot()
         self._base = self._orig.copy()
+        self._invalidate_crop_default_cache()  # TODO2 крок 3.3
         self._base_for_perspective = None
         self._processed = self._orig.copy()
         self._preview.set_before(image_utils.make_preview(self._orig))
@@ -1440,8 +1675,12 @@ class MainWindow(QMainWindow):
         # Ніяких важких обчислень
 
     def _on_persp_pts_heavy(self, points: list) -> None:
-        """Завдання 3.1: Важкий обробник — запускає pipeline.
-        Викликається тільки при mouseRelease (points_released)."""
+        """Оновлює live-прев’ю ручної перспективи після відпускання точки.
+
+        Сесію не завершуємо в `mouseReleaseEvent`: точки мають залишатися
+        доступними для наступних корекцій, а `_base` змінюється лише коли
+        сесія явно завершується зовнішньою дією.
+        """
         if self._base_for_perspective is None or len(points) != 4:
             return
         try:
@@ -1452,23 +1691,153 @@ class MainWindow(QMainWindow):
             )
             # Кешуємо результат перспективи для _on_controls_changed
             self._perspective_cached_result = persp_result
-            # Накладаємо слайдери
-            vals = self._controls.values()
-            result = pipeline.run_manual_adjustments(
-                persp_result,
-                brightness=vals["brightness"],
-                contrast=vals["contrast"],
-                sharpen_strength=vals["sharpen_strength"],
-                hdr_strength=vals["hdr_strength"],
-                grayscale=vals["grayscale"],
-                shadow_highlight_strength=vals["shadow_highlight"],
-                contrast_mode=self._settings.get("contrast_mode", "linear"),
-            )
-            self._processed = result
-            self._preview.set_after(image_utils.make_preview(result))
+            self._persp_drag_applied = True
+            self._processed = persp_result.copy()
+            self._preview.set_after(image_utils.make_preview(persp_result))
+            self._update_buttons()
         except Exception as e:
             self._logger.error(f"Помилка перспективи: {e}", exc_info=True)
             self._set_status(f"Помилка перспективи: {e}")
+
+    # ------------------------------------------------------------------
+    # TODO2 крок 3: дефолтна стартова рамка кадрування
+    # ------------------------------------------------------------------
+
+    def _invalidate_crop_default_cache(self) -> None:
+        """TODO2 крок 3.3: скидає кеш дефолтної рамки кадрування.
+
+        Викликається в усіх місцях, де змінюється self._base.
+        """
+        self._crop_default_corners_full = None
+        self._crop_default_corners_base_id = None
+
+    def _full_frame_crop_corners(self, image: np.ndarray) -> np.ndarray:
+        """TODO2 крок 3.5: повертає 4 кути точно по межах зображення.
+
+        На відміну від _default_perspective_corners (80% центр з відступом),
+        тут потрібен "весь кадр без штучного відступу".
+        """
+        h, w = image.shape[:2]
+        return np.array([
+            [0, 0],
+            [w - 1, 0],
+            [w - 1, h - 1],
+            [0, h - 1],
+        ], dtype=np.float32)
+
+    def _cleanup_crop_detect_thread(self) -> None:
+        """TODO2 крок 3.2: безпечно завершує crop-detect потік та звільняє ресурси."""
+        if self._crop_detect_thread is not None:
+            if self._crop_detect_thread.isRunning():
+                self._crop_detect_thread.quit()
+                if not self._crop_detect_thread.wait(3000):
+                    self._logger.warning("CropDetectWorker thread did not finish within 3s timeout")
+            self._crop_detect_thread.deleteLater()
+            self._crop_detect_thread = None
+        if self._crop_detect_worker is not None:
+            self._crop_detect_worker.deleteLater()
+            self._crop_detect_worker = None
+
+    def _on_crop_session_requested(self) -> None:
+        """Показує безпечну стартову рамку по межах поточного зображення.
+
+        Кадрування не залежить від ненадійної авто-перспективної детекції:
+        користувач одразу отримує активну рамку й може перетягувати її.
+        """
+        if self._base is None:
+            return
+        corners_full = pipeline.detect_document_bounds(self._base)
+        if corners_full is None:
+            corners_full = self._full_frame_crop_corners(self._base)
+        self._crop_default_corners_full = corners_full.copy()
+        self._crop_default_corners_base_id = id(self._base)
+        pts = self._corners_to_preview_pts(corners_full, self._base)
+        self._preview._before.set_crop_rect(pts)
+
+    def _on_crop_preview_changed(self, _points: list) -> None:
+        """Оновлює AFTER під час hover-редагування, не змінюючи `_base`.
+
+        Це дає користувачу негайне візуальне підтвердження crop/перспективи,
+        тоді як остаточний коміт відбувається лише після виходу з hover-сесії.
+        """
+        if self._base is None:
+            return
+        crop_pts_preview, persp_pts_preview, persp_detached = self._preview.get_crop_state()
+        if len(crop_pts_preview) != 4 or len(persp_pts_preview) != 4:
+            return
+        try:
+            crop_corners_full = self._preview_pts_to_corners(crop_pts_preview, self._base)
+            cropped = pipeline.run_crop_rect(self._base, crop_corners_full)
+            if all(not detached for detached in persp_detached):
+                result = cropped
+            else:
+                persp_corners_full = self._preview_pts_to_corners(
+                    persp_pts_preview, self._base
+                )
+                x_min = float(crop_corners_full[:, 0].min())
+                y_min = float(crop_corners_full[:, 1].min())
+                persp_corners_full[:, 0] -= x_min
+                persp_corners_full[:, 1] -= y_min
+                result = pipeline.run_perspective_manual(cropped, persp_corners_full)
+            self._processed = result.copy()
+            self._preview.set_after(image_utils.make_preview(result))
+        except Exception as exc:
+            self._logger.error("Помилка live-прев’ю кадрування: %s", exc, exc_info=True)
+
+    def _on_crop_session_committed(self) -> None:
+        """Комітить одну змінену hover-сесію кадрування в `_base`.
+
+        Сигнал надходить після виходу курсора з hover-оверлея. Усі drag-и
+        поточної сесії об'єднуються в один атомарний запис Undo.
+        """
+        if self._base is None:
+            return
+
+        path_snapshot = self._current_path
+        base_reference = self._base
+        base_snapshot = base_reference.copy()
+        crop_pts_preview, persp_pts_preview, persp_detached = self._preview.get_crop_state()
+        if len(crop_pts_preview) != 4 or len(persp_pts_preview) != 4:
+            return
+
+        try:
+            crop_corners_full = self._preview_pts_to_corners(crop_pts_preview, base_snapshot)
+            cropped = pipeline.run_crop_rect(base_snapshot, crop_corners_full)
+            if all(not detached for detached in persp_detached):
+                final = cropped
+            else:
+                persp_corners_full = self._preview_pts_to_corners(
+                    persp_pts_preview, base_snapshot
+                )
+                x_min = float(crop_corners_full[:, 0].min())
+                y_min = float(crop_corners_full[:, 1].min())
+                persp_corners_cropped = persp_corners_full.copy()
+                persp_corners_cropped[:, 0] -= x_min
+                persp_corners_cropped[:, 1] -= y_min
+                final = pipeline.run_perspective_manual(
+                    cropped, persp_corners_cropped
+                )
+        except Exception as exc:
+            self._logger.error("Помилка коміту кадрування: %s", exc, exc_info=True)
+            self._set_status(f"Помилка кадрування: {exc}")
+            return
+
+        if self._current_path != path_snapshot or self._base is not base_reference:
+            self._logger.warning("Застарілий коміт кадрування відкинуто")
+            return
+
+        self._push_undo_snapshot()
+        before_preview = image_utils.make_preview(base_snapshot)
+        self._base = final.copy()
+        self._processed = final.copy()
+        self._base_for_perspective = None
+        self._perspective_corners = None
+        self._perspective_cached_result = None
+        self._invalidate_crop_default_cache()
+        self._preview.set_before(before_preview)
+        self._preview.set_after(image_utils.make_preview(final))
+        self._update_buttons()
+        self._set_status("Кадрування застосовано")
 
 # ------------------------------------------------------------------
 # Друк та збереження
@@ -1478,15 +1847,8 @@ class MainWindow(QMainWindow):
         # Якщо є незафіксований deskew — фіксуємо
         if self._pending_deskew_result is not None:
             self._commit_deskew()
-        # Якщо є незафіксована ручна перспектива — фіксуємо
-        if self._base_for_perspective is not None and self._perspective_corners is not None:
-            self._base = pipeline.run_perspective_manual(
-                self._base_for_perspective, self._perspective_corners
-            )
-            self._base_for_perspective = None
-            self._perspective_corners = None
-            self._perspective_cached_result = None
-            self._preview.disable_perspective_edit()
+        # Якщо є незафіксована ручна перспектива — фіксуємо (TODO1.5)
+        self._commit_pending_perspective()
         # Правильна перевірка numpy array через "is not None"
         image = self._processed if self._processed is not None else self._base
         if image is None:
@@ -1646,18 +2008,10 @@ class MainWindow(QMainWindow):
     def _load_next_manual(self):
         # Зберігаємо налаштування поточного файлу перед переходом
         self._store_current_settings()
-        # Commit deskew та перспективи перед переходом
+        # Commit deskew та перспективи перед переходом (TODO1.5)
         if self._pending_deskew_result is not None:
             self._commit_deskew()
-        # Commit перспективи перед переходом
-        if self._base_for_perspective is not None and self._perspective_corners is not None:
-            self._base = pipeline.run_perspective_manual(
-                self._base_for_perspective, self._perspective_corners
-            )
-            self._base_for_perspective = None
-            self._perspective_corners = None
-            self._perspective_cached_result = None
-            self._preview.disable_perspective_edit()
+        self._commit_pending_perspective()
         if not self._processor.has_next():
             self._set_status("Всі файли оброблено ✓")
             self._preview.clear()
@@ -1673,6 +2027,7 @@ class MainWindow(QMainWindow):
             img = self._processor.load_current()
             self._orig = img
             self._base = img.copy()  # скидаємо базове зображення
+            self._invalidate_crop_default_cache()  # TODO2 крок 3.3
             self._processed = None
             path = self._processor.current_file()
             self._current_path = path
@@ -1767,23 +2122,28 @@ class MainWindow(QMainWindow):
         has_img   = self._orig is not None
         is_batch  = self._radio_auto.isChecked()
         in_persp  = self._base_for_perspective is not None
+        busy      = self._has_running_threads()
 
-        self._btn_print_all.setEnabled(has_queue and is_batch)
+        self._btn_print_all.setEnabled(has_queue and is_batch and not busy)
         self._btn_print_all.setToolTip(
             "" if is_batch else "Доступно тільки в Пакетному режимі"
         )
-        self._btn_print.setEnabled(has_img)
+        self._btn_print.setEnabled(has_img and not busy)
         self._btn_skip.setEnabled(
-            self._processor.has_next() and not is_batch
+            self._processor.has_next() and not is_batch and not busy
         )
         # Авто Фікс доступний і під час редагування перспективи
-        self._btn_autofix.setEnabled(has_img)
-        self._btn_save_img.setEnabled(has_img)
+        self._btn_autofix.setEnabled(has_img and not busy)
+        self._btn_save_img.setEnabled(has_img and not busy)
+        # Undo/Redo — тільки ручний режим, неактивні під час фонових операцій
+        self._btn_undo.setEnabled(has_img and not busy)
+        self._btn_redo.setEnabled(has_img and not busy)
         # Кнопка скидання перспективи — тільки в perspective-режимі
         # (вона вже є в controls, не потребує додаткового управління)
 
     def _set_buttons_enabled(self, enabled: bool):
-        for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all):
+        for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all,
+                  self._btn_undo, self._btn_redo):
             b.setEnabled(enabled)
 
     def _set_status(self, text: str, timeout_ms: int = 0):

@@ -92,12 +92,15 @@ HOUGH_MARGIN_RATIO = 0.03          # відступ від краю кадру �
 ITERATIVE_MAX_PASSES = 2          # максимум проходів warp
 ITERATIVE_MIN_SKEW_RATIO = 0.015  # мінімальне залишкове викривлення для другого проходу (1.5%)
 
+# TODO1.4: емпіричний поріг "низького скора" для журналювання проблемних випадків
+LOW_SCORE_WARNING_THRESHOLD = 0.35
+
 
 # ---------------------------------------------------------------------------
 # Публічний API
 # ---------------------------------------------------------------------------
 
-def auto_detect_corners(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> np.ndarray | None:
+def auto_detect_corners(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM, filename: str | None = None) -> np.ndarray | None:
     """
     Автоматично знаходить 4 кути документа.
 
@@ -129,16 +132,55 @@ def auto_detect_corners(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> n
         logger.debug(f"auto_detect_corners: resize не потрібен")
 
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    corners_small = _detect_with_rotation_candidates(gray)
+    corners_small = _detect_with_rotation_candidates(gray, filename=filename)
 
     if corners_small is None:
-        logger.debug("auto_detect_corners: кути не знайдено")
+        logger.warning(
+            "auto_detect_corners: кути не знайдено (TODO1.4) file=%s",
+            filename or "<unknown>",
+        )
         return None
 
     # Масштабуємо назад
     corners = corners_small / scale
     logger.debug(f"auto_detect_corners: кути знайдено, масштабовано назад: {corners}")
     return corners.astype(np.float32)
+
+
+def detect_document_bounds(image: np.ndarray) -> np.ndarray | None:
+    """Знаходить осьовий bounding box документа без перспективної корекції.
+
+    Це навмисно простіша операція, ніж `auto_detect_corners`: нам потрібна
+    лише стабільна прямокутна стартова рамка, а не точні перспективні кути.
+    Якщо переконливий контур не знайдено, повертається `None`, щоб GUI міг
+    використати межі всього зображення.
+    """
+    if image is None or image.size == 0:
+        return None
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
+    kernel = np.ones((5, 5), dtype=np.uint8)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    image_area = float(h * w)
+    candidates = []
+    for contour in contours:
+        x, y, bw, bh = cv2.boundingRect(contour)
+        area = float(bw * bh)
+        if area < image_area * MIN_DOCUMENT_AREA_RATIO:
+            continue
+        if bw >= w - 2 and bh >= h - 2:
+            continue
+        candidates.append((area, x, y, bw, bh))
+    if not candidates:
+        return None
+    _, x, y, bw, bh = max(candidates, key=lambda item: item[0])
+    return np.array([
+        [x, y], [x + bw - 1, y],
+        [x + bw - 1, y + bh - 1], [x, y + bh - 1],
+    ], dtype=np.float32)
 
 
 def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
@@ -164,6 +206,40 @@ def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return warped
 
 
+def apply_axis_aligned_crop(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Обрізає зображення за осьовирівняною рамкою без перспективи й padding.
+
+    Точки можуть частково виходити за межі зображення. Відсутня частина
+    заповнюється білим кольором, як і зовнішня область у перспективному warp.
+    Координати кутів трактуються як координати пікселів, тому права та нижня
+    межі включаються до результату.
+    """
+    pts = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
+    if pts.shape[0] != CORNER_COUNT:
+        raise ValueError("Для crop потрібно рівно 4 точки")
+
+    x_min = int(np.floor(float(np.min(pts[:, 0]))))
+    y_min = int(np.floor(float(np.min(pts[:, 1]))))
+    x_max = int(np.ceil(float(np.max(pts[:, 0]))))
+    y_max = int(np.ceil(float(np.max(pts[:, 1]))))
+    width = max(1, x_max - x_min + 1)
+    height = max(1, y_max - y_min + 1)
+
+    cropped = np.full((height, width, image.shape[2]), 255, dtype=image.dtype)
+    src_x0 = max(0, x_min)
+    src_y0 = max(0, y_min)
+    src_x1 = min(image.shape[1], x_max + 1)
+    src_y1 = min(image.shape[0], y_max + 1)
+    if src_x0 >= src_x1 or src_y0 >= src_y1:
+        return cropped
+
+    dst_x0 = src_x0 - x_min
+    dst_y0 = src_y0 - y_min
+    cropped[dst_y0:dst_y0 + (src_y1 - src_y0),
+            dst_x0:dst_x0 + (src_x1 - src_x0)] = image[src_y0:src_y1, src_x0:src_x1]
+    return cropped
+
+
 def auto_correct(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> tuple[np.ndarray, bool]:
     """
     Зручна обгортка: авто-детект + корекція в одному виклику.
@@ -182,7 +258,7 @@ def auto_correct(image: np.ndarray, max_dim: int = MAX_ANALYSIS_DIM) -> tuple[np
 # Внутрішні функції
 # ---------------------------------------------------------------------------
 
-def _detect_corners_impl(gray: np.ndarray) -> np.ndarray | None:
+def _detect_corners_impl(gray: np.ndarray, filename: str | None = None) -> np.ndarray | None:
     """
     Внутрішня функція — шукає кути на зображенні ~800px.
     Збирає всі кандидати з множинних методів, оцінює через _score_quad,
@@ -210,6 +286,12 @@ def _detect_corners_impl(gray: np.ndarray) -> np.ndarray | None:
                 refined = _refine_corners_subpix(gray, corners)
                 candidates.append((score, refined))
                 logger.debug(f"_detect_corners_impl: {name} score={score:.3f}")
+            else:
+                # TODO1.4: журналюємо низький скор для діагностики проблемних випадків
+                logger.warning(
+                    "_detect_corners_impl: %s score=%.3f — низька якість (TODO1.4) file=%s",
+                    name, score, filename or "<unknown>",
+                )
 
     if not candidates:
         # Fallback: largest contour
@@ -228,7 +310,7 @@ def _detect_corners_impl(gray: np.ndarray) -> np.ndarray | None:
     return best_corners
 
 
-def _detect_with_rotation_candidates(gray: np.ndarray) -> np.ndarray | None:
+def _detect_with_rotation_candidates(gray: np.ndarray, filename: str | None = None) -> np.ndarray | None:
     """
     Пробує детекцію для 4 орієнтацій зображення (0°, 90°, 180°, 270°).
     Якщо знаходить кути — перераховує їх координати назад у простір оригіналу.
@@ -246,7 +328,7 @@ def _detect_with_rotation_candidates(gray: np.ndarray) -> np.ndarray | None:
     ]
 
     for angle, rotated in rotations:
-        corners = _detect_corners_impl(rotated)
+        corners = _detect_corners_impl(rotated, filename=filename)
         if corners is None:
             continue
         rh, rw = rotated.shape[:2]

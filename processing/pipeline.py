@@ -502,11 +502,12 @@ def run_hdr(image: np.ndarray, strength: float = 0.5, adaptive: bool = False) ->
 def run_perspective_auto_smart(
     image: np.ndarray,
     settings: dict | None = None,
+    filename: str | None = None,
 ) -> tuple[np.ndarray, str]:
     """
     Розумна авто-перспектива з deskew та ітеративним уточненням.
     """
-    corners = perspective.auto_detect_corners(image)
+    corners = perspective.auto_detect_corners(image, filename=filename)
 
     if corners is not None:
         skewed = perspective.detect_skewed_sides(corners)
@@ -560,12 +561,22 @@ def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool
     return perspective.apply_correction(image, corners)
 
 
-def detect_corners(image: np.ndarray) -> np.ndarray | None:
+def run_crop_rect(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Виконує просте осьовирівняне кадрування без padding і warp."""
+    return perspective.apply_axis_aligned_crop(image, corners)
+
+
+def detect_document_bounds(image: np.ndarray) -> np.ndarray | None:
+    """Повертає осьову рамку документа без авто-перспективного warp."""
+    return perspective.detect_document_bounds(image)
+
+
+def detect_corners(image: np.ndarray, filename: str | None = None) -> np.ndarray | None:
     """
     Повертає 4 кути документа (для відображення у GUI)
     або None якщо не знайдено.
     """
-    return perspective.auto_detect_corners(image)
+    return perspective.auto_detect_corners(image, filename=filename)
 
 
 def run_brightness(image: np.ndarray, value: float) -> np.ndarray:
