@@ -150,8 +150,8 @@ class TestMousePressPersp:
         ev = _make_mouse_event(QEvent.Type.MouseButtonPress, tl_persp_widget)
         label.mousePressEvent(ev)
         assert label._persp_drag_idx == 0
-        # Розрив зв'язку
-        assert label._persp_detached[0] is True
+        # Просте натискання ще не від'єднує кружечок.
+        assert label._persp_detached[0] is False
         assert label._persp_point_drag_snapshot is not None
         assert label._persp_detached_drag_snapshot is False
 
@@ -287,15 +287,24 @@ class TestPerspectiveGuide:
             label._img_to_widget(point) for point in label._crop_rect[1:]
         ]
 
-    def test_dragging_perspective_point_expands_crop_bounds(self, label):
+    def test_crop_state_uses_crop_corners_for_linked_points(self, label):
         _setup_crop(label)
         label._persp_detached[0] = True
-        label._persp_points[0] = QPoint(0, 0)
-        label._expand_crop_to_include_persp_points()
+        label._persp_points[0] = QPoint(30, 30)
 
-        assert label._crop_rect[0] == QPoint(0, 0)
-        assert label._crop_rect[1].y() == 0
-        assert label._crop_rect[3].x() == 0
+        crop, perspective, detached = label.get_crop_state()
+
+        assert perspective[0] == QPoint(30, 30)
+        assert perspective[1:] == crop[1:]
+        assert detached == [True, False, False, False]
+
+    def test_dragging_perspective_point_does_not_expand_crop_bounds(self, label):
+        _setup_crop(label)
+        crop_before = list(label._crop_rect)
+        label._persp_detached[0] = True
+        label._persp_points[0] = QPoint(0, 0)
+        # Perspective point is independent, crop bounds remain authoritative.
+        assert label._crop_rect == crop_before
 
 
 # ---------------------------------------------------------------------------

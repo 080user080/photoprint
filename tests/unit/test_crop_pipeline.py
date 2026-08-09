@@ -42,6 +42,31 @@ def test_run_crop_rect_rejects_wrong_corner_count():
         raise AssertionError("Очікувався ValueError для не чотирьох точок")
 
 
+def test_crop_pin_perspective_keeps_crop_canvas_size():
+    image = np.zeros((40, 60, 3), dtype=np.uint8)
+    image[:, :30] = [10, 20, 30]
+    image[:, 30:] = [200, 210, 220]
+    corners = np.array([
+        [8, 6], [59, 0], [59, 39], [0, 39],
+    ], dtype=np.float32)
+
+    result = pipeline.run_crop_pin_perspective(image, corners)
+
+    assert result.shape == image.shape
+
+
+def test_crop_pin_identity_preserves_pixels_and_size():
+    image = np.arange(5 * 6 * 3, dtype=np.uint8).reshape(5, 6, 3)
+    corners = np.array([
+        [0, 0], [5, 0], [5, 4], [0, 4],
+    ], dtype=np.float32)
+
+    result = pipeline.run_crop_pin_perspective(image, corners)
+
+    assert result.shape == image.shape
+    np.testing.assert_array_equal(result, image)
+
+
 def test_detect_document_bounds_returns_axis_aligned_box():
     image = np.full((100, 140, 3), 255, dtype=np.uint8)
     image[20:80, 30:110] = 30

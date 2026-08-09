@@ -113,16 +113,21 @@ class ImageLabel(QLabel):
         self._crop_ready: bool = False   # рамка отримана і готова до редагування
         self._crop_drag_idx: int = -1    # індекс кута, який зараз тягнуть (-1 — нічого)
         self._crop_rect_drag_snapshot: list[QPoint] | None = None
+        self._crop_drag_moved: bool = False
         # TODO2 крок 5: стан хендлів перспективи-кружечків
         self._persp_points: list[QPoint] = []          # 4 точки кружечків (порядок [TL, TR, BR, BL])
         self._persp_detached: list[bool] = [False, False, False, False]  # "відв'язаний від рамки" для кожного
         self._persp_drag_idx: int = -1                 # індекс кружечка, який зараз тягнуть (-1 — нічого)
         self._persp_point_drag_snapshot: QPoint | None = None
         self._persp_detached_drag_snapshot: bool | None = None
+        self._persp_drag_moved: bool = False
         self._crop_session_dirty: bool = False         # чи був відпущений хоча б один хендл
         # Hover-стан: текстовий overlay прибрано, але сесія потрібна для
-        # миттєвої рамки, курсора та commit при виході.
+        # миттєвої рамки та commit при виході. Зміну курсора залишено
+        # окремою опційною поведінкою: за замовчуванням вона вимкнена,
+        # щоб не заважати перетягуванню хендлів рамки.
         self._hover_enabled: bool = True
+        self._crop_cursor_enabled: bool = False
         self._hover_hide_timer = QTimer(self)
         self._hover_hide_timer.setSingleShot(True)
         self._hover_hide_timer.setInterval(HOVER_HIDE_DELAY_MS)
@@ -141,6 +146,17 @@ class ImageLabel(QLabel):
             self._hover_hide_timer.stop()
             self.unsetCursor()
             self.update()
+
+    def set_crop_cursor_enabled(self, enabled: bool) -> None:
+        """Вмикає окрему зміну курсора для hover-crop.
+
+        За замовчуванням вимкнено: стан курсора не повинен впливати на
+        редагування рамки кадрування. Метод залишено для майбутнього
+        явного перемикання цієї UX-поведінки з GUI.
+        """
+        self._crop_cursor_enabled = bool(enabled)
+        if not self._crop_cursor_enabled:
+            self.unsetCursor()
 
     def set_image(self, image: np.ndarray):
         self._pixmap_orig = _np_to_pixmap(image)
@@ -272,8 +288,15 @@ class ImageLabel(QLabel):
         if self._persp_drag_idx >= 0:
             img_pt = self._widget_to_img(event.pos())
             if img_pt is not None:
-                self._persp_points[self._persp_drag_idx] = img_pt
-                self._expand_crop_to_include_persp_points()
+                if (
+                    self._persp_point_drag_snapshot is not None
+                    and img_pt != self._persp_point_drag_snapshot
+                ):
+                    # Саме переміщення, а не натискання, від'єднує кружечок
+                    # від crop-рамки. Crop-рамка при цьому не змінюється.
+                    self._persp_drag_moved = True
+                    self._persp_detached[self._persp_drag_idx] = True
+                self._persp_points[self._persp_drag_idx] = self._clamp_persp_point_to_crop(img_pt)
                 self.update()
                 # Навмисно НЕ викликаємо _sync_linked_persp_points() тут:
                 # кружечок уже _persp_detached[i] = True, і синхронізація
@@ -285,6 +308,11 @@ class ImageLabel(QLabel):
             # Рамка кадрування не може виходити за межі видимого зображення.
             img_pt = self._widget_to_crop_img(event.pos())
             if img_pt is not None:
+                if (
+                    self._crop_rect_drag_snapshot is not None
+                    and img_pt != self._crop_rect_drag_snapshot[self._crop_drag_idx]
+                ):
+                    self._crop_drag_moved = True
                 self._apply_crop_drag(img_pt)
             return
         if self._edit_mode and self._drag_idx >= 0:
@@ -320,8 +348,7 @@ class ImageLabel(QLabel):
                     self._persp_point_drag_snapshot = QPoint(self._persp_points[i])
                     self._persp_detached_drag_snapshot = self._persp_detached[i]
                     self._persp_drag_idx = i
-                    # Розрив зв'язку з рамкою — кружечок стає незалежним
-                    self._persp_detached[i] = True
+                    self._persp_drag_moved = False
                     self.update()
                     return
         # TODO2 крок 4.3: hit-test хендлів кадрування (тільки коли рамка готова)
@@ -332,6 +359,7 @@ class ImageLabel(QLabel):
                 if (pos - dp).manhattanLength() <= CROP_HANDLE_HIT_TOLERANCE:
                     self._crop_rect_drag_snapshot = list(self._crop_rect)
                     self._crop_drag_idx = i
+                    self._crop_drag_moved = False
                     self.update()
                     return
             self._crop_drag_idx = -1
@@ -340,17 +368,34 @@ class ImageLabel(QLabel):
         self._drag_idx = -1
         # TODO2 крок 5.7: завершення drag кружечка перспективи
         if self._persp_drag_idx >= 0:
+            if not self._persp_drag_moved and self._persp_point_drag_snapshot is not None:
+                # Просте торкання кружечка не є дією редагування.
+                if self._persp_point_drag_snapshot is not None:
+                    self._persp_points[self._persp_drag_idx] = QPoint(
+                        self._persp_point_drag_snapshot
+                    )
+                if self._persp_detached_drag_snapshot is not None:
+                    self._persp_detached[self._persp_drag_idx] = (
+                        self._persp_detached_drag_snapshot
+                    )
+            else:
+                self._crop_session_dirty = True
+                self.persp_points_changed_hover.emit(list(self._persp_points))
             self._persp_drag_idx = -1
             self._persp_point_drag_snapshot = None
             self._persp_detached_drag_snapshot = None
-            self._crop_session_dirty = True
-            self.persp_points_changed_hover.emit(list(self._persp_points))
+            self._persp_drag_moved = False
         # TODO2 крок 4.5: завершення drag хендла кадрування
         if self._crop_drag_idx >= 0:
+            if not self._crop_drag_moved and self._crop_rect_drag_snapshot is not None:
+                # Натискання без переміщення не є операцією кадрування.
+                self._crop_rect = list(self._crop_rect_drag_snapshot)
+            else:
+                self._crop_session_dirty = True
+                self.crop_rect_released.emit(list(self._crop_rect))
             self._crop_drag_idx = -1
             self._crop_rect_drag_snapshot = None
-            self._crop_session_dirty = True
-            self.crop_rect_released.emit(list(self._crop_rect))
+            self._crop_drag_moved = False
         if self._edit_mode and len(self._points) == CORNER_COUNT:
             self.points_released.emit(list(self._points))
 
@@ -377,8 +422,10 @@ class ImageLabel(QLabel):
         if not self._crop_rect_requested_for_current_image:
             self._crop_rect_requested_for_current_image = True
             self.crop_session_requested.emit()
-        # Курсор-кадрування — миттєво, без затримки
-        self.setCursor(self._get_crop_cursor())
+        # Зміна курсора не є частиною стану рамки кадрування.
+        # Вона вимкнена за замовчуванням, бо кастомний курсор заважав drag.
+        if self._crop_cursor_enabled:
+            self.setCursor(self._get_crop_cursor())
     def _hide_hover_overlay(self):
         """Завершує hover-сесію після виходу курсора із зображення."""
         if self._crop_ready and self._crop_session_dirty:
@@ -397,12 +444,14 @@ class ImageLabel(QLabel):
         self._crop_ready = False
         self._crop_drag_idx = -1
         self._crop_rect_drag_snapshot = None
+        self._crop_drag_moved = False
         # TODO2 крок 5: скидаємо стан хендлів перспективи-кружечків
         self._persp_points = []
         self._persp_detached = [False, False, False, False]
         self._persp_drag_idx = -1
         self._persp_point_drag_snapshot = None
         self._persp_detached_drag_snapshot = None
+        self._persp_drag_moved = False
         self._crop_session_dirty = False
 
     def _abort_crop_session_due_to_resize(self) -> None:
@@ -434,6 +483,7 @@ class ImageLabel(QLabel):
         self._crop_rect = []
         self._persp_points = []
         self._persp_detached = [False, False, False, False]
+        self._persp_drag_moved = False
         self._crop_ready = False
         self._crop_session_dirty = False
         self._crop_rect_requested_for_current_image = False
@@ -443,11 +493,37 @@ class ImageLabel(QLabel):
         self.update()
 
     def get_crop_state(self) -> tuple[list[QPoint], list[QPoint], list[bool]]:
-        """Повертає фінальний стан рамки й кружечків у preview-координатах."""
+        """Повертає crop-рамку та ефективні точки перспективи.
+
+        Положення кружечка є лише UI-якорем усередині рамки. Для обробки
+        прив'язані кружечки означають самі кути crop-рамки; лише реально
+        переміщений (від'єднаний) кружечок передається зі своїми координатами.
+        Тому crop завжди виконується за `_crop_rect`, а перспектива не
+        звужує його через внутрішній відступ кружечків.
+        """
+        persp_points = []
+        if len(self._crop_rect) == CORNER_COUNT and len(self._persp_points) == CORNER_COUNT:
+            persp_points = [
+                QPoint(self._persp_points[i] if self._persp_detached[i] else self._crop_rect[i])
+                for i in range(CORNER_COUNT)
+            ]
         return (
             list(self._crop_rect),
-            list(self._persp_points),
+            persp_points,
             list(self._persp_detached),
+        )
+
+    def _clamp_persp_point_to_crop(self, point: QPoint) -> QPoint:
+        """Обмежує dragged perspective point межами crop-рамки."""
+        if len(self._crop_rect) != CORNER_COUNT:
+            return self._clamp_to_image(point)
+        x_min = min(p.x() for p in self._crop_rect)
+        x_max = max(p.x() for p in self._crop_rect)
+        y_min = min(p.y() for p in self._crop_rect)
+        y_max = max(p.y() for p in self._crop_rect)
+        return QPoint(
+            max(x_min, min(x_max, point.x())),
+            max(y_min, min(y_max, point.y())),
         )
 
     def reset_crop_session(self) -> None:
@@ -484,36 +560,6 @@ class ImageLabel(QLabel):
         for i in range(CORNER_COUNT):
             if not self._persp_detached[i]:
                 self._persp_points[i] = self._compute_linked_persp_point(i)
-
-    def _expand_crop_to_include_persp_points(self) -> None:
-        """Розширює crop-рамку, якщо перспектива вийшла за її межі.
-
-        Розширення обмежене межами зображення, тому подальше кадрування не
-        відріже частину зображення, яку користувач включив у перспективу.
-        Відв'язані кружечки не прив'язуються назад до рамки.
-        """
-        if len(self._crop_rect) != CORNER_COUNT or len(self._persp_points) != CORNER_COUNT:
-            return
-        crop_xs = [point.x() for point in self._crop_rect]
-        crop_ys = [point.y() for point in self._crop_rect]
-        persp_xs = [point.x() for point in self._persp_points]
-        persp_ys = [point.y() for point in self._persp_points]
-        x_min = max(0, min(crop_xs + persp_xs))
-        y_min = max(0, min(crop_ys + persp_ys))
-        x_max = min(self._img_w - 1, max(crop_xs + persp_xs))
-        y_max = min(self._img_h - 1, max(crop_ys + persp_ys))
-
-        current_bounds = (min(crop_xs), max(crop_xs), min(crop_ys), max(crop_ys))
-        new_bounds = (x_min, x_max, y_min, y_max)
-        if new_bounds == current_bounds:
-            return
-
-        self._crop_rect = [
-            QPoint(x_min, y_min), QPoint(x_max, y_min),
-            QPoint(x_max, y_max), QPoint(x_min, y_max),
-        ]
-        self._sync_linked_persp_points()
-        self.crop_rect_changed.emit(list(self._crop_rect))
 
     @classmethod
     def _get_crop_cursor(cls) -> QCursor:

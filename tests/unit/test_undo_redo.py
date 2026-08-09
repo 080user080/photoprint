@@ -157,6 +157,21 @@ class TestUndoRedo:
         w._do_undo()  # не падає
         assert w._base[0,0,0] == 5
 
+    def test_redo_restores_autofix_indicator(self):
+        w = self._setup()
+        applied = []
+        w._preview.get_autofix_applied = lambda: "auto_fix"
+        w._preview.set_autofix_applied = lambda value: applied.append(value)
+
+        w._base = np.full((10, 10, 3), 1, dtype=np.uint8)
+        w._push_undo_snapshot()
+        w._base = np.full((10, 10, 3), 2, dtype=np.uint8)
+
+        w._do_undo()
+        w._do_redo()
+
+        assert applied[-1] == "auto_fix"
+
 
 # ---------------------------------------------------------------------------
 # _commit_pending_perspective

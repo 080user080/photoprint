@@ -75,6 +75,15 @@ class TestCropReady:
         assert label._crop_ready is True
         assert len(label._crop_rect) == 4
 
+    def test_crop_cursor_is_disabled_by_default(self, label):
+        assert label._crop_cursor_enabled is False
+
+    def test_crop_cursor_can_be_toggled_independently(self, label):
+        label.set_crop_cursor_enabled(True)
+        assert label._crop_cursor_enabled is True
+        label.set_crop_cursor_enabled(False)
+        assert label._crop_cursor_enabled is False
+
     def test_disable_hover_resets_crop_state(self, label):
         label.set_crop_rect([QPoint(0, 0), QPoint(10, 0), QPoint(10, 10), QPoint(0, 10)])
         label._crop_drag_idx = 1
@@ -261,6 +270,20 @@ class TestMouseReleaseCrop:
         label.mouseReleaseEvent(ev)
         assert len(released) == 0
 
+    def test_touching_crop_corner_without_moving_does_not_commit(self, label):
+        label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])
+        corner_widget = label._img_to_widget(QPoint(10, 10))
+        press = _make_mouse_event(QEvent.Type.MouseButtonPress, corner_widget)
+        release = _make_mouse_event(QEvent.Type.MouseButtonRelease, corner_widget)
+        released = []
+        label.crop_rect_released.connect(lambda pts: released.append(pts))
+
+        label.mousePressEvent(press)
+        label.mouseReleaseEvent(release)
+
+        assert released == []
+        assert label._crop_session_dirty is False
+
     def test_release_marks_session_dirty(self, label):
         label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])
         label._crop_drag_idx = 0
@@ -272,6 +295,8 @@ class TestMouseReleaseCrop:
 
     def test_hide_overlay_emits_commit_once_and_clears_dirty(self, label):
         label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])
+        crop_before = list(label._crop_rect)
+        persp_before = list(label._persp_points)
         label._crop_session_dirty = True
         committed = []
         label.crop_session_committed.connect(lambda: committed.append(True))
@@ -281,6 +306,8 @@ class TestMouseReleaseCrop:
 
         assert committed == [True]
         assert label._crop_session_dirty is False
+        assert label._crop_rect == crop_before
+        assert label._persp_points == persp_before
 
     def test_hide_overlay_without_changes_does_not_commit(self, label):
         label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])

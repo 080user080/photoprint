@@ -181,6 +181,20 @@ class TestOnCropSessionRequested:
         assert calls[0][0] == QPoint(0, 0)
         assert calls[0][2] == QPoint(39, 49)
 
+
+class TestCropSource:
+    def test_uses_original_as_stable_crop_source(self):
+        w = _make_window()
+        w._orig = np.zeros((50, 40, 3), dtype=np.uint8)
+        w._base = np.zeros((20, 15, 3), dtype=np.uint8)
+        w._crop_source = None
+
+        source = w._ensure_crop_source()
+
+        assert source.shape == w._orig.shape
+        assert source is not w._orig
+        assert w._crop_source is source
+
 # ---------------------------------------------------------------------------
 # ImageLabel.set_crop_rect
 # ---------------------------------------------------------------------------

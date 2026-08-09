@@ -22,6 +22,17 @@ def test_defaults_when_no_ini_file():
     s = app_settings.load(path)
     assert s["test_images_enabled"] is False
     assert s["test_images_folder"] == ""
+    assert s["after_crop_action"] == "autofix"
+
+
+def test_after_crop_action_roundtrip():
+    path = _make_tmp_ini()
+    try:
+        app_settings.save({"after_crop_action": "cropped_only"}, path)
+        loaded = app_settings.load(path)
+        assert loaded["after_crop_action"] == "cropped_only"
+    finally:
+        os.unlink(path)
 
 
 def test_roundtrip_enabled_true_and_custom_folder():

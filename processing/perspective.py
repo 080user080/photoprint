@@ -238,6 +238,34 @@ def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return warped
 
 
+def apply_crop_pin(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Застосовує perspective corner-pin у межах фіксованого crop-канвасу.
+
+    На відміну від :func:`apply_correction`, розмір результату тут завжди
+    дорівнює ``image``. Це спеціальний режим для кружечків перспективи в
+    інструменті кадрування: вони змінюють внутрішній warp, але ніколи не
+    змінюють межі або розмір обраної crop-рамки.
+    """
+    pts = np.asarray(corners, dtype=np.float32).reshape(-1, 2)
+    if pts.shape[0] != CORNER_COUNT:
+        raise ValueError("Для crop-pin потрібно рівно 4 точки")
+
+    src = _order_points(pts)
+    height, width = image.shape[:2]
+    dst = np.array([
+        [0, 0], [width - 1, 0],
+        [width - 1, height - 1], [0, height - 1],
+    ], dtype=np.float32)
+    transform = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(
+        image,
+        transform,
+        (width, height),
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(255, 255, 255),
+    )
+
+
 def apply_axis_aligned_crop(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """Обрізає зображення за осьовирівняною рамкою без перспективи й padding.
 

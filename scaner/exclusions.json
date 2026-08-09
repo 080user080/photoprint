@@ -575,6 +575,11 @@
     "voices/default"
   ],
   "46b2fd6b87b322e9c7094e366c9fd32471ce6745": [
+    "docs/archive",
+    "docs/archive/2026-08_TODO0_pre-merge.md",
+    "docs/archive/2026-08_TODO1_pre-merge.md",
+    "docs/archive/2026-08_TODO_pre-merge.md",
+    "docs/archive/2026-08_todo2_pre-merge.md",
     "scaner",
     "scaner/scaner.py",
     "tests",

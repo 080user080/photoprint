@@ -77,6 +77,10 @@ def load(path=None) -> dict:
     """Повертає словник з усіма налаштуваннями."""
     cfg = configparser.ConfigParser()
     cfg.read(_get_path(path), encoding="utf-8")
+    auto_apply_autofix = cfg.getboolean("processing", "auto_apply_autofix", fallback=True)
+    after_crop_action = cfg.get("processing", "after_crop_action", fallback="").strip().lower()
+    if after_crop_action not in {"autofix", "cropped_only"}:
+        after_crop_action = "autofix" if auto_apply_autofix else "cropped_only"
 
     return {
         "default_mode":      cfg.get("general",    "default_mode",    fallback="auto"),
@@ -84,7 +88,8 @@ def load(path=None) -> dict:
         "window_height":     cfg.getint("general",   "window_height",   fallback=DEFAULT_WINDOW_HEIGHT),
         "queue_width":       cfg.getint("general",   "queue_width",     fallback=DEFAULT_QUEUE_WIDTH),
         "autofix_enabled":   cfg.getboolean("processing", "autofix_enabled",   fallback=True),
-        "auto_apply_autofix": cfg.getboolean("processing", "auto_apply_autofix", fallback=True),
+        "auto_apply_autofix": auto_apply_autofix,
+        "after_crop_action": after_crop_action,
         "hdr_in_autofix":    cfg.getboolean("processing", "hdr_in_autofix",    fallback=True),
         "auto_brightness_enabled": cfg.getboolean("processing", "auto_brightness_enabled", fallback=False),
         "auto_perspective":  cfg.getboolean("processing", "auto_perspective",  fallback=False),
@@ -155,6 +160,7 @@ def save(settings: dict, path=None):
     cfg["processing"] = {
         "autofix_enabled":     str(settings.get("autofix_enabled",   True)).lower(),
         "auto_apply_autofix":  str(settings.get("auto_apply_autofix", True)).lower(),
+        "after_crop_action":   settings.get("after_crop_action", "autofix"),
         "hdr_in_autofix":      str(settings.get("hdr_in_autofix",    True)).lower(),
         "auto_brightness_enabled": str(settings.get("auto_brightness_enabled", False)).lower(),
         "auto_perspective":    str(settings.get("auto_perspective", False)).lower(),

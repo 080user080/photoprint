@@ -325,8 +325,12 @@ class SettingsWindow(QWidget):
         self._cb_hdr            = QCheckBox()
         self._cb_perspective    = QCheckBox()
         self._cb_auto_brightness = QCheckBox()
+        self._combo_after_crop = QComboBox()
+        self._combo_after_crop.addItem("Автоматично застосувати Auto Fix", "autofix")
+        self._combo_after_crop.addItem("Залишити лише кадрований результат", "cropped_only")
         form.addRow("Auto Fix за замовчуванням:",    self._cb_autofix)
         form.addRow("Авто-застосувати при завантаженні:", self._cb_auto_apply)
+        form.addRow("Після кадрування:",              self._combo_after_crop)
         form.addRow("HDR в Auto Fix:",                self._cb_hdr)
         form.addRow("Авто-перспектива:",              self._cb_perspective)
         form.addRow("Авто-яскравість (після Auto Fix):", self._cb_auto_brightness)
@@ -856,6 +860,13 @@ class SettingsWindow(QWidget):
     def _apply_settings(self, s: dict):
         self._cb_autofix.setChecked(s.get("autofix_enabled", True))
         self._cb_auto_apply.setChecked(s.get("auto_apply_autofix", True))
+        after_crop_action = s.get("after_crop_action", "autofix")
+        idx = self._combo_after_crop.findData(after_crop_action)
+        if idx < 0:
+            idx = self._combo_after_crop.findData(
+                "autofix" if s.get("auto_apply_autofix", True) else "cropped_only"
+            )
+        self._combo_after_crop.setCurrentIndex(max(idx, 0))
         self._cb_hdr.setChecked(s.get("hdr_in_autofix", True))
         self._cb_perspective.setChecked(s.get("auto_perspective", False))
         self._cb_auto_brightness.setChecked(s.get("auto_brightness_enabled", False))
@@ -957,6 +968,7 @@ class SettingsWindow(QWidget):
         return {
             "autofix_enabled":    self._cb_autofix.isChecked(),
             "auto_apply_autofix": self._cb_auto_apply.isChecked(),
+            "after_crop_action":  self._combo_after_crop.currentData(),
             "hdr_in_autofix":     self._cb_hdr.isChecked(),
             "auto_perspective":   self._cb_perspective.isChecked(),
             "auto_brightness_enabled": self._cb_auto_brightness.isChecked(),

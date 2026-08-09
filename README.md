@@ -27,6 +27,18 @@
 pip install -r requirements.txt
 ```
 
+### Розробка і тести
+
+Для повного набору залежностей розробки та тестування:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest -q tests/unit
+```
+
+GUI/scenario-тести потребують Windows desktop-сеансу; їх запускають окремо після
+ручної перевірки взаємодії з інтерфейсом.
+
 ## Запуск
 
 ```bash

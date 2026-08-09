@@ -9,6 +9,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from processing import autofix, sharpen, hdr, perspective, brightness_contrast as bc, doc_classifier, shadow_highlight, shadow_remove, white_background, deskew as deskew_module, color_cast
+from processing.doc_classifier import CAPTURE_PHONE, CAPTURE_SCREEN
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,61 @@ def run_contrast_advanced(image: np.ndarray, value: float, mode: str = "linear")
         return image.copy()
     if mode == "linear":
         return bc.apply_contrast(image, value)
+
+
+def decide_shadow_remove(
+    doc_type: str,
+    capture_condition: str,
+    background_uniformity: float,
+    face_detected: bool,
+    had_color_cast: bool,
+    settings: Optional[dict] = None,
+) -> tuple[bool, str]:
+    """Повертає рішення та причину для автоматичного видалення тіней.
+
+    Функція не змінює зображення й не викликає алгоритм обробки. Вона є
+    єдиним місцем для правил `doc_type × capture_condition × uniformity`.
+    """
+    settings = settings or {}
+    low = settings.get("shadow_uniformity_low", 0.30)
+    high = settings.get("shadow_uniformity_high", 0.55)
+
+    if capture_condition == CAPTURE_SCREEN:
+        return False, "screen_capture"
+
+    if doc_type == DocType.PHOTO.value:
+        photo_high = settings.get("shadow_uniformity_photo_high", 0.65)
+        if capture_condition == CAPTURE_PHONE:
+            photo_high *= 0.85
+        if background_uniformity > photo_high:
+            if face_detected:
+                return False, f"photo face_detected (uniformity={background_uniformity:.2f})"
+            return True, f"photo uniformity={background_uniformity:.2f}>{photo_high:.2f}"
+        if background_uniformity < low:
+            return False, f"photo low uniformity={background_uniformity:.2f}"
+        return False, f"photo mid uniformity={background_uniformity:.2f}"
+
+    if doc_type == DocType.COLOR_DOCUMENT.value:
+        if background_uniformity > high:
+            return True, f"color_doc uniformity={background_uniformity:.2f}>{high:.2f}"
+        return False, f"color_doc low uniformity={background_uniformity:.2f}"
+
+    if background_uniformity > high:
+        if face_detected:
+            return False, f"face_detected (uniformity={background_uniformity:.2f})"
+        return True, f"uniformity={background_uniformity:.2f}>{high:.2f}"
+
+    if background_uniformity < low:
+        return False, f"uniformity={background_uniformity:.2f}<{low:.2f}"
+
+    if doc_type == DocType.BW_DOCUMENT.value:
+        if had_color_cast:
+            return True, "bw_document + color_cast"
+        if face_detected:
+            return False, "face_detected (mid uniformity)"
+        return True, f"doc_type={doc_type}"
+
+    return False, ""
     # Для нелінійних методів — тільки додатна сила
     strength = max(0.0, value)
     if strength < EPSILON:
@@ -110,7 +166,7 @@ def run_autofix(
     _bg_uniformity, _detail_density = _diag.measure_background_metrics(image)
 
     # Класифікація умов зйомки (Задача 5)
-    from processing.doc_classifier import classify_capture_conditions, CAPTURE_SCREEN, CAPTURE_PHONE
+    from processing.doc_classifier import classify_capture_conditions
     _capture_cond = classify_capture_conditions(image, background_uniformity=_bg_uniformity)
 
     # Записуємо початкову однорідність фону в статус
@@ -184,8 +240,6 @@ def run_autofix(
     _shadow_detect_ratio = settings.get("shadow_detect_ratio", 0.3) if settings else 0.3
     _shadow_is_color = (doc_type == DocType.COLOR_DOCUMENT.value)
     _shadow_bgr_mode = settings.get("shadow_bgr_mode", False) if settings else False
-    _shadow_unif_low = settings.get("shadow_uniformity_low", 0.30) if settings else 0.30
-    _shadow_unif_high = settings.get("shadow_uniformity_high", 0.55) if settings else 0.55
 
     # Завдання 1.6: detect_face один раз на початку, щоб не викликати до 3 разів
     from processing import diagnostics as _diag_face_once
@@ -216,78 +270,24 @@ def run_autofix(
             elif shadow_mode == "never":
                 pass  # нічого не робимо
             else:  # auto — з урахуванням background_uniformity, doc_type та capture_conditions
-                _should_run = False
-                _reason = ""
-
-                if _capture_cond == CAPTURE_SCREEN:
-                    # screen_capture — не запускаємо (екран рівномірний, не тінь)
-                    _should_run = False
-                    _reason = "screen_capture"
-                elif doc_type == DocType.PHOTO.value:
-                    # Фото — запускаємо ТІЛЬКИ при високій однорідності фону.
-                    # Фото документа на білому фоні (зроблене на телефон) має високу uniformity.
-                    # Пейзажі, портрети — низьку uniformity, тому автоматично захищені.
-                    _shadow_unif_high_photo = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
-                    # Завдання 4.2: знизити поріг для CAPTURE_PHONE
+                if doc_type == DocType.PHOTO.value:
+                    photo_high = settings.get("shadow_uniformity_photo_high", 0.65) if settings else 0.65
                     if _capture_cond == CAPTURE_PHONE:
-                        _shadow_unif_high_photo = _shadow_unif_high_photo * 0.85
-                    if _bg_uniformity > _shadow_unif_high_photo:
-                        # Додаткова перевірка: якщо є обличчя — не видаляємо тіні
-                        from processing import diagnostics as _diag_face_photo
-                        if _diag_face_photo.detect_face(result):
-                            _should_run = False
-                            _reason = f"photo face_detected (uniformity={_bg_uniformity:.2f})"
-                        else:
-                            _should_run = True
-                            _reason = f"photo uniformity={_bg_uniformity:.2f}>{_shadow_unif_high_photo:.2f}"
-                    elif _bg_uniformity < _shadow_unif_low:
-                        # Складний фон — не запускаємо
-                        _should_run = False
-                        _reason = f"photo low uniformity={_bg_uniformity:.2f}"
-                    else:
-                        # Проміжний діапазон — фото ризиковані, краще консервативно
-                        _should_run = False
-                        _reason = f"photo mid uniformity={_bg_uniformity:.2f}"
-                elif doc_type == DocType.COLOR_DOCUMENT.value:
-                    # Кольоровий документ — запускаємо ТІЛЬКИ при високій однорідності фону,
-                    # інакше ризикуємо зіпсувати кольоровий фон/зображення на документі.
-                    # Паспорти, посвідчення з кольоровим фоном псуються shadow_remove,
-                    # але якщо фон реально рівномірний (білий/однотонний) — тіні треба прибрати.
-                    if _bg_uniformity > _shadow_unif_high:
-                        _should_run = True
-                        _reason = f"color_doc uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
-                    else:
-                        _should_run = False
-                        _reason = f"color_doc low uniformity={_bg_uniformity:.2f}"
-                elif _bg_uniformity > _shadow_unif_high:
-                    # Однорідний фон bw_document / flat_background.
-                    # Додаткова перевірка: якщо є обличчя — це документ з портретом,
-                    # shadow_remove зіпсує фото особи.
-                    if _face_detected:
-                        _should_run = False
-                        _reason = f"face_detected (uniformity={_bg_uniformity:.2f})"
-                    else:
-                        _should_run = True
-                        _reason = f"uniformity={_bg_uniformity:.2f}>{_shadow_unif_high:.2f}"
-                elif _bg_uniformity < _shadow_unif_low:
-                    # Складний фон — не запускаємо
-                    _should_run = False
-                    _reason = f"uniformity={_bg_uniformity:.2f}<{_shadow_unif_low:.2f}"
+                        photo_high *= 0.85
+                    photo_face_detected = (
+                        _diag_face_once.detect_face(result)
+                        if _bg_uniformity > photo_high else False
+                    )
                 else:
-                    # Проміжний діапазон — тільки для bw_document,
-                    # і тільки якщо немає обличчя
-                    if doc_type == DocType.BW_DOCUMENT.value:
-                        # Завдання 4.3: якщо був color cast — завжди запускаємо shadow_remove
-                        if _had_color_cast:
-                            _should_run = True
-                            _reason = f"bw_document + color_cast"
-                        else:
-                            if _face_detected:
-                                _should_run = False
-                                _reason = "face_detected (mid uniformity)"
-                            else:
-                                _should_run = True
-                                _reason = f"doc_type={doc_type}"
+                    photo_face_detected = bool(_face_detected)
+                _should_run, _reason = decide_shadow_remove(
+                    doc_type,
+                    _capture_cond,
+                    _bg_uniformity,
+                    photo_face_detected,
+                    _had_color_cast,
+                    settings,
+                )
                 if _should_run:
                     result, had_shadow = shadow_remove.auto_remove_shadow(
                         result,
@@ -559,6 +559,11 @@ def run_perspective_manual(image: np.ndarray, corners: np.ndarray, partial: bool
     if partial:
         return perspective.apply_partial_correction(image, corners)
     return perspective.apply_correction(image, corners)
+
+
+def run_crop_pin_perspective(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Warp для кружечків перспективи без зміни розміру crop-результату."""
+    return perspective.apply_crop_pin(image, corners)
 
 
 def run_crop_rect(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
