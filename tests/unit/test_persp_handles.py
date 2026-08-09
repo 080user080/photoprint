@@ -154,8 +154,6 @@ class TestMousePressPersp:
         assert label._persp_detached[0] is True
         assert label._persp_point_drag_snapshot is not None
         assert label._persp_detached_drag_snapshot is False
-        # Оверлей ховається
-        assert label._hover_visible is False
 
     def test_persp_priority_over_crop_handle(self, label):
         _setup_crop(label)
@@ -308,7 +306,5 @@ class TestLeaveEventPersp:
     def test_leave_during_persp_drag_keeps_state(self, label):
         _setup_crop(label)
         label._persp_drag_idx = 0
-        label._hover_visible = True
         label.leaveEvent(None)
-        assert label._hover_visible is True
         assert label._persp_drag_idx == 0

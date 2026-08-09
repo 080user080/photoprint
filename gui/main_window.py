@@ -9,6 +9,7 @@ Drag & Drop через WM_DROPFILES (utils/win_drop.py) — перевірено
 import os
 import sys
 import hashlib
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 import numpy as np
@@ -206,6 +207,9 @@ class MainWindow(QMainWindow):
         self._crop_detection_in_progress: bool = False
         self._crop_detect_thread: Optional[QThread] = None
         self._crop_detect_worker: Optional[CropDetectWorker] = None
+        self._crop_detection_base_reference: Optional[np.ndarray] = None
+        self._crop_detection_base_id: Optional[int] = None
+        self._crop_detection_started: float = 0.0
         # Undo/Redo історія (TODO1.1) — per-file, прив'язана до шляху
         self._undo_history: Dict[str, list] = {}  # path -> list[dict] (знімки _base + _per_file)
         self._redo_history: Dict[str, list] = {}  # path -> list[dict]
@@ -246,6 +250,9 @@ class MainWindow(QMainWindow):
         if sys.platform == "win32":
             QTimer.singleShot(DROP_SETUP_DELAY_MS, self._setup_win_drop)
 
+        # Тестові зображення — автозавантаження при старті (за налаштуванням)
+        self._load_test_images_if_enabled()
+
     def _setup_win_drop(self):
         hwnd = int(self.winId())
         register_drop_window(hwnd)
@@ -253,6 +260,29 @@ class MainWindow(QMainWindow):
         instance = QApplication.instance()
         if instance is not None:
             instance.installNativeEventFilter(self._drop_filter)
+
+    def _load_test_images_if_enabled(self) -> None:
+        """Завантажує тестові зображення в чергу при старті, якщо увімкнено.
+
+        Папка береться з налаштувань `test_images_folder`, або за замовчуванням
+        `<корінь проєкту>/tests/test_images`. Якщо папки немає або вона порожня —
+        тихо завершується без помилок.
+        """
+        if not self._settings.get("test_images_enabled", False):
+            return
+        folder = self._settings.get("test_images_folder", "").strip()
+        if not folder:
+            folder = str(Path(__file__).resolve().parent.parent / "tests" / "test_images")
+        if not os.path.isdir(folder):
+            self._logger.warning("Тестова папка не існує: %s", folder)
+            return
+        imgs = file_utils.collect_images_from_folder(folder)
+        if not imgs:
+            self._logger.warning("У тестовій папці немає підтримуваних зображень: %s", folder)
+            return
+        self._queue.add_files(imgs)
+        self._on_files_added(imgs)
+        self._set_status(f"Завантажено {len(imgs)} тестових зображень")
 
     def _setup_tray(self):
         """Ініціалізація QSystemTrayIcon (PRIO 9)."""
@@ -334,7 +364,9 @@ class MainWindow(QMainWindow):
                         and self._auto_thread.isRunning())
         single_running = (hasattr(self, '_single_thread') and self._single_thread is not None 
                           and self._single_thread.isRunning())
-        return auto_running or single_running
+        crop_running = (hasattr(self, '_crop_detect_thread') and self._crop_detect_thread is not None
+                        and self._crop_detect_thread.isRunning())
+        return auto_running or single_running or crop_running
 
     def _check_threads_and_close(self):
         """Завдання 2.3: перевіряє чи завершились потоки, закриває коли готово."""
@@ -371,6 +403,8 @@ class MainWindow(QMainWindow):
             self._auto_thread.wait(1000)
         if hasattr(self, '_single_thread') and self._single_thread is not None and self._single_thread.isRunning():
             self._cleanup_single_thread()
+        if hasattr(self, '_crop_detect_thread') and self._crop_detect_thread is not None:
+            self._cleanup_crop_detect_thread()
         
         QApplication.quit()
 
@@ -1077,6 +1111,57 @@ class MainWindow(QMainWindow):
     def _do_autofix(self):
         self._do_autofix_classic()
 
+    def _compute_full_autofix(self, base_snapshot: np.ndarray, vals: dict):
+        """Обчислює повний Auto Fix без змін GUI-стану."""
+        s = self._settings
+        if s.get("autofix_enabled", True):
+            result, status_msg, log_entries = pipeline.run_autofix(
+                base_snapshot,
+                sharpen_strength=vals["sharpen_strength"],
+                hdr_strength=vals["hdr_strength"],
+                use_hdr=s.get("hdr_in_autofix", True),
+                use_perspective=s.get("auto_perspective", False),
+                partial_perspective=s.get("partial_perspective", False),
+                bw_binary=s.get("bw_binary", False),
+                classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
+                classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
+                classify_line_count_min=s.get("classify_line_count_min", 3),
+                shadow_highlight_strength=vals["shadow_highlight"],
+                output_color_mode=s.get("output_color_mode", "auto"),
+                autofix_contrast=s.get("autofix_contrast", 0.15),
+                contrast_mode=s.get("contrast_mode", "linear"),
+                settings=s,
+            )
+            preset = s.get("pipeline_preset", "doc_bw")
+            if preset == "custom":
+                enabled = {item.strip() for item in s.get("pipeline_steps_enabled", "").split(",") if item.strip()}
+                brightness_enabled = "brightness" in enabled
+            else:
+                brightness_enabled = preset in ("doc_bw", "doc_color")
+            if s.get("auto_brightness_enabled", False) and brightness_enabled:
+                result = pipeline.run_auto_brightness(
+                    result,
+                    percentile_low=s.get("auto_percentile_low", 5.0),
+                    percentile_high=s.get("auto_percentile_high", 95.0),
+                )
+                log_entries.append({"step": "auto_brightness", "applied": True,
+                                    "detail": "авто-яскравість"})
+            if vals["grayscale"]:
+                result = pipeline.run_grayscale(result)
+            return result, status_msg, log_entries
+
+        result = pipeline.run_manual_adjustments(
+            base_snapshot,
+            brightness=vals["brightness"],
+            contrast=vals["contrast"],
+            sharpen_strength=vals["sharpen_strength"],
+            hdr_strength=vals["hdr_strength"],
+            grayscale=vals["grayscale"],
+            shadow_highlight_strength=vals["shadow_highlight"],
+            contrast_mode=s.get("contrast_mode", "linear"),
+        )
+        return result, "Ручні налаштування", []
+
     def _do_autofix_classic(self):
         if self._orig is None:
             self._set_status("Спочатку оберіть файл")
@@ -1098,7 +1183,6 @@ class MainWindow(QMainWindow):
             self._perspective_cached_result = None
             self._preview.disable_perspective_edit()
 
-        s = self._settings
         vals = self._controls.values()
         if self._base is None:
             self._set_status("Немає базового зображення для обробки")
@@ -1108,60 +1192,7 @@ class MainWindow(QMainWindow):
         path_snapshot = self._current_path
 
         def _work():
-            if s.get("autofix_enabled", True):
-                result, status_msg, log_entries = pipeline.run_autofix(
-                    base_snapshot,
-                    sharpen_strength=vals["sharpen_strength"],
-                    hdr_strength=vals["hdr_strength"],
-                    use_hdr=s.get("hdr_in_autofix", True),
-                    use_perspective=s.get("auto_perspective", False),
-                    partial_perspective=s.get("partial_perspective", False),
-                    bw_binary=s.get("bw_binary", False),
-                    classify_bw_std_thresh=s.get("classify_bw_std_thresh", 20.0),
-                    classify_edge_ratio_min=s.get("classify_edge_ratio_min", 0.03),
-                    classify_line_count_min=s.get("classify_line_count_min", 3),
-                    shadow_highlight_strength=vals["shadow_highlight"],
-                    output_color_mode=s.get("output_color_mode", "auto"),
-                    autofix_contrast=s.get("autofix_contrast", 0.15),
-                    contrast_mode=s.get("contrast_mode", "linear"),
-                    settings=s,
-                )
-                # TODO1.6: авто-яскравість — окремий крок ПІСЛЯ всього run_autofix.
-                # Підпорядковується глобальному пресету: якщо крок "brightness"
-                # вимкнено в pipeline_steps_enabled — авто-яскравість не застосовується.
-                _brightness_step_enabled = True
-                _preset = s.get("pipeline_preset", "doc_bw")
-                if _preset == "custom":
-                    _enabled_str = s.get("pipeline_steps_enabled", "")
-                    _enabled_list = [k.strip() for k in _enabled_str.split(",") if k.strip()]
-                    _brightness_step_enabled = "brightness" in _enabled_list
-                elif _preset in ("doc_bw", "doc_color"):
-                    _brightness_step_enabled = True
-                else:
-                    _brightness_step_enabled = False
-                if s.get("auto_brightness_enabled", False) and _brightness_step_enabled:
-                    result = pipeline.run_auto_brightness(
-                        result,
-                        percentile_low=s.get("auto_percentile_low", 5.0),
-                        percentile_high=s.get("auto_percentile_high", 95.0),
-                    )
-                    log_entries.append({"step": "auto_brightness", "applied": True,
-                                        "detail": "авто-яскравість"})
-                if s.get("autofix_enabled", True) and vals["grayscale"]:
-                    result = pipeline.run_grayscale(result)
-                return result, status_msg, log_entries
-            else:
-                result = pipeline.run_manual_adjustments(
-                    base_snapshot,
-                    brightness=vals["brightness"],
-                    contrast=vals["contrast"],
-                    sharpen_strength=vals["sharpen_strength"],
-                    hdr_strength=vals["hdr_strength"],
-                    grayscale=vals["grayscale"],
-                    shadow_highlight_strength=vals["shadow_highlight"],
-                    contrast_mode=s.get("contrast_mode", "linear"),
-                )
-                return result, "Ручні налаштування", []
+            return self._compute_full_autofix(base_snapshot, vals)
 
         def _on_done(payload):
             result, status_msg, log_entries = payload
@@ -1737,22 +1768,69 @@ class MainWindow(QMainWindow):
         if self._crop_detect_worker is not None:
             self._crop_detect_worker.deleteLater()
             self._crop_detect_worker = None
+        self._crop_detection_base_reference = None
+        self._crop_detection_base_id = None
+        self._crop_detection_started = 0.0
 
     def _on_crop_session_requested(self) -> None:
         """Показує безпечну стартову рамку по межах поточного зображення.
 
-        Кадрування не залежить від ненадійної авто-перспективної детекції:
-        користувач одразу отримує активну рамку й може перетягувати її.
+        Кадрування не залежить від фонової авто-детекції: користувач
+        синхронно отримує активну рамку точно по межах зображення.
         """
         if self._base is None:
             return
-        corners_full = pipeline.detect_document_bounds(self._base)
-        if corners_full is None:
-            corners_full = self._full_frame_crop_corners(self._base)
+        base_reference = self._base
+        base_id = id(base_reference)
+        if (self._crop_default_corners_full is not None
+                and self._crop_default_corners_base_id == base_id):
+            self._preview._before.set_crop_rect(
+                self._corners_to_preview_pts(self._crop_default_corners_full, base_reference)
+            )
+            self._preview._before.set_crop_ready(True)
+            return
+
+        # TODO: авто-детекція контуру документа тимчасово вимкнена — рамка
+        # стартує на весь кадр (рішення Блоку 3, 2026-08).
+        corners_full = self._full_frame_crop_corners(base_reference)
         self._crop_default_corners_full = corners_full.copy()
-        self._crop_default_corners_base_id = id(self._base)
-        pts = self._corners_to_preview_pts(corners_full, self._base)
-        self._preview._before.set_crop_rect(pts)
+        self._crop_default_corners_base_id = base_id
+        self._preview._before.set_crop_rect(
+            self._corners_to_preview_pts(corners_full, base_reference)
+        )
+        self._preview._before.set_crop_ready(True)
+
+    def _on_crop_detection_finished(self, corners_full) -> None:
+        base_reference = self._crop_detection_base_reference
+        base_id = self._crop_detection_base_id
+        started = self._crop_detection_started
+        if base_reference is None or base_id is None:
+            self._crop_detection_in_progress = False
+            return
+        self._logger.debug("crop detection: %.2f ms, input=%s", (time.perf_counter() - started) * 1000, base_reference.shape)
+        if self._base is not base_reference or id(self._base) != base_id:
+            self._crop_detection_in_progress = False
+            return
+        if corners_full is None:
+            corners_full = self._full_frame_crop_corners(base_reference)
+        self._crop_default_corners_full = np.asarray(corners_full, dtype=np.float32).copy()
+        self._crop_default_corners_base_id = base_id
+        self._preview._before.set_crop_rect(
+            self._corners_to_preview_pts(self._crop_default_corners_full, base_reference)
+        )
+        self._crop_detection_in_progress = False
+
+    def _on_crop_detection_error(self, message) -> None:
+        base_reference = self._crop_detection_base_reference
+        base_id = self._crop_detection_base_id
+        self._logger.warning("crop detection failed: %s", message)
+        if base_reference is not None and self._base is base_reference and id(self._base) == base_id:
+            self._crop_default_corners_full = self._full_frame_crop_corners(base_reference)
+            self._crop_default_corners_base_id = base_id
+            self._preview._before.set_crop_rect(
+                self._corners_to_preview_pts(self._crop_default_corners_full, base_reference)
+            )
+        self._crop_detection_in_progress = False
 
     def _on_crop_preview_changed(self, _points: list) -> None:
         """Оновлює AFTER під час hover-редагування, не змінюючи `_base`.
@@ -1785,11 +1863,7 @@ class MainWindow(QMainWindow):
             self._logger.error("Помилка live-прев’ю кадрування: %s", exc, exc_info=True)
 
     def _on_crop_session_committed(self) -> None:
-        """Комітить одну змінену hover-сесію кадрування в `_base`.
-
-        Сигнал надходить після виходу курсора з hover-оверлея. Усі drag-и
-        поточної сесії об'єднуються в один атомарний запис Undo.
-        """
+        """Комітить crop, перспективу і, за потреби, Auto Fix одним Undo."""
         if self._base is None:
             return
 
@@ -1826,18 +1900,52 @@ class MainWindow(QMainWindow):
             self._logger.warning("Застарілий коміт кадрування відкинуто")
             return
 
-        self._push_undo_snapshot()
         before_preview = image_utils.make_preview(base_snapshot)
-        self._base = final.copy()
-        self._processed = final.copy()
-        self._base_for_perspective = None
-        self._perspective_corners = None
-        self._perspective_cached_result = None
-        self._invalidate_crop_default_cache()
-        self._preview.set_before(before_preview)
-        self._preview.set_after(image_utils.make_preview(final))
-        self._update_buttons()
-        self._set_status("Кадрування застосовано")
+        self._preview.reset_crop_session()
+
+        def _commit_result(result: np.ndarray, status_msg: str, autofix_applied: str | None = None):
+            if self._current_path != path_snapshot or self._base is not base_reference:
+                self._logger.warning("Застарілий коміт кадрування відкинуто")
+                return
+            self._push_undo_snapshot()
+            self._base = result.copy()
+            self._processed = result.copy()
+            self._base_for_perspective = None
+            self._perspective_corners = None
+            self._perspective_cached_result = None
+            self._invalidate_crop_default_cache()
+            self._preview.set_before(before_preview)
+            self._preview.set_after(image_utils.make_preview(result))
+            self._preview.set_autofix_applied(autofix_applied)
+            self._update_buttons()
+            self._set_status(status_msg)
+
+        if not self._settings.get("auto_apply_autofix", True):
+            _commit_result(final, "Кадрування застосовано")
+            return
+
+        vals = self._controls.values()
+
+        def _work():
+            return self._compute_full_autofix(final.copy(), vals)
+
+        def _on_done(payload):
+            result, status_msg, log_entries = payload
+            if self._current_path != path_snapshot or self._base is not base_reference:
+                self._logger.debug("Кадрування: файл змінився, ігноруємо застарілий результат")
+                return
+            if log_entries:
+                applied = [entry for entry in log_entries if entry.get("applied")]
+                type_parts = [entry["detail"] for entry in applied
+                              if entry["step"] in ("doc_type", "color_mode")]
+                other_parts = [entry["detail"] for entry in applied
+                               if entry["step"] not in ("doc_type", "color_mode")]
+                detailed_status = "Auto Fix: " + " | ".join(type_parts + other_parts)
+            else:
+                detailed_status = status_msg
+            _commit_result(result, detailed_status, "auto_fix")
+
+        self._run_in_background(_work, _on_done, button_to_lock=self._btn_autofix)
 
 # ------------------------------------------------------------------
 # Друк та збереження

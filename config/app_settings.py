@@ -30,6 +30,10 @@ DEFAULT_MINIMIZE_TO_TRAY = False      # PRIO 9: трей-режим
 DEFAULT_AUTOFIX_CONTRAST = 0.15
 DEFAULT_CONTRAST_MODE = "linear"   # "linear", "percentile", "s_curve", "adaptive"
 
+# Константи для тестових зображень
+DEFAULT_TEST_IMAGES_ENABLED = False
+DEFAULT_TEST_IMAGES_FOLDER = ""   # порожньо = <корінь проєкту>/tests/test_images
+
 # Константи для видалення тіней
 DEFAULT_SHADOW_REMOVE_ENABLED = True
 DEFAULT_SHADOW_DETECT_THRESHOLD = 80.0
@@ -133,6 +137,9 @@ def load(path=None) -> dict:
         "queue_bg_color": cfg.get("appearance", "queue_bg_color", fallback=DEFAULT_QUEUE_BG_COLOR),
         "queue_text_color": cfg.get("appearance", "queue_text_color", fallback=DEFAULT_QUEUE_TEXT_COLOR),
         "auto_contrast_text": cfg.getboolean("appearance", "auto_contrast_text", fallback=DEFAULT_AUTO_CONTRAST_TEXT),
+        # Тестові зображення
+        "test_images_enabled": cfg.getboolean("tests", "test_images_enabled", fallback=DEFAULT_TEST_IMAGES_ENABLED),
+        "test_images_folder": cfg.get("tests", "test_images_folder", fallback=DEFAULT_TEST_IMAGES_FOLDER),
     }
 
 
@@ -205,6 +212,10 @@ def save(settings: dict, path=None):
         "queue_bg_color": settings.get("queue_bg_color", DEFAULT_QUEUE_BG_COLOR),
         "queue_text_color": settings.get("queue_text_color", DEFAULT_QUEUE_TEXT_COLOR),
         "auto_contrast_text": str(settings.get("auto_contrast_text", DEFAULT_AUTO_CONTRAST_TEXT)).lower(),
+    }
+    cfg["tests"] = {
+        "test_images_enabled": str(settings.get("test_images_enabled", DEFAULT_TEST_IMAGES_ENABLED)).lower(),
+        "test_images_folder": settings.get("test_images_folder", DEFAULT_TEST_IMAGES_FOLDER),
     }
 
     target = _get_path(path)

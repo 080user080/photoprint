@@ -8,6 +8,7 @@
 import cv2
 import numpy as np
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -155,32 +156,63 @@ def detect_document_bounds(image: np.ndarray) -> np.ndarray | None:
     Якщо переконливий контур не знайдено, повертається `None`, щоб GUI міг
     використати межі всього зображення.
     """
+    started = time.perf_counter()
     if image is None or image.size == 0:
         return None
     h, w = image.shape[:2]
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    edges = cv2.Canny(gray, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
-    kernel = np.ones((5, 5), dtype=np.uint8)
-    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    image_area = float(h * w)
-    candidates = []
-    for contour in contours:
-        x, y, bw, bh = cv2.boundingRect(contour)
-        area = float(bw * bh)
-        if area < image_area * MIN_DOCUMENT_AREA_RATIO:
-            continue
-        if bw >= w - 2 and bh >= h - 2:
-            continue
-        candidates.append((area, x, y, bw, bh))
-    if not candidates:
-        return None
-    _, x, y, bw, bh = max(candidates, key=lambda item: item[0])
-    return np.array([
-        [x, y], [x + bw - 1, y],
-        [x + bw - 1, y + bh - 1], [x, y + bh - 1],
-    ], dtype=np.float32)
+    try:
+        scale = min(1.0, MAX_ANALYSIS_DIM / max(h, w))
+        small = image if scale == 1.0 else cv2.resize(
+            image, (max(1, round(w * scale)), max(1, round(h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+        sh, sw = small.shape[:2]
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA)
+        edges = cv2.Canny(gray, CANNY_THRESHOLD_LOW, CANNY_THRESHOLD_HIGH)
+        kernel = np.ones(MORPH_KERNEL_SIZE, dtype=np.uint8)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=MORPH_ITERATIONS)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        image_area = float(sh * sw)
+        candidates = []
+        for contour in contours:
+            x, y, bw, bh = cv2.boundingRect(contour)
+            area = float(bw * bh)
+            if area < image_area * MIN_DOCUMENT_AREA_RATIO:
+                continue
+            # Reject only a contour that is exactly the analysis canvas. A document
+            # photographed against the edge may legitimately occupy almost all of it.
+            if x <= 0 and y <= 0 and x + bw >= sw and y + bh >= sh:
+                continue
+            candidates.append((area, x, y, bw, bh))
+        if not candidates:
+            # A single Canny pass is weak on low-contrast paper. Try one cheap
+            # adaptive-threshold pass before letting the caller use full-frame.
+            binary = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY_INV, ADAPTIVE_BLOCK_SIZE, ADAPTIVE_C,
+            )
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+            fallback_contours, _ = cv2.findContours(
+                binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            for contour in fallback_contours:
+                x, y, bw, bh = cv2.boundingRect(contour)
+                if bw * bh < image_area * MIN_DOCUMENT_AREA_RATIO:
+                    continue
+                if x <= 0 and y <= 0 and x + bw >= sw and y + bh >= sh:
+                    continue
+                candidates.append((float(bw * bh), x, y, bw, bh))
+        if not candidates:
+            return None
+        _, x, y, bw, bh = max(candidates, key=lambda item: item[0])
+        inv_scale = 1.0 / scale
+        return (np.array([
+            [x, y], [x + bw - 1, y],
+            [x + bw - 1, y + bh - 1], [x, y + bh - 1],
+        ], dtype=np.float32) * inv_scale).astype(np.float32)
+    finally:
+        logger.debug("detect_document_bounds: %.2f ms, input=%s", (time.perf_counter() - started) * 1000, image.shape)
 
 
 def apply_correction(image: np.ndarray, corners: np.ndarray) -> np.ndarray:

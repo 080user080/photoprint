@@ -6,7 +6,7 @@ ImageLabel підтримує режим редагування 4 точок п�
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy
 from PyQt6.QtCore    import Qt, QPoint, QRect, pyqtSignal, QTimer
-from PyQt6.QtGui     import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QFontMetrics, QCursor
+from PyQt6.QtGui     import QPixmap, QImage, QPainter, QPen, QColor, QBrush, QCursor
 import numpy as np
 import cv2
 
@@ -37,11 +37,8 @@ LABEL_TR = "TR"
 LABEL_BR = "BR"
 LABEL_BL = "BL"
 
-# Константи для hover-оверлея (TODO2 крок 2)
-HOVER_DELAY_MS = 100
+# Механізм завершення hover-сесії (TODO2 крок 2)
 HOVER_HIDE_DELAY_MS = 50
-HOVER_OVERLAY_TEXT = "\u2702 Інструмент кадрування"  # ✂ Інструмент кадрування
-HOVER_OVERLAY_COLOR = COLOR_TL  # червоний — перевикористовуємо колір TL
 
 # Константи для курсора-кадрування (TODO2 крок 2.3)
 CROP_CURSOR_SIZE = 24
@@ -123,13 +120,9 @@ class ImageLabel(QLabel):
         self._persp_point_drag_snapshot: QPoint | None = None
         self._persp_detached_drag_snapshot: bool | None = None
         self._crop_session_dirty: bool = False         # чи був відпущений хоча б один хендл
-        # Hover-оверлей (TODO2 крок 2)
+        # Hover-стан: текстовий overlay прибрано, але сесія потрібна для
+        # миттєвої рамки, курсора та commit при виході.
         self._hover_enabled: bool = True
-        self._hover_visible: bool = False
-        self._hover_timer = QTimer(self)
-        self._hover_timer.setSingleShot(True)
-        self._hover_timer.setInterval(HOVER_DELAY_MS)
-        self._hover_timer.timeout.connect(self._show_hover_overlay)
         self._hover_hide_timer = QTimer(self)
         self._hover_hide_timer.setSingleShot(True)
         self._hover_hide_timer.setInterval(HOVER_HIDE_DELAY_MS)
@@ -145,9 +138,7 @@ class ImageLabel(QLabel):
         """
         self._hover_enabled = enabled
         if not enabled:
-            self._hover_timer.stop()
             self._hover_hide_timer.stop()
-            self._hover_visible = False
             self.unsetCursor()
             self.update()
 
@@ -192,7 +183,7 @@ class ImageLabel(QLabel):
         TODO2 крок 5.3: нова hover-сесія = новий незалежний знімок —
         скидаємо `_persp_detached` і перераховуємо кружечки як похідні від рамки.
         """
-        self._crop_rect = list(corners)
+        self._crop_rect = [self._clamp_crop_point(point) for point in corners]
         self._crop_ready = True
         # TODO2 крок 5.3: скидання стану перспективи на нову hover-сесію
         self._persp_detached = [False, False, False, False]
@@ -225,8 +216,6 @@ class ImageLabel(QLabel):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._hover_visible:
-            self._draw_hover_overlay(painter)
         # TODO2 крок 4.2: хендли прямокутного кадрування (кутові дужки)
         if self._crop_ready and len(self._crop_rect) == CORNER_COUNT:
             self._draw_crop_handles(painter)
@@ -274,9 +263,8 @@ class ImageLabel(QLabel):
         if self._crop_drag_idx >= 0 or self._persp_drag_idx >= 0:
             return
         # Приховування — мінімальна затримка (HOVER_HIDE_DELAY_MS)
-        self._hover_timer.stop()
         self.unsetCursor()
-        if self._hover_visible:
+        if self._crop_session_dirty:
             self._hover_hide_timer.start()
 
     def mouseMoveEvent(self, event):
@@ -334,9 +322,6 @@ class ImageLabel(QLabel):
                     self._persp_drag_idx = i
                     # Розрив зв'язку з рамкою — кружечок стає незалежним
                     self._persp_detached[i] = True
-                    # Під час drag текстовий оверлей заважає — ховаємо
-                    self._hover_timer.stop()
-                    self._hover_visible = False
                     self.update()
                     return
         # TODO2 крок 4.3: hit-test хендлів кадрування (тільки коли рамка готова)
@@ -347,9 +332,6 @@ class ImageLabel(QLabel):
                 if (pos - dp).manhattanLength() <= CROP_HANDLE_HIT_TOLERANCE:
                     self._crop_rect_drag_snapshot = list(self._crop_rect)
                     self._crop_drag_idx = i
-                    # Під час drag текстовий оверлей заважає — ховаємо
-                    self._hover_timer.stop()
-                    self._hover_visible = False
                     self.update()
                     return
             self._crop_drag_idx = -1
@@ -375,11 +357,7 @@ class ImageLabel(QLabel):
     # --- Внутрішнє ---
 
     def _maybe_schedule_hover(self, event_pos: QPoint | None = None):
-        """Запускає таймер показу оверлея, якщо курсор всередині _img_rect().
-
-        Курсор-кадрування змінюється миттєво (незалежно від таймера),
-        а текстовий оверлей — із затримкою HOVER_DELAY_MS.
-        """
+        """Активує crop-рамку й курсор, якщо курсор над зображенням."""
         if not self._hover_enabled:
             return
         rect = self._img_rect()
@@ -392,46 +370,25 @@ class ImageLabel(QLabel):
         if not inside:
             # Курсор поза зображенням — скасовуємо запланований показ
             self.unsetCursor()
-            if not self._hover_visible:
-                self._hover_timer.stop()
             return
         if self._edit_mode:
             return
         # Рамка й crop-курсор активуються одразу при вході в область «ДО».
-        # Текстовий оверлей має лише інформативну роль і не бере участі
-        # в активації або блокуванні хендлів.
         if not self._crop_rect_requested_for_current_image:
             self._crop_rect_requested_for_current_image = True
             self.crop_session_requested.emit()
         # Курсор-кадрування — миттєво, без затримки
         self.setCursor(self._get_crop_cursor())
-        if self._hover_visible:
-            return
-        # Текстовий оверлей — із затримкою; не перезапускаємо вже активний таймер
-        if not self._hover_timer.isActive():
-            self._hover_timer.start()
-
-    def _show_hover_overlay(self):
-        """Показує hover-оверлей (після затримки)."""
-        if not self._hover_enabled or self._edit_mode:
-            return
-        self._hover_hide_timer.stop()
-        self._hover_visible = True
-        self.update()
-
     def _hide_hover_overlay(self):
-        """Ховає hover-оверлей і комітить змінену hover-сесію."""
+        """Завершує hover-сесію після виходу курсора із зображення."""
         if self._crop_ready and self._crop_session_dirty:
             self.crop_session_committed.emit()
             self._crop_session_dirty = False
-        self._hover_visible = False
         self.update()
 
     def _disable_hover(self):
         """Скидає hover-стан (при зміні зображення/placeholder)."""
-        self._hover_timer.stop()
         self._hover_hide_timer.stop()
-        self._hover_visible = False
         self.unsetCursor()
         # TODO2 крок 3.1: наступне наведення знову має право запросити рамку
         self._crop_rect_requested_for_current_image = False
@@ -481,9 +438,7 @@ class ImageLabel(QLabel):
         self._crop_session_dirty = False
         self._crop_rect_requested_for_current_image = False
 
-        self._hover_timer.stop()
         self._hover_hide_timer.stop()
-        self._hover_visible = False
         self.unsetCursor()
         self.update()
 
@@ -494,6 +449,10 @@ class ImageLabel(QLabel):
             list(self._persp_points),
             list(self._persp_detached),
         )
+
+    def reset_crop_session(self) -> None:
+        """Завершує hover-сесію без повторного сигналу коміту."""
+        self._disable_hover()
 
     def _compute_linked_persp_point(self, corner_idx: int) -> QPoint:
         """TODO2 крок 5.2: обчислює позицію «прив'язаного» кружечка.
@@ -592,29 +551,6 @@ class ImageLabel(QLabel):
         painter.end()
         cls._CROP_CURSOR = QCursor(pm, 0, 0)
         return cls._CROP_CURSOR
-
-    def _draw_hover_overlay(self, painter: QPainter) -> None:
-        """TODO2 крок 2: малює текстовий напис «Інструмент кадрування» + іконку."""
-        rect = self._img_rect()
-        if rect is None:
-            return
-        font = painter.font()
-        font.setBold(True)
-        font.setPointSize(13)
-        painter.setFont(font)
-        fm = QFontMetrics(font)
-        text_w = fm.horizontalAdvance(HOVER_OVERLAY_TEXT)
-        text_h = fm.height()
-        # Позиція: по центру зверху зображення
-        x = rect.center().x() - text_w // 2
-        y = rect.top() + 12
-        # Тінь (напівпрозоре чорне коло навколо тексту)
-        painter.setBrush(QBrush(QColor(0, 0, 0, SHADOW_ALPHA)))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(QRect(x - 10, y - text_h // 2 - 2, text_w + 20, text_h + 4), 6, 6)
-        # Основний текст
-        painter.setPen(QPen(HOVER_OVERLAY_COLOR))
-        painter.drawText(x, y + text_h // 2, HOVER_OVERLAY_TEXT)
 
     def _draw_crop_handles(self, painter: QPainter) -> None:
         """TODO2 крок 4.2: малює прямокутник кадрування та 4 кутові дужки-хендли.
@@ -824,6 +760,13 @@ class ImageLabel(QLabel):
             max(0, min(iy, self._img_h - 1)),
         )
 
+    def _clamp_crop_point(self, pt: QPoint) -> QPoint:
+        """Keep the rectangular crop frame inside the actual image bounds."""
+        return QPoint(
+            max(0, min(pt.x(), self._img_w - 1)),
+            max(0, min(pt.y(), self._img_h - 1)),
+        )
+
     def _clamp_to_image(self, pt: QPoint) -> QPoint:
         # Дозволяємо точки виходити за межі зображення на 20%
         margin_x = int(self._img_w * 0.2)
@@ -947,3 +890,7 @@ class PreviewPanel(QWidget):
     def get_crop_state(self) -> tuple[list[QPoint], list[QPoint], list[bool]]:
         """Повертає стан кадрування з ImageLabel у preview-координатах."""
         return self._before.get_crop_state()
+
+    def reset_crop_session(self) -> None:
+        """Скидає hover-сесію панелі після фінального коміту."""
+        self._before.reset_crop_session()

@@ -38,7 +38,6 @@ def test_resize_aborts_crop_drag_without_commit(qapp):
     label._crop_drag_idx = 0
     label._crop_rect_drag_snapshot = list(label._crop_rect)
     label._crop_session_dirty = True
-    label._hover_visible = True
 
     label.resizeEvent(QResizeEvent(QSize(420, 320), QSize(400, 300)))
 
@@ -48,7 +47,6 @@ def test_resize_aborts_crop_drag_without_commit(qapp):
     assert label._persp_points == []
     assert label._crop_ready is False
     assert label._crop_session_dirty is False
-    assert label._hover_visible is False
     assert committed == []
 
     # Наступні resize-події після першого abort не повинні повторно ламати стан.
@@ -79,12 +77,9 @@ def test_resize_aborts_perspective_drag_and_clears_session(qapp):
 def test_resize_without_drag_keeps_visible_crop_session(qapp):
     label = _make_label(qapp)
     crop_before = list(label._crop_rect)
-    label._hover_visible = True
-
     label.resizeEvent(QResizeEvent(QSize(420, 320), QSize(400, 300)))
 
     assert label._crop_drag_idx == -1
     assert label._persp_drag_idx == -1
     assert label._crop_rect == crop_before
     assert label._crop_ready is True
-    assert label._hover_visible is True

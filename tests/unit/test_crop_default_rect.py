@@ -143,7 +143,8 @@ class TestOnCropSessionRequested:
         calls = []
         w._preview = type("P", (), {
             "_before": type("B", (), {
-                "set_crop_rect": lambda self, pts: calls.append(pts)
+                "set_crop_rect": lambda self, pts: calls.append(pts),
+                "set_crop_ready": lambda self, ready: None,
             })()
         })()
         w._corners_to_preview_pts = lambda corners, source: [QPoint(int(c[0]), int(c[1])) for c in corners]
@@ -166,6 +167,7 @@ class TestOnCropSessionRequested:
         w._preview = type("P", (), {
             "_before": type("B", (), {
                 "set_crop_rect": lambda self, pts: calls.append(pts),
+                "set_crop_ready": lambda self, ready: None,
             })()
         })()
         w._corners_to_preview_pts = lambda corners, source: [
@@ -230,8 +232,6 @@ class TestCropRectRequestedFlag:
         rect = label._img_rect()
         QCursor.setPos(label.mapToGlobal(rect.center()))
         label._maybe_schedule_hover()
-        label._show_hover_overlay()
-        label._show_hover_overlay()
         assert len(emitted) == 1
         assert label._crop_rect_requested_for_current_image is True
 

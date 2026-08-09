@@ -7,7 +7,7 @@
 3. mousePressEvent — hit-test хендлів кадрування (і стара логіка _edit_mode не ламається).
 4. _apply_crop_drag — утримання прямокутної форми + мінімальний розмір.
 5. mouseReleaseEvent — скидає _crop_drag_idx і емітить crop_rect_released.
-6. leaveEvent — під час drag не скидає курсор/оверлей.
+6. leaveEvent — під час drag не скидає стан сесії.
 """
 
 import os
@@ -118,8 +118,6 @@ class TestMousePressCrop:
         ev = _make_mouse_event(QEvent.Type.MouseButtonPress, tl_widget)
         label.mousePressEvent(ev)
         assert label._crop_drag_idx == 0
-        # Оверлей ховається під час drag
-        assert label._hover_visible is False
         assert label._crop_rect_drag_snapshot == label._crop_rect
 
     def test_no_drag_outside_handles(self, label):
@@ -302,17 +300,14 @@ class TestLeaveEventCrop:
     def test_leave_during_drag_keeps_state(self, label):
         label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])
         label._crop_drag_idx = 0
-        label._hover_visible = True
-        # Під час drag leaveEvent не повинен ховати оверлей і скидати курсор
+        # Під час drag leaveEvent не повинен завершувати сесію.
         label.leaveEvent(None)
-        assert label._hover_visible is True
         assert label._crop_drag_idx == 0
 
     def test_leave_without_drag_hides(self, label):
         label.set_crop_rect([QPoint(10, 10), QPoint(90, 10), QPoint(90, 70), QPoint(10, 70)])
         label._crop_drag_idx = -1
-        label._hover_visible = True
+        label._crop_session_dirty = True
         label.leaveEvent(None)
-        # Оверлей ховається через таймер (негайно _hover_visible не скидається,
-        # але таймер запускається). Перевіряємо, що таймер активний.
+        # Commit hover-сесії відкладається коротким таймером.
         assert label._hover_hide_timer.isActive() is True

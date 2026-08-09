@@ -160,6 +160,7 @@ SECTIONS = [
     ("format",       "Формат/Збереження"),
     ("printer",      "Принтер/Режим"),
     ("appearance",   "Вигляд"),
+    ("tests",        "Тести"),
 ]
 
 
@@ -289,6 +290,7 @@ class SettingsWindow(QWidget):
         self._stack.addWidget(_make_scroll_page(self._page_format_save()))
         self._stack.addWidget(_make_scroll_page(self._page_printer_mode()))
         self._stack.addWidget(_make_scroll_page(self._page_appearance()))
+        self._stack.addWidget(_make_scroll_page(self._page_tests()))
 
         self._sidebar.currentRowChanged.connect(self._stack.setCurrentIndex)
 
@@ -765,6 +767,49 @@ class SettingsWindow(QWidget):
 
         return box
 
+    def _page_tests(self) -> QWidget:
+        """Сторінка тестових зображень — автозавантаження при старті."""
+        box = QGroupBox("Тестові зображення")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        form = QFormLayout(box)
+
+        self._cb_test_images = QCheckBox()
+        self._cb_test_images.setToolTip(
+            "При старті програми автоматично завантажувати в чергу\n"
+            "зображення з тестової папки."
+        )
+        form.addRow("Завантажувати тестові зображення при старті:", self._cb_test_images)
+
+        self._edit_test_folder = QLineEdit()
+        self._edit_test_folder.setPlaceholderText("(порожньо = <корінь проєкту>/tests/test_images)")
+        self._edit_test_folder.setToolTip(
+            "Шлях до папки з тестовими зображеннями.\n"
+            "Порожнє поле = використовується стандартна папка tests/test_images."
+        )
+        btn_browse = QPushButton("…")
+        btn_browse.setFixedWidth(BROWSE_BUTTON_WIDTH)
+        btn_browse.clicked.connect(self._browse_test_folder)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(self._edit_test_folder)
+        folder_row.addWidget(btn_browse)
+        form.addRow("Папка тестових зображень:", folder_row)
+
+        desc = QLabel(
+            "При увімкненні програма автоматично додає зображення з вказаної папки\n"
+            "у чергу при кожному старті. Зміни застосовуються при наступному запуску."
+        )
+        desc.setStyleSheet("color:#555; font-size:11px;")
+        desc.setWordWrap(True)
+        form.addRow(desc)
+
+        return box
+
+    def _browse_test_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Оберіть папку тестових зображень")
+        if folder:
+            self._edit_test_folder.setText(folder)
+
     def _on_auto_contrast_toggled(self, checked: bool):
         """Вмикає/вимикає поля вибору кольору тексту."""
         enabled = not checked
@@ -904,6 +949,10 @@ class SettingsWindow(QWidget):
 
         self._cb_auto_contrast.setChecked(s.get("auto_contrast_text", True))
 
+        # Тестові зображення
+        self._cb_test_images.setChecked(s.get("test_images_enabled", False))
+        self._edit_test_folder.setText(s.get("test_images_folder", ""))
+
     def _collect_settings(self) -> dict:
         return {
             "autofix_enabled":    self._cb_autofix.isChecked(),
@@ -955,6 +1004,8 @@ class SettingsWindow(QWidget):
             "queue_bg_color": self._queue_bg_hex.text().strip() or "#FFFFFF",
             "queue_text_color": self._queue_text_hex.text().strip() or "#111111",
             "auto_contrast_text": self._cb_auto_contrast.isChecked(),
+            "test_images_enabled": self._cb_test_images.isChecked(),
+            "test_images_folder": self._edit_test_folder.text().strip(),
         }
 
     def _save(self):
