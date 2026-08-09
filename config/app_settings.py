@@ -47,6 +47,20 @@ DEFAULT_SHADOW_REMOVE_MODE = "auto"           # auto / always / never
 DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD = 2.0   # поріг std блоків для детекції тіні на рівномірному фоні
 DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE = 32        # розмір блоку для локального std
 
+# Константи для однієї конфігурованої "Універсальної" кнопки
+DEFAULT_UNIVERSAL_SHADOW_REMOVE_ENABLED = False
+DEFAULT_UNIVERSAL_BRIGHTNESS_ENABLED = False
+DEFAULT_UNIVERSAL_BRIGHTNESS_VALUE = 0.0
+DEFAULT_UNIVERSAL_CONTRAST_ENABLED = False
+DEFAULT_UNIVERSAL_CONTRAST_VALUE = 0.0
+DEFAULT_UNIVERSAL_SHARPEN_ENABLED = False
+DEFAULT_UNIVERSAL_SHARPEN_VALUE = 0.4
+DEFAULT_UNIVERSAL_HDR_ENABLED = False
+DEFAULT_UNIVERSAL_HDR_VALUE = 0.0
+DEFAULT_UNIVERSAL_GRAYSCALE_ENABLED = False
+DEFAULT_UNIVERSAL_WHITE_BACKGROUND_ENABLED = False
+DEFAULT_UNIVERSAL_COLOR_CAST_ENABLED = False
+
 # Константи для паралельної обробки
 import os as _os
 
@@ -77,6 +91,7 @@ def load(path=None) -> dict:
     """Повертає словник з усіма налаштуваннями."""
     cfg = configparser.ConfigParser()
     cfg.read(_get_path(path), encoding="utf-8")
+    universal = cfg["universal_button"] if cfg.has_section("universal_button") else None
     auto_apply_autofix = cfg.getboolean("processing", "auto_apply_autofix", fallback=True)
     after_crop_action = cfg.get("processing", "after_crop_action", fallback="").strip().lower()
     if after_crop_action not in {"autofix", "cropped_only"}:
@@ -128,6 +143,19 @@ def load(path=None) -> dict:
         "shadow_remove_mode":            cfg.get("processing",    "shadow_remove_mode",            fallback=DEFAULT_SHADOW_REMOVE_MODE),
         "shadow_uniform_std_threshold": cfg.getfloat("processing", "shadow_uniform_std_threshold", fallback=DEFAULT_SHADOW_UNIFORM_STD_THRESHOLD),
         "shadow_uniform_block_size":     cfg.getint("processing", "shadow_uniform_block_size",     fallback=DEFAULT_SHADOW_UNIFORM_BLOCK_SIZE),
+        # Універсальна кнопка (окрема секція; відсутність секції сумісна зі старими INI)
+        "universal_shadow_remove_enabled": universal.getboolean("shadow_remove_enabled", fallback=DEFAULT_UNIVERSAL_SHADOW_REMOVE_ENABLED) if universal else DEFAULT_UNIVERSAL_SHADOW_REMOVE_ENABLED,
+        "universal_brightness_enabled":     universal.getboolean("brightness_enabled",     fallback=DEFAULT_UNIVERSAL_BRIGHTNESS_ENABLED) if universal else DEFAULT_UNIVERSAL_BRIGHTNESS_ENABLED,
+        "universal_brightness_value":       universal.getfloat("brightness_value",         fallback=DEFAULT_UNIVERSAL_BRIGHTNESS_VALUE) if universal else DEFAULT_UNIVERSAL_BRIGHTNESS_VALUE,
+        "universal_contrast_enabled":       universal.getboolean("contrast_enabled",       fallback=DEFAULT_UNIVERSAL_CONTRAST_ENABLED) if universal else DEFAULT_UNIVERSAL_CONTRAST_ENABLED,
+        "universal_contrast_value":         universal.getfloat("contrast_value",           fallback=DEFAULT_UNIVERSAL_CONTRAST_VALUE) if universal else DEFAULT_UNIVERSAL_CONTRAST_VALUE,
+        "universal_sharpen_enabled":       universal.getboolean("sharpen_enabled",       fallback=DEFAULT_UNIVERSAL_SHARPEN_ENABLED) if universal else DEFAULT_UNIVERSAL_SHARPEN_ENABLED,
+        "universal_sharpen_value":         universal.getfloat("sharpen_value",             fallback=DEFAULT_UNIVERSAL_SHARPEN_VALUE) if universal else DEFAULT_UNIVERSAL_SHARPEN_VALUE,
+        "universal_hdr_enabled":           universal.getboolean("hdr_enabled",             fallback=DEFAULT_UNIVERSAL_HDR_ENABLED) if universal else DEFAULT_UNIVERSAL_HDR_ENABLED,
+        "universal_hdr_value":             universal.getfloat("hdr_value",                 fallback=DEFAULT_UNIVERSAL_HDR_VALUE) if universal else DEFAULT_UNIVERSAL_HDR_VALUE,
+        "universal_grayscale_enabled":     universal.getboolean("grayscale_enabled",     fallback=DEFAULT_UNIVERSAL_GRAYSCALE_ENABLED) if universal else DEFAULT_UNIVERSAL_GRAYSCALE_ENABLED,
+        "universal_white_background_enabled": universal.getboolean("white_background_enabled", fallback=DEFAULT_UNIVERSAL_WHITE_BACKGROUND_ENABLED) if universal else DEFAULT_UNIVERSAL_WHITE_BACKGROUND_ENABLED,
+        "universal_color_cast_enabled":    universal.getboolean("color_cast_enabled",    fallback=DEFAULT_UNIVERSAL_COLOR_CAST_ENABLED) if universal else DEFAULT_UNIVERSAL_COLOR_CAST_ENABLED,
         "worker_threads": cfg.getint(
             "processing", "worker_threads",
             fallback=DEFAULT_WORKER_THREADS
@@ -222,6 +250,20 @@ def save(settings: dict, path=None):
     cfg["tests"] = {
         "test_images_enabled": str(settings.get("test_images_enabled", DEFAULT_TEST_IMAGES_ENABLED)).lower(),
         "test_images_folder": settings.get("test_images_folder", DEFAULT_TEST_IMAGES_FOLDER),
+    }
+    cfg["universal_button"] = {
+        "shadow_remove_enabled": str(settings.get("universal_shadow_remove_enabled", DEFAULT_UNIVERSAL_SHADOW_REMOVE_ENABLED)).lower(),
+        "brightness_enabled": str(settings.get("universal_brightness_enabled", DEFAULT_UNIVERSAL_BRIGHTNESS_ENABLED)).lower(),
+        "brightness_value": str(settings.get("universal_brightness_value", DEFAULT_UNIVERSAL_BRIGHTNESS_VALUE)),
+        "contrast_enabled": str(settings.get("universal_contrast_enabled", DEFAULT_UNIVERSAL_CONTRAST_ENABLED)).lower(),
+        "contrast_value": str(settings.get("universal_contrast_value", DEFAULT_UNIVERSAL_CONTRAST_VALUE)),
+        "sharpen_enabled": str(settings.get("universal_sharpen_enabled", DEFAULT_UNIVERSAL_SHARPEN_ENABLED)).lower(),
+        "sharpen_value": str(settings.get("universal_sharpen_value", DEFAULT_UNIVERSAL_SHARPEN_VALUE)),
+        "hdr_enabled": str(settings.get("universal_hdr_enabled", DEFAULT_UNIVERSAL_HDR_ENABLED)).lower(),
+        "hdr_value": str(settings.get("universal_hdr_value", DEFAULT_UNIVERSAL_HDR_VALUE)),
+        "grayscale_enabled": str(settings.get("universal_grayscale_enabled", DEFAULT_UNIVERSAL_GRAYSCALE_ENABLED)).lower(),
+        "white_background_enabled": str(settings.get("universal_white_background_enabled", DEFAULT_UNIVERSAL_WHITE_BACKGROUND_ENABLED)).lower(),
+        "color_cast_enabled": str(settings.get("universal_color_cast_enabled", DEFAULT_UNIVERSAL_COLOR_CAST_ENABLED)).lower(),
     }
 
     target = _get_path(path)

@@ -112,6 +112,16 @@ QUALITY_MAX = 100
 # Константи для кнопок
 BROWSE_BUTTON_WIDTH = 32
 
+# Константи для "Універсальної" кнопки
+UNIVERSAL_BRIGHTNESS_MIN = -1.0
+UNIVERSAL_BRIGHTNESS_MAX = 1.0
+UNIVERSAL_BRIGHTNESS_STEP = 0.05
+UNIVERSAL_BRIGHTNESS_DECIMALS = 2
+UNIVERSAL_CONTRAST_MIN = -1.0
+UNIVERSAL_CONTRAST_MAX = 1.0
+UNIVERSAL_CONTRAST_STEP = 0.05
+UNIVERSAL_CONTRAST_DECIMALS = 2
+
 # === Пресети стратегій ===
 PRESETS = {
     "doc_bw": {
@@ -153,6 +163,7 @@ PIPELINE_STEPS_FIXED_ORDER = [
 SECTIONS = [
     ("autofix",      "Auto Fix"),
     ("shadowremove", "Видалення тіней"),
+    ("universal",    "Універсальна кнопка"),
     ("classify",     "Класифікація"),
     ("sharpen",      "Авто-різкість"),
     ("brightcontr",  "Яскравість/контраст"),
@@ -283,6 +294,7 @@ class SettingsWindow(QWidget):
         # Сторінки
         self._stack.addWidget(_make_scroll_page(self._page_autofix()))
         self._stack.addWidget(_make_scroll_page(self._page_shadow_remove()))
+        self._stack.addWidget(_make_scroll_page(self._page_universal_button()))
         self._stack.addWidget(_make_scroll_page(self._page_classify()))
         self._stack.addWidget(_make_scroll_page(self._page_autosharp()))
         self._stack.addWidget(_make_scroll_page(self._page_brightness_contrast()))
@@ -492,6 +504,103 @@ class SettingsWindow(QWidget):
         )
         form.addRow("Розмір блоку аналізу (px):", self._spin_uniform_block_size)
 
+        return box
+
+    def _page_universal_button(self) -> QWidget:
+        """Налаштування однієї кнопки з довільним набором обробки."""
+        box = QGroupBox("Універсальна кнопка")
+        box.setStyleSheet(GROUPBOX_STYLE)
+        layout = QVBoxLayout(box)
+
+        description = QLabel(
+            "Оберіть кроки, які виконуватиме кнопка «🧩 Універсальна» на панелі керування. "
+            "Порядок фіксований і не залежить від порядку встановлення прапорців. "
+            "Перспектива навмисно не входить до цього набору."
+        )
+        description.setStyleSheet("color:#555; font-size:11px; margin-bottom:6px;")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        form = QFormLayout()
+
+        def add_checkbox(label: str, attr_name: str):
+            checkbox = QCheckBox(label)
+            setattr(self, attr_name, checkbox)
+            form.addRow(checkbox)
+            return checkbox
+
+        def add_value_step(
+            label: str,
+            checkbox_attr: str,
+            spin_attr: str,
+            minimum: float,
+            maximum: float,
+            step: float,
+            decimals: int,
+        ):
+            checkbox = QCheckBox(label)
+            spin = QDoubleSpinBox()
+            spin.setRange(minimum, maximum)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            _set_spinbox_minw(spin)
+
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(checkbox)
+            row_layout.addStretch()
+            row_layout.addWidget(spin)
+
+            setattr(self, checkbox_attr, checkbox)
+            setattr(self, spin_attr, spin)
+            checkbox.toggled.connect(spin.setEnabled)
+            spin.setEnabled(False)
+            form.addRow(row)
+
+        add_checkbox("Видалення тіні (форсовано)", "_cb_universal_shadow_remove")
+        add_value_step(
+            "Яскравість",
+            "_cb_universal_brightness",
+            "_spin_universal_brightness",
+            UNIVERSAL_BRIGHTNESS_MIN,
+            UNIVERSAL_BRIGHTNESS_MAX,
+            UNIVERSAL_BRIGHTNESS_STEP,
+            UNIVERSAL_BRIGHTNESS_DECIMALS,
+        )
+        add_value_step(
+            "Контраст (режим із загальних налаштувань)",
+            "_cb_universal_contrast",
+            "_spin_universal_contrast",
+            UNIVERSAL_CONTRAST_MIN,
+            UNIVERSAL_CONTRAST_MAX,
+            UNIVERSAL_CONTRAST_STEP,
+            UNIVERSAL_CONTRAST_DECIMALS,
+        )
+        add_value_step(
+            "Різкість",
+            "_cb_universal_sharpen",
+            "_spin_universal_sharpen",
+            SHARPEN_MIN,
+            SHARPEN_MAX,
+            SHARPEN_STEP,
+            SHARPEN_DECIMALS,
+        )
+        add_value_step(
+            "HDR",
+            "_cb_universal_hdr",
+            "_spin_universal_hdr",
+            HDR_MIN,
+            HDR_MAX,
+            HDR_STEP,
+            HDR_DECIMALS,
+        )
+        add_checkbox("Чорно-біле (grayscale)", "_cb_universal_grayscale")
+        add_checkbox("Білий фон (авто-метрики фону)", "_cb_universal_white_background")
+        add_checkbox("Нейтралізація відтінку", "_cb_universal_color_cast")
+
+        layout.addLayout(form)
+        layout.addStretch()
         return box
 
     def _page_classify(self) -> QWidget:
@@ -887,6 +996,20 @@ class SettingsWindow(QWidget):
         self._spin_uniform_std_threshold.setValue(s.get("shadow_uniform_std_threshold", 2.0))
         self._spin_uniform_block_size.setValue(s.get("shadow_uniform_block_size", 32))
 
+        # Налаштування Універсальної кнопки
+        self._cb_universal_shadow_remove.setChecked(s.get("universal_shadow_remove_enabled", False))
+        self._cb_universal_brightness.setChecked(s.get("universal_brightness_enabled", False))
+        self._spin_universal_brightness.setValue(s.get("universal_brightness_value", 0.0))
+        self._cb_universal_contrast.setChecked(s.get("universal_contrast_enabled", False))
+        self._spin_universal_contrast.setValue(s.get("universal_contrast_value", 0.0))
+        self._cb_universal_sharpen.setChecked(s.get("universal_sharpen_enabled", False))
+        self._spin_universal_sharpen.setValue(s.get("universal_sharpen_value", 0.4))
+        self._cb_universal_hdr.setChecked(s.get("universal_hdr_enabled", False))
+        self._spin_universal_hdr.setValue(s.get("universal_hdr_value", 0.0))
+        self._cb_universal_grayscale.setChecked(s.get("universal_grayscale_enabled", False))
+        self._cb_universal_white_background.setChecked(s.get("universal_white_background_enabled", False))
+        self._cb_universal_color_cast.setChecked(s.get("universal_color_cast_enabled", False))
+
         self._spin_bw_std.setValue(s.get("classify_bw_std_thresh", 20.0))
         self._spin_edge_ratio.setValue(s.get("classify_edge_ratio_min", 0.03))
         self._spin_line_count.setValue(s.get("classify_line_count_min", 3))
@@ -984,6 +1107,19 @@ class SettingsWindow(QWidget):
             "shadow_uniformity_photo_high": self._spin_uniformity_photo_high.value(),
             "shadow_uniform_std_threshold": self._spin_uniform_std_threshold.value(),
             "shadow_uniform_block_size":    int(self._spin_uniform_block_size.value()),
+
+            "universal_shadow_remove_enabled": self._cb_universal_shadow_remove.isChecked(),
+            "universal_brightness_enabled":     self._cb_universal_brightness.isChecked(),
+            "universal_brightness_value":       self._spin_universal_brightness.value(),
+            "universal_contrast_enabled":       self._cb_universal_contrast.isChecked(),
+            "universal_contrast_value":         self._spin_universal_contrast.value(),
+            "universal_sharpen_enabled":       self._cb_universal_sharpen.isChecked(),
+            "universal_sharpen_value":         self._spin_universal_sharpen.value(),
+            "universal_hdr_enabled":           self._cb_universal_hdr.isChecked(),
+            "universal_hdr_value":             self._spin_universal_hdr.value(),
+            "universal_grayscale_enabled":     self._cb_universal_grayscale.isChecked(),
+            "universal_white_background_enabled": self._cb_universal_white_background.isChecked(),
+            "universal_color_cast_enabled":    self._cb_universal_color_cast.isChecked(),
             "sharpen_strength":   self._spin_sharpen.value(),
             "hdr_strength":       self._spin_hdr.value(),
 

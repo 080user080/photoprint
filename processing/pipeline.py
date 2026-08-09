@@ -622,6 +622,118 @@ def run_shadow_remove(image: np.ndarray) -> tuple[np.ndarray, bool]:
     return shadow_remove.auto_remove_shadow(image)
 
 
+def run_shadow_remove_manual(
+    image: np.ndarray,
+    is_color_document: bool,
+    settings: Optional[dict] = None,
+) -> tuple[np.ndarray, bool]:
+    """Виконує лише примусове видалення тіні для окремої дії в GUI.
+
+    Застосовано Варіант A: явне натискання кнопки завжди викликає
+    ``remove_shadow`` і не запускає детекцію тіні та інші кроки pipeline.
+    На результат впливають класифікація кольорового документа, значення
+    ``shadow_coarse_blend_color`` і ``shadow_bgr_mode`` з налаштувань.
+    Параметри детекції та однорідності фону тут навмисно не використовуються.
+    """
+    settings = settings or {}
+    coarse_blend = settings.get("shadow_coarse_blend_color", 0.0)
+    bgr_mode = settings.get("shadow_bgr_mode", False)
+    result = shadow_remove.remove_shadow(
+        image,
+        is_color_document=is_color_document,
+        coarse_blend=coarse_blend,
+        bgr_mode=bgr_mode,
+    )
+    # Варіант A є форсованою дією, тому ручний запуск завжди вважається
+    # застосованим, навіть якщо в зображенні фактично не було тіні.
+    return result, True
+
+
+def run_universal(
+    image: np.ndarray,
+    settings: Optional[dict] = None,
+    doc_type: Optional[str] = None,
+) -> tuple[np.ndarray, str]:
+    """Застосувати налаштований набір кроків однією операцією.
+
+    Кроки виконуються тільки якщо їхні ``universal_*_enabled`` прапорці
+    увімкнені, але завжди в канонічному порядку ``PIPELINE_STEPS_FIXED_ORDER``.
+    Перспектива навмисно виключена: її редагування має окремий UI-режим.
+    Видалення тіні використовує той самий форсований Варіант A, що й окрема
+    кнопка «Прибрати тінь».
+    """
+    settings = dict(settings or {})
+    enabled_steps = [
+        step_key
+        for step_key, _ in PIPELINE_STEPS_FIXED_ORDER
+        if step_key != "perspective"
+        and settings.get(f"universal_{step_key}_enabled", False)
+    ]
+    if not enabled_steps:
+        return image.copy(), "Не обрано жодного кроку"
+
+    result = image.copy()
+    log_entries: list[str] = []
+
+    # Класифікація потрібна тільки крокам, що використовують тип документа.
+    normalized_doc_type = getattr(doc_type, "value", doc_type)
+    if normalized_doc_type is None and (
+        "shadow_remove" in enabled_steps or "white_background" in enabled_steps
+    ):
+        normalized_doc_type = run_classify(
+            image,
+            bw_std_thresh=settings.get("classify_bw_std_thresh", 20.0),
+            edge_ratio_min=settings.get("classify_edge_ratio_min", 0.03),
+            line_count_min=settings.get("classify_line_count_min", 3),
+        )
+    is_color_document = normalized_doc_type == DocType.COLOR_DOCUMENT.value
+
+    for step_key in enabled_steps:
+        if step_key == "shadow_remove":
+            result, _ = run_shadow_remove_manual(
+                result,
+                is_color_document=is_color_document,
+                settings=settings,
+            )
+            log_entries.append("тіні")
+
+        elif step_key == "color_cast":
+            result, changed = color_cast.correct_color_cast(result)
+            log_entries.append("нейтралізація відтінку" if changed else "нейтралізація відтінку (без змін)")
+
+        elif step_key == "brightness":
+            value = settings.get("universal_brightness_value", 0.0)
+            result = run_brightness(result, value)
+            log_entries.append(f"яскравість={value:.2f}")
+
+        elif step_key == "contrast":
+            value = settings.get("universal_contrast_value", 0.0)
+            mode = settings.get("contrast_mode", "linear")
+            result = run_contrast_advanced(result, value, mode)
+            log_entries.append(f"контраст={value:.2f}")
+
+        elif step_key == "hdr":
+            value = settings.get("universal_hdr_value", 0.0)
+            if value > EPSILON:
+                result = hdr.apply(result, strength=value, manual_mode=True)
+            log_entries.append(f"HDR={value:.2f}")
+
+        elif step_key == "sharpen":
+            value = settings.get("universal_sharpen_value", 0.4)
+            result = sharpen.apply(result, strength=value)
+            log_entries.append(f"різкість={value:.2f}")
+
+        elif step_key == "grayscale":
+            result = run_grayscale(result)
+            log_entries.append("чорно-біле")
+
+        elif step_key == "white_background":
+            result, changed = _apply_auto_white_background(result, normalized_doc_type)
+            log_entries.append("білий фон" if changed else "білий фон (без змін)")
+
+    return result, "Універсальна: " + ", ".join(log_entries)
+
+
 def _apply_auto_white_background(image: np.ndarray, doc_type: str) -> tuple[np.ndarray, bool]:
     """
     Відбілює фон документа, перераховуючи background_uniformity/

@@ -610,6 +610,8 @@ class MainWindow(QMainWindow):
         buttons_row.setSpacing(BUTTONS_ROW_SPACING)
 
         self._btn_autofix   = QPushButton("⚡ Auto Fix")
+        self._btn_shadow_remove = QPushButton("🌗 Прибрати тінь")
+        self._btn_universal = QPushButton("🧩 Універсальна")
         self._btn_print     = QPushButton("🖨  Друк")
         self._btn_skip      = QPushButton("⏭  Пропустити")
         self._btn_print_all = QPushButton("🖨  Друкувати все")
@@ -617,6 +619,8 @@ class MainWindow(QMainWindow):
         self._btn_undo      = QPushButton("◀ Назад")
         self._btn_redo      = QPushButton("Вперед ▶")
         self._btn_autofix.setObjectName("btn_autofix")
+        self._btn_shadow_remove.setObjectName("btn_shadow_remove")
+        self._btn_universal.setObjectName("btn_universal")
         self._btn_print.setObjectName("btn_print")
         self._btn_skip.setObjectName("btn_skip")
         self._btn_print_all.setObjectName("btn_print_all")
@@ -624,7 +628,7 @@ class MainWindow(QMainWindow):
         self._btn_undo.setObjectName("btn_undo")
         self._btn_redo.setObjectName("btn_redo")
 
-        for b in (self._btn_autofix, self._btn_print,
+        for b in (self._btn_autofix, self._btn_shadow_remove, self._btn_universal, self._btn_print,
                    self._btn_skip, self._btn_print_all, self._btn_save_img,
                    self._btn_undo, self._btn_redo):
             b.setFixedHeight(BUTTON_HEIGHT)
@@ -666,6 +670,8 @@ class MainWindow(QMainWindow):
         self._shadow_mode_group.idClicked.connect(self._on_shadow_mode_changed)
 
         self._btn_autofix.clicked.connect(self._do_autofix)
+        self._btn_shadow_remove.clicked.connect(self._do_shadow_remove)
+        self._btn_universal.clicked.connect(self._do_universal)
         self._btn_print.clicked.connect(self._do_print_current)
         self._btn_skip.clicked.connect(self._do_skip)
         self._btn_print_all.clicked.connect(self._do_print_all)
@@ -675,6 +681,8 @@ class MainWindow(QMainWindow):
 
         buttons_row.addWidget(self._btn_autofix)
         buttons_row.addWidget(shadow_group_widget)
+        buttons_row.addWidget(self._btn_shadow_remove)
+        buttons_row.addWidget(self._btn_universal)
         buttons_row.addWidget(self._btn_print)
         buttons_row.addWidget(self._btn_skip)
         buttons_row.addWidget(self._btn_print_all)
@@ -1408,6 +1416,87 @@ class MainWindow(QMainWindow):
             self._commit_base_result(result, status)
 
         self._run_in_background(_work, _on_done)
+
+    def _do_shadow_remove(self):
+        """Застосувати лише форсоване видалення тіні до поточного зображення.
+
+        Використовується Варіант A: ця кнопка ігнорує режим авто/завжди/ніколи
+        та напряму запускає ручний pipeline-крок видалення тіні.
+        """
+        if self._base is None:
+            if self._orig is None:
+                self._set_status("Спочатку оберіть файл")
+            return
+
+        settings = dict(self._settings)
+        base_snapshot = self._base.copy()
+
+        def _work():
+            doc_type = pipeline.run_classify(
+                base_snapshot,
+                bw_std_thresh=settings.get("classify_bw_std_thresh", 20.0),
+                edge_ratio_min=settings.get("classify_edge_ratio_min", 0.03),
+                line_count_min=settings.get("classify_line_count_min", 3),
+            )
+            is_color_document = doc_type == pipeline.DocType.COLOR_DOCUMENT.value
+            return pipeline.run_shadow_remove_manual(
+                base_snapshot,
+                is_color_document,
+                settings,
+            )
+
+        def _on_done(payload):
+            result, _had_shadow = payload
+            self._perspective_corners = None
+            self._commit_base_result(
+                result,
+                "Видалення тіні застосовано",
+                autofix_applied=None,
+                update_before=False,
+                update_after=True,
+            )
+
+        self._run_in_background(
+            _work,
+            _on_done,
+            button_to_lock=self._btn_shadow_remove,
+        )
+
+    def _do_universal(self):
+        """Застосувати налаштований набір кроків однією undo-операцією."""
+        if self._base is None:
+            if self._orig is None:
+                self._set_status("Спочатку оберіть файл")
+            return
+
+        settings = dict(self._settings)
+        base_snapshot = self._base.copy()
+
+        def _work():
+            return pipeline.run_universal(base_snapshot, settings)
+
+        def _on_done(payload):
+            result, status_msg = payload
+            if status_msg == "Не обрано жодного кроку":
+                self._set_status(
+                    "Універсальна кнопка: не обрано жодного кроку в Налаштуваннях"
+                )
+                return
+
+            self._perspective_corners = None
+            self._commit_base_result(
+                result,
+                status_msg,
+                autofix_applied=None,
+                update_before=False,
+                update_after=True,
+            )
+
+        self._run_in_background(
+            _work,
+            _on_done,
+            button_to_lock=self._btn_universal,
+        )
 
     def _do_persp_auto(self):
         # Завдання 3.5: фіксуємо розмір панелей (буде розморожено при скиданні перспективи)
@@ -2256,7 +2345,10 @@ class MainWindow(QMainWindow):
         self._set_buttons_enabled(True)
         if button_to_lock:
             button_to_lock.setEnabled(True)
-            button_to_lock.setText("⚡ Auto Fix")
+            original_text = button_to_lock.property("_orig_text")
+            if original_text is not None:
+                button_to_lock.setText(original_text)
+                button_to_lock.setProperty("_orig_text", None)
 
     def _run_in_background(self, func, on_finished, button_to_lock=None):
         """
@@ -2273,6 +2365,7 @@ class MainWindow(QMainWindow):
         self._progress.setRange(0, 0)   # indeterminate (пульсуючий)
         self._progress.setVisible(True)
         if button_to_lock:
+            button_to_lock.setProperty("_orig_text", button_to_lock.text())
             button_to_lock.setEnabled(False)
             button_to_lock.setText("⏳ Обробка…")
         self._set_buttons_enabled(False)
@@ -2325,6 +2418,8 @@ class MainWindow(QMainWindow):
         )
         # Авто Фікс доступний і під час редагування перспективи
         self._btn_autofix.setEnabled(has_img and not busy)
+        self._btn_shadow_remove.setEnabled(has_img and not busy)
+        self._btn_universal.setEnabled(has_img and not busy)
         self._btn_save_img.setEnabled(has_img and not busy)
         # Undo/Redo — тільки ручний режим, неактивні під час фонових операцій
         self._btn_undo.setEnabled(has_img and not busy)
@@ -2333,7 +2428,7 @@ class MainWindow(QMainWindow):
         # (вона вже є в controls, не потребує додаткового управління)
 
     def _set_buttons_enabled(self, enabled: bool):
-        for b in (self._btn_autofix, self._btn_print, self._btn_skip, self._btn_print_all,
+        for b in (self._btn_autofix, self._btn_shadow_remove, self._btn_universal, self._btn_print, self._btn_skip, self._btn_print_all,
                   self._btn_undo, self._btn_redo):
             b.setEnabled(enabled)
 
