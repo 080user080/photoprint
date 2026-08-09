@@ -46,7 +46,10 @@ def test_hover_requests_crop_immediately_and_has_no_overlay_timer(label):
     assert emitted == [True]
     assert label._crop_rect_requested_for_current_image is True
     assert label._hover_hide_timer.isActive() is False
-    assert label.cursor().shape() != Qt.CursorShape.ArrowCursor
+    # Зміна курсора навмисно вимкнена за замовчуванням (TODO2: щоб кастомний
+    # курсор не заважав перетягуванню хендлів рамки) — лишається стрілка.
+    assert label._crop_cursor_enabled is False
+    assert label.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
 def test_hover_request_is_only_emitted_once_until_reset(label):
@@ -95,6 +98,26 @@ def test_cursor_resets_outside_image(label):
     assert rect is not None
     QCursor.setPos(label.mapToGlobal(QPoint(2, 2)))
     label._maybe_schedule_hover()
+    assert label.cursor().shape() == Qt.CursorShape.ArrowCursor
+
+
+def test_crop_cursor_applies_when_enabled(label):
+    """Кастомний курсор-кадрування застосовується лише після явного ввімкнення."""
+    label.set_crop_cursor_enabled(True)
+    _inside(label)
+    label._maybe_schedule_hover()
+    # Кастомний курсор — QCursor(QPixmap, ...): його pixmap непорожній.
+    # У системної стрілки (ArrowCursor) pixmap порожній.
+    assert label.cursor().pixmap().isNull() is False
+
+
+def test_crop_cursor_restores_arrow_when_disabled(label):
+    """Вимкнення зміни курсора негайно повертає системну стрілку."""
+    label.set_crop_cursor_enabled(True)
+    _inside(label)
+    label._maybe_schedule_hover()
+    assert label.cursor().pixmap().isNull() is False
+    label.set_crop_cursor_enabled(False)
     assert label.cursor().shape() == Qt.CursorShape.ArrowCursor
 
 
